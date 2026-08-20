@@ -1,0 +1,13 @@
+bin/
+*.log
+.env
+
+# Claude Code: share project settings, keep personal overrides local.
+.claude/settings.local.json
+.claude/*.local.json
+
+# Agent scratch space — working notes, never published.
+.scratch/
+
+# Local handoff artifact, not part of the project.
+START-HERE.md
