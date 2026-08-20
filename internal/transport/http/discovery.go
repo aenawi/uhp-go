@@ -40,7 +40,7 @@ type discoveryDoc struct {
 // depend on configuration: file input and artifact capture both need a
 // per-session working directory, and without UHP_WORKSPACE there is nowhere to
 // put a client's file and nothing to diff for artifacts.
-func capabilities(files bool) map[string]bool {
+func capabilities(files, harnessManagement bool) map[string]bool {
 	return map[string]bool{
 		"streaming":          true,
 		"sessions":           true,
@@ -48,7 +48,7 @@ func capabilities(files bool) map[string]bool {
 		"files_input":        files,
 		"files_output":       files,
 		"session_listing":    true,
-		"harness_management": false,
+		"harness_management": harnessManagement,
 		"session_sharing":    false,
 		"idempotency":        false,
 	}
@@ -61,7 +61,7 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
 		Versions:         supportedVersions,
 		DefaultVersion:   UHPVersion,
 		ConformanceClass: ConformanceClass,
-		Capabilities:     capabilities(s.tasks.FilesEnabled()),
+		Capabilities:     capabilities(s.tasks.FilesEnabled(), s.tasks.HarnessManagementEnabled()),
 		Implementation:   map[string]any{"name": "uhp-go", "version": Version},
 	})
 }
@@ -105,8 +105,12 @@ func supports(v string) bool {
 }
 
 // handleListHarnesses answers GET /v1/harnesses.
-func (s *Server) handleListHarnesses(w http.ResponseWriter, _ *http.Request) {
-	hs := s.tasks.ListHarnesses()
+func (s *Server) handleListHarnesses(w http.ResponseWriter, r *http.Request) {
+	hs, err := s.tasks.ListHarnesses(r.Context())
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
 	if hs == nil {
 		hs = []domain.Harness{}
 	}
@@ -116,13 +120,21 @@ func (s *Server) handleListHarnesses(w http.ResponseWriter, _ *http.Request) {
 // handleGetHarness answers GET /v1/harnesses/{id}.
 func (s *Server) handleGetHarness(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	h, ok := s.tasks.GetHarness(id)
+	h, ok, err := s.tasks.GetHarness(r.Context(), id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
 	if !ok {
-		writeError(w, http.StatusNotFound, typeInvalidRequest, "harness_not_found",
-			"no harness with id "+id)
+		writeHarnessNotFound(w, id)
 		return
 	}
 	writeJSON(w, http.StatusOK, h)
+}
+
+func writeHarnessNotFound(w http.ResponseWriter, id string) {
+	writeError(w, http.StatusNotFound, typeInvalidRequest, "harness_not_found",
+		"no harness with id "+id)
 }
 
 type modelEntry struct {
@@ -134,16 +146,21 @@ type modelEntry struct {
 }
 
 // handleListModels answers GET /v1/models with the catalogue, keyed by backend.
-func (s *Server) handleListModels(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
+	harnesses, err := s.tasks.ListHarnesses(r.Context())
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
 	backends := map[string]any{}
-	for _, h := range s.tasks.ListHarnesses() {
+	for _, h := range harnesses {
 		entries := make([]modelEntry, 0, len(h.Models))
 		for _, m := range h.Models {
 			entries = append(entries, modelEntry{
 				ID: m, Label: m, Backend: h.Base,
 				// Computed, not asserted: this reflects whether the CLI is
 				// actually reachable right now.
-				Available: s.tasks.ModelAvailable(h.ID, m),
+				Available: s.tasks.ModelAvailable(r.Context(), h.ID, m),
 				Default:   m == h.DefaultModel,
 			})
 		}
@@ -155,17 +172,20 @@ func (s *Server) handleListModels(w http.ResponseWriter, _ *http.Request) {
 // handleHarnessModels answers GET /v1/harnesses/{id}/models.
 func (s *Server) handleHarnessModels(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	h, ok := s.tasks.GetHarness(id)
+	h, ok, err := s.tasks.GetHarness(r.Context(), id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
 	if !ok {
-		writeError(w, http.StatusNotFound, typeInvalidRequest, "harness_not_found",
-			"no harness with id "+id)
+		writeHarnessNotFound(w, id)
 		return
 	}
 	entries := make([]modelEntry, 0, len(h.Models))
 	for _, m := range h.Models {
 		entries = append(entries, modelEntry{
 			ID: m, Label: m, Backend: h.Base,
-			Available: s.tasks.ModelAvailable(h.ID, m),
+			Available: s.tasks.ModelAvailable(r.Context(), h.ID, m),
 			Default:   m == h.DefaultModel,
 		})
 	}

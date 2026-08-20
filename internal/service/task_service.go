@@ -25,6 +25,10 @@ var (
 	ErrSessionNotFound  = errors.New("service: session not found")
 	ErrSessionBusy      = errors.New("service: session busy")
 	ErrHarnessMismatch  = errors.New("service: harness mismatch")
+
+	// ErrStorage is a store that failed. It is the server's fault, not the
+	// client's, and the distinction decides whether retrying is worth anything.
+	ErrStorage = errors.New("service: storage failure")
 )
 
 // TaskService implements the "Tasks" and "Sessions" chapters of UHP.
@@ -35,6 +39,11 @@ type TaskService struct {
 	log       *slog.Logger
 	workspace WorkspaceRoot
 	uploads   Uploads
+
+	// harnesses persists the harnesses a client created over the API. Nil
+	// means this deployment does not offer harness management at all; see
+	// config.harnessStorePath for why that is a configuration decision.
+	harnesses HarnessStore
 
 	// publicBaseURL is the origin clients reach this server on, used to build
 	// absolute artifact download URLs. Empty means relative URLs, which is
@@ -74,6 +83,12 @@ func WithPublicBaseURL(base string) Option {
 	return func(s *TaskService) { s.publicBaseURL = base }
 }
 
+// WithHarnessStore enables harness management: POST, PUT and DELETE on
+// /v1/harnesses, and the `harness_management` capability.
+func WithHarnessStore(h HarnessStore) Option {
+	return func(s *TaskService) { s.harnesses = h }
+}
+
 // CreateTaskRequest mirrors the fields UHP requires from the OpenAI
 // Responses-shaped request body, plus UHP's harness_id metadata extension.
 type CreateTaskRequest struct {
@@ -89,32 +104,6 @@ type CreateTaskRequest struct {
 	Attachments []Attachment
 }
 
-// ListHarnesses answers GET /v1/harnesses (discovery).
-func (s *TaskService) ListHarnesses() []domain.Harness {
-	return s.registry.List()
-}
-
-// GetHarness answers GET /v1/harnesses/{id}, accepting an id or an alias.
-func (s *TaskService) GetHarness(id string) (domain.Harness, bool) {
-	a, ok := s.registry.Get(id)
-	if !ok {
-		return domain.Harness{}, false
-	}
-	return a.Info(), true
-}
-
-// ModelAvailable reports whether a harness can serve a model right now.
-func (s *TaskService) ModelAvailable(harnessID, model string) bool {
-	a, ok := s.registry.Get(harnessID)
-	if !ok {
-		return false
-	}
-	if av, ok := a.(interface{ Available(string) bool }); ok {
-		return av.Available(model)
-	}
-	return true
-}
-
 // StartTask resolves the target harness and session, persists the initial
 // task, and hands it to a supervisor goroutine that owns it from then on.
 //
@@ -122,7 +111,10 @@ func (s *TaskService) ModelAvailable(harnessID, model string) bool {
 // the returned Run stays valid — and the task keeps running — regardless of
 // what the caller does with it.
 func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (*domain.Task, *Run, error) {
-	adapter, ok := s.registry.Get(req.HarnessID)
+	adapter, ok, err := s.adapterFor(ctx, req.HarnessID)
+	if err != nil {
+		return nil, nil, err
+	}
 	if !ok {
 		return nil, nil, fmt.Errorf("%w: %q", ErrHarnessNotFound, req.HarnessID)
 	}

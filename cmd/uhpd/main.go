@@ -41,6 +41,18 @@ func main() {
 	if cfg.Workspace != "" {
 		opts = append(opts, service.WithWorkspace(cfg.Workspace))
 	}
+	if cfg.HarnessStore != "" {
+		// A store that will not open is fatal rather than a silent downgrade
+		// to "harness management off": the operator asked for it, and a server
+		// that quietly serves less than it was configured for is the hardest
+		// kind of misconfiguration to notice.
+		harnesses, err := store.NewFileHarnesses(cfg.HarnessStore)
+		if err != nil {
+			log.Error("harness store", "error", err, "path", cfg.HarnessStore)
+			os.Exit(1)
+		}
+		opts = append(opts, service.WithHarnessStore(harnesses))
+	}
 	if cfg.PublicBaseURL != "" {
 		opts = append(opts, service.WithPublicBaseURL(cfg.PublicBaseURL))
 	}

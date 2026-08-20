@@ -29,8 +29,19 @@ type errorPayload struct {
 }
 
 func writeError(w http.ResponseWriter, status int, errType, code, message string) {
+	writeErrorFull(w, status, errType, code, message, "", nil)
+}
+
+// writeErrorFull is the one that actually writes; the three below name the
+// common shapes so a call site does not have to pass two zero values to say it
+// has neither a param nor a detail.
+func writeErrorFull(w http.ResponseWriter, status int, errType, code, message, param string, detail map[string]any) {
+	var p *string
+	if param != "" {
+		p = &param
+	}
 	writeJSON(w, status, errorEnvelope{Error: errorPayload{
-		Type: errType, Code: code, Message: message,
+		Type: errType, Code: code, Message: message, Param: p, Detail: detail,
 	}})
 }
 
@@ -38,13 +49,7 @@ func writeError(w http.ResponseWriter, status int, errType, code, message string
 // which Errors §1 requires whenever there is one: a client that is told only
 // "invalid_input" has to guess which field it got wrong.
 func writeErrorParam(w http.ResponseWriter, status int, errType, code, message, param string) {
-	var p *string
-	if param != "" {
-		p = &param
-	}
-	writeJSON(w, status, errorEnvelope{Error: errorPayload{
-		Type: errType, Code: code, Message: message, Param: p,
-	}})
+	writeErrorFull(w, status, errType, code, message, param, nil)
 }
 
 // writeIfTooLarge answers a body that blew the configured limit and reports
@@ -66,7 +71,5 @@ func writeIfTooLarge(w http.ResponseWriter, err error, maxBytes int64) bool {
 // specification requires it — for example unsupported_protocol_version, whose
 // detail MUST list the versions the server does support.
 func writeErrorDetail(w http.ResponseWriter, status int, errType, code, message string, detail map[string]any) {
-	writeJSON(w, status, errorEnvelope{Error: errorPayload{
-		Type: errType, Code: code, Message: message, Detail: detail,
-	}})
+	writeErrorFull(w, status, errType, code, message, "", detail)
 }
