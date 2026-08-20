@@ -4,6 +4,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -13,6 +14,12 @@ type Config struct {
 	APIKeys      []string
 	Workspace    string
 	MaxBodyBytes int64
+
+	// HarnessStore is where harnesses created over the API are kept. Empty
+	// means harness management is off, and discovery reports it as off:
+	// a harness that does not survive a restart is not configuration, so the
+	// capability is only offered when there is somewhere to keep one.
+	HarnessStore string
 
 	// PublicBaseURL is the origin clients reach this server on. It is used to
 	// make artifact download URLs absolute; unset means they are emitted
@@ -27,10 +34,12 @@ type Config struct {
 }
 
 func Load() Config {
+	workspace := os.Getenv("UHP_WORKSPACE")
 	return Config{
 		Addr:           getEnv("UHP_ADDR", ":8080"),
 		APIKeys:        splitCSV(os.Getenv("UHP_API_KEYS")),
-		Workspace:      os.Getenv("UHP_WORKSPACE"),
+		Workspace:      workspace,
+		HarnessStore:   harnessStorePath(os.Getenv("UHP_HARNESS_STORE"), workspace),
 		MaxBodyBytes:   getEnvInt("UHP_MAX_BODY_BYTES", 8<<20),
 		PublicBaseURL:  strings.TrimSuffix(os.Getenv("UHP_PUBLIC_URL"), "/"),
 		ClaudeModels:   splitCSVDefault(os.Getenv("UHP_CLAUDE_MODELS"), "claude-sonnet-4.6", "claude-opus-4.6"),
@@ -79,4 +88,21 @@ func splitCSVDefault(v string, fallback ...string) []string {
 		return parsed
 	}
 	return fallback
+}
+
+// harnessStorePath resolves where created harnesses are kept.
+//
+// An explicit UHP_HARNESS_STORE wins. Otherwise a configured workspace implies
+// one, because a deployment that has given this server a durable directory has
+// already answered the only question that matters. With neither, the path is
+// empty and harness management is off rather than in-memory: offering it and
+// losing every harness on the next restart is worse than not offering it.
+func harnessStorePath(explicit, workspace string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if workspace == "" {
+		return ""
+	}
+	return filepath.Join(workspace, "harnesses.json")
 }

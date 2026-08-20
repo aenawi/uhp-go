@@ -23,6 +23,56 @@ type RunRequest struct {
 	Metadata        map[string]any
 	WorkDir         string   // working directory the harness process runs in
 	InputFiles      []string // absolute paths already materialized on disk
+
+	// SkillDirs are the skill folders already written to disk, one per
+	// enabled skill, in configuration order. A runtime that can load a skill
+	// folder natively is given these; every runtime gets them materialized
+	// either way, because a folder the agent can read is the floor.
+	SkillDirs []string
+
+	// McpConfigPath is a generated MCP configuration file holding only the
+	// enabled servers, or empty when the harness has none. A disabled entry
+	// never reaches this file: Harnesses §4.1 requires it not be contacted at
+	// all, and "connected then hidden" still tells its operator the turn
+	// happened.
+	McpConfigPath string
+
+	// DisabledTools are the tools withheld from the agent. The runner passes
+	// them to a runtime that can block them; where it cannot, the router has
+	// already conveyed them as a standing instruction instead.
+	DisabledTools []string
+}
+
+// Delivery reports which parts of a harness's configuration a runtime enforces
+// itself, as opposed to what the router has to convey as a standing
+// instruction.
+//
+// It exists so the router can tell the difference honestly. Harnesses §4.3 is
+// explicit that a restriction the runtime cannot enforce MUST still reach the
+// agent and MUST NOT be dropped, and §4.1 that a server MUST NOT advertise MCP
+// support it cannot deliver — both of which need an answer to "can this
+// runtime actually do it", not an assumption.
+type Delivery struct {
+	// MCPServers is true when the runtime accepts a per-run MCP configuration.
+	// False means a harness carrying MCP servers is refused at configuration
+	// time rather than accepted and quietly run without them.
+	MCPServers bool
+
+	// ToolBlock is true when the runtime can hard-block named tools. False
+	// falls back to a standing instruction, which is weaker and is described
+	// as such rather than reported as a block.
+	ToolBlock bool
+
+	// Skills is true when the runtime loads a skill folder natively. False
+	// still gets the folder on disk and a standing instruction naming it.
+	Skills bool
+}
+
+// Deliverer is implemented by adapters that can report what they enforce. An
+// adapter that does not implement it is taken to enforce nothing, which is the
+// safe direction: the router conveys more, and claims less.
+type Deliverer interface {
+	Delivery() Delivery
 }
 
 // UpdateType enumerates the kinds of incremental update an adapter can emit.

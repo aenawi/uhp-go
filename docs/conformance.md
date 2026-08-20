@@ -13,15 +13,22 @@ CONFORMANT — UHP 2026-08-11 (core)
 Across all three classes: **42/52**. `extended` stood at 42/45 when that run was taken;
 the three outstanding checks there were all file-related.
 
-**This result predates file support.** Input items, artifact capture and artifact download
-(issue #2) landed afterwards and have not been re-measured against the published suite.
-They are covered by this repository's own tests — see `internal/transport/http/file_handlers_test.go`
-and `internal/service/artifacts_test.go` — but a passing local test is not a conformance
-result, and the number above stays until someone runs the suite again.
+**This result predates file support and harness management.** Input items, artifact
+capture and artifact download (issue #2), harness create/replace/delete (issue #3) and
+skills, MCP and tool restrictions (issue #4) all landed afterwards and have not been
+re-measured against the published suite. They are covered by this repository's own
+tests — see `internal/transport/http/file_handlers_test.go`,
+`internal/service/artifacts_test.go`, `internal/transport/http/harness_handlers_test.go`,
+`internal/service/harnesses_test.go` and `internal/service/harness_runtime_test.go` — but
+a passing local test is not a conformance result, and the number above stays until someone
+runs the suite again.
 
-This server does not claim `extended` or `full`. Its discovery document reports the
-capabilities it does not implement as `false` rather than omitting them, because
-`conformance_class` must agree with the capability list.
+`conformance_class` still reads `core`. It is not raised on the strength of local tests:
+the class is a claim the suite exists to falsify, and raising it before a run would make
+this file the thing asserting conformance rather than the thing recording it.
+`harness_management` reports `true`, which is a capability above the claimed class rather
+than a contradiction of it — the class is what this server guarantees, not a ceiling on
+what it offers.
 
 ## Reproducing it
 
@@ -62,6 +69,8 @@ Two things to know before reading a result:
 | Contract fixes | **38/52, core 37/37** | see below |
 | Session listing, inspection and turns | **42/52** | X-01, X-02, X-03, X-04 |
 | Files: input items, artifact capture, download | not yet measured | targets X-05, X-06, X-07, and makes X-08 real |
+| Harness management: create, replace, delete | not yet measured | targets F-01, F-02, F-05, F-07 |
+| Skills as folders, MCP config, tool restrictions | not yet measured | targets F-03, F-04, F-06 |
 
 The 33 skips in the baseline were not 33 separate defects. They cascaded from one line:
 `GET /v1/harnesses` returned `{"data": […]}` where the suite reads `harnesses`, so it could
@@ -73,8 +82,22 @@ Fixing that one envelope is what made three steps of prior work measurable.
 | Checks | Needs | Issue |
 |---|---|---|
 | X-05…X-07 | file input, artifact capture and download | #2 — implemented, unmeasured |
-| F-01, F-02, F-05, F-07 | harness create/update/delete | #3 |
-| F-03, F-04, F-06 | skills as folders, MCP config | #4 |
+| F-01, F-02, F-05, F-07 | harness create/replace/delete | #3 — implemented, unmeasured |
+| F-03, F-04, F-06 | skills as folders, MCP config, disabled tools | #4 — implemented, unmeasured |
+
+Every F check now has an implementation behind it, and each was walked through its exact
+HTTP sequence against a running server by hand. That is not the same as a suite run and is
+not counted as one.
+
+**What is genuinely weaker than the checks can see** is how much of a harness's
+configuration each runtime *enforces*, as opposed to being asked to honour. The suite
+tests that skills, MCP servers and disabled tools round-trip through the API; it does not
+test whether the agent was actually prevented from using a tool. Two of the three
+mechanisms for `claude-code` — `--disallowedTools` and `--mcp-config` — are documented but
+have not been run against the real binary, and are marked UNVERIFIED in
+`internal/harness/claude.go` for the same reason issue #13 marks opencode's prompt
+delivery. `grok-cli` and `pi` were read from their own `--help` on a machine where they are
+installed. See the delivery table in the README.
 
 **X-08 used to pass vacuously**: artifact ids could not traverse out of their container
 because the download endpoint did not exist, so every probe 404d. The endpoint exists now,
@@ -82,6 +105,29 @@ so the check finally means something. Both of the suite's probes are answered wi
 rather than a redirect — see `TestTraversalProbesAreRefused` — because `net/http` would
 otherwise answer `../../etc/passwd` with a 301 to a cleaned path, which is neither a
 refusal nor obviously safe to a caller reading status codes.
+
+## Re-measuring the harness checks
+
+Harness management is only offered when there is somewhere durable to keep a harness, so
+the suite needs a store — `UHP_HARNESS_STORE`, or the `UHP_WORKSPACE` that implies one.
+Without it, discovery reports `harness_management: false` and the endpoints answer `501`,
+which is the honest failure rather than a memory-backed pretence.
+
+```bash
+UHP_API_KEYS=devkey UHP_WORKSPACE=/tmp/uhp-workspace ./bin/uhpd &
+uhp-conformance --base-url http://localhost:8080 --api-key devkey \
+  --class full --harness-id chrn_… --model … --plain
+```
+
+F-01 discovers a base to build on by POSTing a deliberately bogus one and reading
+`error.detail.supported` off the refusal, so that field is load-bearing for the check
+that follows it, not decoration on an error. It picks the first entry, which sorts to
+`claude-code` — the one base whose delivery mechanisms are unverified, so a run on a
+machine without that CLI installed measures the API and not the enforcement.
+
+A workspace is required for more than the file checks now: skill folders are materialised
+into the session working directory, so a harness carrying skills refuses to run without
+one rather than starting an agent that never receives them.
 
 ## Re-measuring the file checks
 

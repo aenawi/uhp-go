@@ -49,8 +49,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/uhp", withVersion(s.handleDiscovery))
 
 	s.mux.HandleFunc("GET /v1/harnesses", withVersion(s.withAuth(s.handleListHarnesses)))
+	s.mux.HandleFunc("POST /v1/harnesses", withVersion(s.withAuth(s.handleCreateHarness)))
+	s.mux.HandleFunc("PUT /v1/harnesses/{id}", withVersion(s.withAuth(s.handleReplaceHarness)))
+	s.mux.HandleFunc("PATCH /v1/harnesses/{id}", withVersion(s.withAuth(s.handlePatchHarness)))
+	s.mux.HandleFunc("DELETE /v1/harnesses/{id}", withVersion(s.withAuth(s.handleDeleteHarness)))
 	s.mux.HandleFunc("GET /v1/harnesses/{id}", withVersion(s.withAuth(s.handleGetHarness)))
 	s.mux.HandleFunc("GET /v1/harnesses/{id}/models", withVersion(s.withAuth(s.handleHarnessModels)))
+	s.mux.HandleFunc("GET /v1/harnesses/{id}/skills/{skill_id}/files",
+		withVersion(s.withAuth(s.handleHarnessSkillFiles)))
 	s.mux.HandleFunc("GET /v1/models", withVersion(s.withAuth(s.handleListModels)))
 
 	s.mux.HandleFunc("GET /v1/sessions", withVersion(s.withAuth(s.handleListSessions)))

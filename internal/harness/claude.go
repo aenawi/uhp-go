@@ -2,6 +2,7 @@ package harness
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/aenawi/uhp-go/internal/domain"
 )
@@ -37,6 +38,20 @@ func NewClaude(models []string) *CLIHarness {
 			return append(args, "--bare"), nil
 		},
 		ParseLine: parseClaudeLine,
+
+		// UNVERIFIED — both flags are documented for Claude Code, but unlike
+		// grok's and pi's they have not been run against the real binary here,
+		// so they carry the same warning issue #13 carries for opencode's
+		// prompt delivery. If either is wrong the failure is loud (the CLI
+		// rejects the flag and the task fails to start) rather than silent,
+		// which is the right direction for an unverified claim: a harness that
+		// appeared to run with its tools un-blocked would be worse.
+		MCPArgs: func(configPath string) []string {
+			return []string{"--mcp-config", configPath}
+		},
+		DisallowArgs: func(tools []string) []string {
+			return []string{"--disallowedTools", strings.Join(tools, ",")}
+		},
 	}).Build()
 }
 

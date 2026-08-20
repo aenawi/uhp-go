@@ -53,3 +53,23 @@ type Uploads interface {
 	Put(ctx context.Context, up domain.Upload) error
 	Get(ctx context.Context, id string) (domain.Upload, error)
 }
+
+// HarnessStore persists the harnesses a client created over the API
+// (Harnesses §5).
+//
+// It is separate from Store for the same reason Uploads is: a harness has a
+// different lifetime from a task or a session — it exists before either, and
+// outlives both — and a deployment that wants configuration on disk while
+// tasks stay in memory should be able to say so. It is also what decides
+// whether the `harness_management` capability is advertised at all: a
+// configured harness that vanishes on restart is not configuration, so the
+// capability is only offered when there is somewhere durable to keep one.
+type HarnessStore interface {
+	ListHarnesses(ctx context.Context) ([]domain.HarnessConfig, error)
+	GetHarness(ctx context.Context, id string) (domain.HarnessConfig, bool, error)
+	PutHarness(ctx context.Context, cfg domain.HarnessConfig) error
+
+	// DeleteHarness removes a harness. Deleting one that is not there is not
+	// an error: the caller's intent is already satisfied.
+	DeleteHarness(ctx context.Context, id string) error
+}
