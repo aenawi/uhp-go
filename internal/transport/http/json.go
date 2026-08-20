@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -71,5 +73,17 @@ func writeIfTooLarge(w http.ResponseWriter, err error, maxBytes int64) bool {
 // specification requires it — for example unsupported_protocol_version, whose
 // detail MUST list the versions the server does support.
 func writeErrorDetail(w http.ResponseWriter, status int, errType, code, message string, detail map[string]any) {
+	writeErrorFull(w, status, errType, code, message, "", detail)
+}
+
+// writeErrorRetryAfter is writeErrorDetail plus RFC 9110 §10.2.3's header,
+// which is the only part of a refusal a client can act on without parsing the
+// body. A retryable answer that says nothing about when to come back invites a
+// hot loop against the condition it is complaining about.
+//
+// The header must be set before writeErrorFull, which writes the status line.
+func writeErrorRetryAfter(w http.ResponseWriter, status int, errType, code, message string,
+	detail map[string]any, retryAfter time.Duration) {
+	w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
 	writeErrorFull(w, status, errType, code, message, "", detail)
 }

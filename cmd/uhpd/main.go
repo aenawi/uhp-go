@@ -63,7 +63,10 @@ func main() {
 	}
 
 	memStore := store.NewMemoryStore()
-	opts := []service.Option{service.WithUploads(store.NewMemoryUploads())}
+	opts := []service.Option{
+		service.WithUploads(store.NewMemoryUploads()),
+		service.WithMaxConcurrentRuns(cfg.MaxConcurrentRuns),
+	}
 	if cfg.Workspace != "" {
 		opts = append(opts, service.WithWorkspace(cfg.Workspace))
 	}

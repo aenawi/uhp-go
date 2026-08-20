@@ -337,6 +337,7 @@ curl -N http://localhost:8080/v1/responses \
 | `UHP_WORKSPACE` | (unset = router's own cwd, and no file support) | Root for per-session working directories |
 | `UHP_HARNESS_STORE` | `$UHP_WORKSPACE/harnesses.json`, or unset = no harness management | Where harnesses created over the API are kept |
 | `UHP_MAX_BODY_BYTES` | `8388608` | Maximum accepted request body, and the upload limit |
+| `UHP_MAX_CONCURRENT_RUNS` | `8` | Harness processes allowed to run at once; beyond it, `503 harness_unavailable` |
 | `UHP_PUBLIC_URL` | (unset = relative URLs) | Origin used to build absolute artifact download URLs |
 | `UHP_CLAUDE_MODELS` | `claude-sonnet-4.6,claude-opus-4.6` | Advertised Claude Code models |
 | `UHP_CODEX_MODELS` | `gpt-5.2-codex` | Advertised Codex models |
@@ -347,6 +348,28 @@ curl -N http://localhost:8080/v1/responses \
 Each harness adapter shells out to its respective CLI binary (`claude`, `codex`, `grok`,
 `opencode`, `pi`), which must be installed and authenticated on the host/container running
 `uhpd`.
+
+### Concurrency
+
+Every accepted task forks one of those CLI processes, so the number of them is bounded:
+`UHP_MAX_CONCURRENT_RUNS` at a time, and a request that arrives when they are all busy is
+refused with `503`, `code: "harness_unavailable"`, a `Retry-After` header, and the limit in
+`detail.max_concurrent_runs`. A 5xx and not a 4xx, because nothing about the request is
+wrong — it arrived at a bad moment, and retrying is exactly what will work. `Retry-After` is
+a floor, not a prediction: runs last minutes and the server does not know which one ends
+first.
+
+Refusals specific to the request are answered before capacity is even considered, so an
+unknown `harness_id` or `previous_response_id` still gets its own permanent error rather
+than a retryable one it would chase forever.
+
+There is no queue behind it. A task holds its slot for as long as the agent runs, so
+queueing would mostly hold connections open until they time out. Refusing immediately tells
+the client the truth while it can still act on it.
+
+The bound is not tuned for your hardware. Raise it once you know what a run actually costs
+on the host; a value of zero or less is treated as a misconfiguration and falls back to the
+default rather than meaning "unbounded".
 
 ## Extending with a new harness
 
