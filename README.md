@@ -54,6 +54,7 @@ uhp-conformance --base-url http://localhost:8080 --api-key "$UHP_API_KEY" --clas
 ```
 
 **Current score: `core` 37/37 — CONFORMANT (UHP 2026-08-11, class core).**
+Details, reproduction steps and the remaining gap: [docs/conformance.md](docs/conformance.md).
 Across all three classes: **38/52**, with the remaining 14 in `extended` and `full`
 (session listing and inspection, file input, artifacts, harness management, skills, MCP).
 This server does not claim `extended` or `full`, and its discovery document reports those
@@ -184,6 +185,15 @@ make docker
 The image installs `@anthropic-ai/claude-code` and `opencode-ai` via npm as examples;
 add `codex`, `grok`, and `pi` install steps as those CLIs become available in your
 environment.
+
+## Contributing
+
+Work is tracked as [GitHub issues](https://github.com/aenawi/uhp-go/issues). Issues carry
+triage labels described in [docs/agents/triage-labels.md](docs/agents/triage-labels.md);
+`ready-for-agent` marks work that is specified well enough to hand to an agent, and
+`ready-for-human` marks work needing a product decision.
+
+Security issues go through private reporting instead — see [SECURITY.md](SECURITY.md).
 
 ## License
 
