@@ -55,10 +55,10 @@ uhp-conformance --base-url http://localhost:8080 --api-key "$UHP_API_KEY" --clas
 
 **Current score: `core` 37/37 — CONFORMANT (UHP 2026-08-11, class core).**
 Details, reproduction steps and the remaining gap: [docs/conformance.md](docs/conformance.md).
-Across all three classes: **38/52**, with the remaining 14 in `extended` and `full`
-(session listing and inspection, file input, artifacts, harness management, skills, MCP).
-This server does not claim `extended` or `full`, and its discovery document reports those
-capabilities as `false` rather than omitting them.
+Across all three classes: **42/52** (`extended` 42/45), with the remaining 10 in
+`extended` and `full`: file input, artifacts, harness management, skills, MCP.
+This server does not claim `extended` or `full`, and its discovery document reports the
+capabilities it does not implement as `false` rather than omitting them.
 
 A skip is counted as a failure here, not as a pass.
 
@@ -97,13 +97,17 @@ internal/config/           environment-variable configuration loader
 | `GET /v1/harnesses/{id}` | One harness |
 | `GET /v1/harnesses/{id}/models` | Models for one harness, with computed availability |
 | `GET /v1/models` | Model catalogue by backend |
+| `GET /v1/sessions` | List sessions; cursor paging via `limit`, `cursor`, `harness` |
+| `GET /v1/sessions/{id}` | One session |
+| `GET /v1/sessions/{id}/turns` | A session's ordered task history |
+| `POST /v1/sessions/{id}/cancel` | Stop whatever is running in a session |
 | `POST /v1/responses` | Create a task (`stream:true` for SSE, else blocks until terminal) |
 | `GET /v1/responses/{id}` | Retrieve a task's current state and output |
 | `POST /v1/responses/{id}/cancel` | Cancel an in-flight task |
 | `GET /healthz` | Liveness probe |
 
-Not implemented, and reported as `false` in the discovery document: session listing and
-inspection, file input, artifact download, harness management, skills, MCP.
+Not implemented, and reported as `false` in the discovery document: file input, artifact
+download, harness management, skills, MCP.
 
 Harness ids are `chrn_`-prefixed and derived deterministically from the base name, so they
 survive a restart. The friendly base name is accepted as an alias wherever a harness id is

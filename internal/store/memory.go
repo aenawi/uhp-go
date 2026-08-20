@@ -7,6 +7,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/aenawi/uhp-go/internal/domain"
@@ -112,4 +113,75 @@ func copyTask(t *domain.Task) *domain.Task {
 		cp.Error = &e
 	}
 	return &cp
+}
+
+// ListSessions returns one page of sessions, newest first.
+//
+// The ordering is deliberate and total: newest CreatedAt first, ties broken by
+// id. Cursor paging over an unstable order silently skips and repeats rows, and
+// map iteration has no order at all.
+func (s *MemoryStore) ListSessions(_ context.Context, f domain.SessionFilter) (domain.SessionPage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	all := make([]*domain.Session, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		if f.HarnessID != "" && sess.HarnessID != f.HarnessID {
+			continue
+		}
+		cp := *sess
+		all = append(all, &cp)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].CreatedAt.Equal(all[j].CreatedAt) {
+			return all[i].CreatedAt.After(all[j].CreatedAt)
+		}
+		return all[i].ID < all[j].ID
+	})
+
+	start := 0
+	if f.Cursor != "" {
+		for i, sess := range all {
+			if sess.ID == f.Cursor {
+				start = i + 1
+				break
+			}
+		}
+	}
+	limit := f.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	end := start + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	page := all[start:end]
+
+	next := ""
+	if end < len(all) && len(page) > 0 {
+		next = page[len(page)-1].ID
+	}
+	return domain.SessionPage{Sessions: page, NextCursor: next}, nil
+}
+
+// ListSessionTasks returns a session's tasks in the order they ran.
+func (s *MemoryStore) ListSessionTasks(_ context.Context, sessionID string) ([]*domain.Task, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]*domain.Task, 0, 4)
+	for _, t := range s.tasks {
+		if t.SessionID == sessionID {
+			out = append(out, copyTask(t))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
 }

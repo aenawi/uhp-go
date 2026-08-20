@@ -117,12 +117,21 @@ func (neverTerminalAdapter) Run(context.Context, harness.RunRequest) (<-chan har
 }
 func (neverTerminalAdapter) Cancel(context.Context, string) error { return nil }
 
-func newSvc(t *testing.T, id string, a harness.Adapter) *TaskService {
+func newSvc(t *testing.T, _ string, a harness.Adapter) *TaskService {
 	t.Helper()
-	reg := harness.NewRegistry()
-	reg.Register(a)
-	return NewTaskService(reg, store.NewMemoryStore(), slog.Default())
+	return NewTaskService(newRegistryWith(a), newMemStore(), testLogger())
 }
+
+func newRegistryWith(as ...harness.Adapter) *harness.Registry {
+	reg := harness.NewRegistry()
+	for _, a := range as {
+		reg.Register(a)
+	}
+	return reg
+}
+
+func newMemStore() Store       { return store.NewMemoryStore() }
+func testLogger() *slog.Logger { return slog.Default() }
 
 func collect(t *testing.T, run *Run) []domain.Event {
 	t.Helper()

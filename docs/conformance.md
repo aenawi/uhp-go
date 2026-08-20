@@ -10,7 +10,8 @@ what this server scores, how to reproduce it, and what the remaining gap is.
 CONFORMANT — UHP 2026-08-11 (core)
 ```
 
-Across all three classes: **38/52**. The remaining 14 are all `extended` and `full`.
+Across all three classes: **42/52**. `extended` stands at 42/45; the three outstanding
+checks there are all file-related.
 
 This server does not claim `extended` or `full`. Its discovery document reports the
 capabilities it does not implement as `false` rather than omitting them, because
@@ -53,17 +54,17 @@ Two things to know before reading a result:
 | Supervisor: task lifetime decoupled from request lifetime | 5/52 | A-02, E-03 |
 | Event model and sequencer | 5/52 | correct but still unmeasured |
 | Contract fixes | **38/52, core 37/37** | see below |
+| Session listing, inspection and turns | **42/52** | X-01, X-02, X-03, X-04 |
 
 The 33 skips in the baseline were not 33 separate defects. They cascaded from one line:
 `GET /v1/harnesses` returned `{"data": […]}` where the suite reads `harnesses`, so it could
 not pick a harness and every task, stream, session and cancellation check skipped untested.
 Fixing that one envelope is what made three steps of prior work measurable.
 
-## The remaining 14
+## The remaining 10
 
 | Checks | Needs | Issue |
 |---|---|---|
-| X-01…X-04 | session listing, inspection, turns, pagination | #1 |
 | X-05…X-07 | file input, artifact capture and download | #2 |
 | F-01, F-02, F-05, F-07 | harness create/update/delete | #3 |
 | F-03, F-04, F-06 | skills as folders, MCP config | #4 |

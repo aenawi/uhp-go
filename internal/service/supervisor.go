@@ -175,6 +175,14 @@ func (s *supervisor) get(taskID string) (*Run, bool) {
 	return r, ok
 }
 
+// bySessionRun returns the live run for a session, if any.
+func (s *supervisor) bySessionRun(sessionID string) (*Run, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.bySession[sessionID]
+	return r, ok
+}
+
 func (s *supervisor) sessionBusy(sessionID string) bool {
 	if sessionID == "" {
 		return false

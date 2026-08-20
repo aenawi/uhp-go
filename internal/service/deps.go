@@ -16,6 +16,8 @@ import (
 type Registry interface {
 	Get(harnessID string) (harness.Adapter, bool)
 	List() []domain.Harness
+	// Resolve maps an id or a friendly alias to the canonical harness id.
+	Resolve(harnessID string) (string, bool)
 }
 
 // Store persists tasks and sessions.
@@ -34,4 +36,8 @@ type Store interface {
 	CreateSession(ctx context.Context, s *domain.Session) error
 	GetSession(ctx context.Context, id string) (*domain.Session, error)
 	UpdateSession(ctx context.Context, s *domain.Session) error
+	ListSessions(ctx context.Context, f domain.SessionFilter) (domain.SessionPage, error)
+
+	// ListSessionTasks returns a session's tasks in the order they ran.
+	ListSessionTasks(ctx context.Context, sessionID string) ([]*domain.Task, error)
 }

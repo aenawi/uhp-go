@@ -184,11 +184,18 @@ func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (*do
 // is set, reuse its session; otherwise mint a new session for this harness.
 func (s *TaskService) resolveSession(ctx context.Context, req CreateTaskRequest) (sessionID, nativeSessionID string, err error) {
 	if req.PreviousResponseID == "" {
+		now := time.Now().UTC()
+		harnessID := req.HarnessID
+		if canonical, ok := s.registry.Resolve(req.HarnessID); ok {
+			harnessID = canonical
+		}
 		sess := &domain.Session{
 			ID:        "sess_" + uuid.NewString(),
-			HarnessID: req.HarnessID,
-			CreatedAt: time.Now().UTC(),
-			UpdatedAt: time.Now().UTC(),
+			HarnessID: harnessID,
+			Title:     titleFor(req.Input),
+			Status:    domain.StatusInProgress,
+			CreatedAt: now,
+			UpdatedAt: now,
 		}
 		if err := s.store.CreateSession(ctx, sess); err != nil {
 			return "", "", fmt.Errorf("service: create session: %w", err)
@@ -207,7 +214,15 @@ func (s *TaskService) resolveSession(ctx context.Context, req CreateTaskRequest)
 	// Lifecycle §4: continuing a conversation with a different agent is a
 	// different conversation, and doing it quietly loses work the client
 	// believed it had.
-	if req.HarnessID != "" && sess.HarnessID != "" && req.HarnessID != sess.HarnessID {
+	//
+	// Compare canonical ids on both sides. Sessions record the canonical
+	// `chrn_` id, so comparing it against a request that used the friendly
+	// base-name alias would report a mismatch between a harness and itself.
+	requested := req.HarnessID
+	if canonical, ok := s.registry.Resolve(requested); ok {
+		requested = canonical
+	}
+	if requested != "" && sess.HarnessID != "" && requested != sess.HarnessID {
 		return "", "", fmt.Errorf("%w: session %s runs on %q, request asked for %q",
 			ErrHarnessMismatch, sess.ID, sess.HarnessID, req.HarnessID)
 	}
@@ -351,6 +366,8 @@ func (s *TaskService) terminal(ctx context.Context, task *domain.Task, seq *sequ
 	if err := s.store.UpdateTask(ctx, task); err != nil {
 		return nil, err
 	}
+	s.markSessionStatus(ctx, task.SessionID, task.Status, task.ID)
+
 	// Streaming §4: the terminal event carries the complete final response, so
 	// a client that missed intermediate events can rely on it alone.
 	evs = append(evs, seq.next(domain.Event{Type: evType, Response: cloneTask(task)}))

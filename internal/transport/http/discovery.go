@@ -43,7 +43,7 @@ func capabilities() map[string]bool {
 		"cancellation":       true,
 		"files_input":        false,
 		"files_output":       false,
-		"session_listing":    false,
+		"session_listing":    true,
 		"harness_management": false,
 		"session_sharing":    false,
 		"idempotency":        false,
