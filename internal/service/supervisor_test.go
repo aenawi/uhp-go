@@ -211,3 +211,96 @@ func TestNonPositiveLimitFallsBackToTheDefault(t *testing.T) {
 		}
 	}
 }
+
+// Issue #6 / UHP Errors §5: clients are told to use an inactivity timeout
+// rather than a total one, so a run that is thinking rather than talking has
+// to produce something on the wire. Events on its own is silent between
+// publishes, so a transport needs a tick it can hang a keep-alive off.
+func TestIdleTickFiresWhileNothingIsPublished(t *testing.T) {
+	run := newRun("resp_idle", "sess_idle", func() {}, func() {})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ticks := make(chan struct{}, 8)
+	done := make(chan error, 1)
+	go func() {
+		done <- run.Events(ctx, IdleTick{
+			Every: time.Millisecond,
+			Do: func() error {
+				select {
+				case ticks <- struct{}{}:
+				default:
+				}
+				return nil
+			},
+		}, func(domain.Event) error { return nil })
+	}()
+
+	for i := 1; i <= 3; i++ {
+		select {
+		case <-ticks:
+		case <-ctx.Done():
+			t.Fatalf("idle tick %d never arrived; a silent run puts nothing on the wire", i)
+		}
+	}
+
+	run.finish()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Events: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("Events did not return once the run was terminal")
+	}
+}
+
+// The idle tick is a side channel, not a second event source: what a
+// subscriber sees, and in what order, must not depend on whether the transport
+// asked for one.
+func TestIdleTickChangesNoEventOrder(t *testing.T) {
+	run := newRun("resp_both", "sess_both", func() {}, func() {})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for i := 0; i < 3; i++ {
+		run.publish(domain.Event{Type: "response.output_text.delta", Seq: i})
+	}
+	run.finish()
+
+	var got []int
+	err := run.Events(ctx, IdleTick{Every: time.Millisecond, Do: func() error { return nil }},
+		func(ev domain.Event) error { got = append(got, ev.Seq); return nil })
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(got) != 3 || got[0] != 0 || got[1] != 1 || got[2] != 2 {
+		t.Fatalf("sequences = %v, want [0 1 2]", got)
+	}
+}
+
+// A keep-alive write is how the transport finds out the client is gone, so the
+// error it returns has to end the subscription the same way an event write
+// failure does.
+func TestIdleTickErrorEndsTheSubscription(t *testing.T) {
+	run := newRun("resp_gone", "sess_gone", func() {}, func() {})
+	defer run.finish()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	want := errors.New("client went away")
+	done := make(chan error, 1)
+	go func() {
+		done <- run.Events(ctx, IdleTick{Every: time.Millisecond, Do: func() error { return want }},
+			func(domain.Event) error { return nil })
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, want) {
+			t.Fatalf("Events = %v, want %v", err, want)
+		}
+	case <-ctx.Done():
+		t.Fatal("Events kept the subscription alive after the keep-alive write failed")
+	}
+}

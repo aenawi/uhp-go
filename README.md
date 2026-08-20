@@ -142,6 +142,12 @@ selects which harness runs the task. Continuing a conversation is done by settin
 `previous_response_id` to a prior task's `id` — the router resolves the underlying session
 and, where the harness supports it, its native session/thread id (`--resume`, `--session`, etc.).
 
+A stream that has gone 15 seconds with nothing to send writes an SSE comment line
+(`: keep-alive`). UHP tells clients to time a stream out on inactivity rather than on total
+duration, and an agent that thinks for two minutes before its first token would otherwise
+look exactly like a dropped connection. A comment carries no data and is discarded by any
+conformant SSE client, so nothing downstream has to know about it.
+
 ## Files
 
 A harness that can only return text is a chatbot. `uhpd` implements the UHP "Files"

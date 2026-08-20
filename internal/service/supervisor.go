@@ -100,6 +100,19 @@ func (r *Run) finish() {
 	close(r.done)
 }
 
+// IdleTick asks Events to call Do every Every of silence. Its zero value asks
+// for nothing, which is what a subscriber that only wants events passes.
+//
+// The two fields are one decision and are meaningless apart, so they travel as
+// one value rather than as two arguments that have to be checked against each
+// other.
+type IdleTick struct {
+	Every time.Duration
+	Do    func() error
+}
+
+func (t IdleTick) wanted() bool { return t.Every > 0 && t.Do != nil }
+
 // Events calls fn for every event of this run, starting from the first one,
 // until the run is terminal or ctx is cancelled.
 //
@@ -107,10 +120,28 @@ func (r *Run) finish() {
 // attaches late still sees the whole stream, and the sequence numbers it sees
 // are the same ones every other subscriber sees. Streaming and non-streaming
 // therefore cannot disagree: they read the same log.
-func (r *Run) Events(ctx context.Context, fn func(domain.Event) error) error {
+//
+// A run that is working says nothing, and silence is also what a dead
+// connection sounds like. idle is how a subscriber hears the difference: its
+// Do runs on the same goroutine as fn, in the gaps between events, and an
+// error from it ends the subscription exactly as an error from fn does. What
+// to put on the wire in that gap belongs to the transport; all this knows is
+// that the gap happened.
+func (r *Run) Events(ctx context.Context, idle IdleTick, fn func(domain.Event) error) error {
+	// A nil channel blocks forever in a select, so a subscriber that asked for
+	// no tick reads exactly as it did before there was one.
+	var tick *time.Ticker
+	var ticks <-chan time.Time
+	if idle.wanted() {
+		tick = time.NewTicker(idle.Every)
+		defer tick.Stop()
+		ticks = tick.C
+	}
+
 	i := 0
 	for {
 		r.mu.Lock()
+		delivered := false
 		for i < len(r.events) {
 			ev := r.events[i]
 			i++
@@ -118,6 +149,7 @@ func (r *Run) Events(ctx context.Context, fn func(domain.Event) error) error {
 			if err := fn(ev); err != nil {
 				return err
 			}
+			delivered = true
 			r.mu.Lock()
 		}
 		if r.finished {
@@ -127,8 +159,29 @@ func (r *Run) Events(ctx context.Context, fn func(domain.Event) error) error {
 		wait := r.notify
 		r.mu.Unlock()
 
+		// An event is itself proof the connection is alive, so the countdown
+		// starts again from the last one rather than running on a fixed
+		// schedule through a busy stream.
+		//
+		// The channel is drained first: a tick that landed while fn was
+		// writing survives Reset, and would then fire on the very next select
+		// — a keep-alive immediately after an event, which is the one case
+		// this reset exists to avoid.
+		if delivered && tick != nil {
+			tick.Stop()
+			select {
+			case <-tick.C:
+			default:
+			}
+			tick.Reset(idle.Every)
+		}
+
 		select {
 		case <-wait:
+		case <-ticks:
+			if err := idle.Do(); err != nil {
+				return err
+			}
 		case <-ctx.Done():
 			return ctx.Err()
 		}
