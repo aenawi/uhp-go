@@ -21,6 +21,32 @@ import (
 	transporthttp "github.com/aenawi/uhp-go/internal/transport/http"
 )
 
+// openHarnessStore picks where created harnesses live.
+//
+// Harness management is always offered, so there is always a store. With a path
+// configured the harnesses are durable; without one they are not, and that is
+// worth a line in the log rather than a surprise on the next restart — a client
+// that created a harness and stored its id will get a 404 for it, and nothing
+// in the discovery document can tell it that in advance.
+//
+// A configured path that will not open is fatal rather than a silent downgrade
+// to memory: the operator asked for durability, and a server that quietly
+// serves less than it was configured for is the hardest misconfiguration to
+// notice.
+func openHarnessStore(cfg config.Config, log *slog.Logger) service.HarnessStore {
+	if cfg.HarnessStore == "" {
+		log.Warn("harness store not configured; created harnesses will not survive a restart",
+			"hint", "set UHP_HARNESS_STORE or UHP_WORKSPACE")
+		return store.NewMemoryHarnesses()
+	}
+	harnesses, err := store.NewFileHarnesses(cfg.HarnessStore)
+	if err != nil {
+		log.Error("harness store", "error", err, "path", cfg.HarnessStore)
+		os.Exit(1)
+	}
+	return harnesses
+}
+
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg := config.Load()
@@ -41,18 +67,7 @@ func main() {
 	if cfg.Workspace != "" {
 		opts = append(opts, service.WithWorkspace(cfg.Workspace))
 	}
-	if cfg.HarnessStore != "" {
-		// A store that will not open is fatal rather than a silent downgrade
-		// to "harness management off": the operator asked for it, and a server
-		// that quietly serves less than it was configured for is the hardest
-		// kind of misconfiguration to notice.
-		harnesses, err := store.NewFileHarnesses(cfg.HarnessStore)
-		if err != nil {
-			log.Error("harness store", "error", err, "path", cfg.HarnessStore)
-			os.Exit(1)
-		}
-		opts = append(opts, service.WithHarnessStore(harnesses))
-	}
+	opts = append(opts, service.WithHarnessStore(openHarnessStore(cfg, log)))
 	if cfg.PublicBaseURL != "" {
 		opts = append(opts, service.WithPublicBaseURL(cfg.PublicBaseURL))
 	}

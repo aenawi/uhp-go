@@ -2,7 +2,6 @@ package harness
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/aenawi/uhp-go/internal/domain"
@@ -101,7 +100,11 @@ func TestManagedAppliesDefaultModel(t *testing.T) {
 	}
 }
 
-func TestManagedConveysSystemPrompt(t *testing.T) {
+// The wrapper does not touch the input. Standing instructions, skill folders
+// and MCP configuration all have to be on disk or in argv before the process
+// starts, so the router composes them; a second, quieter copy of that logic
+// here is how the two drift apart.
+func TestManagedLeavesTheInputAlone(t *testing.T) {
 	cfg := managedCfg()
 	cfg.SystemPrompt = "Answer only in French."
 	base := &recordingBase{}
@@ -110,12 +113,28 @@ func TestManagedConveysSystemPrompt(t *testing.T) {
 	if _, err := m.Run(context.Background(), RunRequest{TaskID: "resp_1", Input: "hello"}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if !strings.Contains(base.last.Input, "Answer only in French.") {
-		t.Fatalf("the configured system prompt never reached the harness: %q", base.last.Input)
+	if base.last.Input != "hello" {
+		t.Fatalf("the wrapper rewrote the input: %q", base.last.Input)
 	}
-	if !strings.Contains(base.last.Input, "hello") {
-		t.Fatalf("the user's own input was lost: %q", base.last.Input)
+}
+
+// What a runtime enforces is the base's answer; a wrapper cannot block a tool
+// the CLI underneath it has no flag for.
+func TestManagedForwardsDelivery(t *testing.T) {
+	if got := NewManaged(managedCfg(), &recordingBase{}).Delivery(); got != (Delivery{}) {
+		t.Fatalf("a base that says nothing should deliver nothing, got %+v", got)
 	}
+	full := NewManaged(managedCfg(), &deliveringBase{recordingBase{}})
+	if got := full.Delivery(); !got.MCPServers || !got.ToolBlock || !got.Skills {
+		t.Fatalf("the base's delivery was not forwarded: %+v", got)
+	}
+}
+
+// deliveringBase is a base that enforces everything natively.
+type deliveringBase struct{ recordingBase }
+
+func (b *deliveringBase) Delivery() Delivery {
+	return Delivery{MCPServers: true, ToolBlock: true, Skills: true}
 }
 
 func TestManagedAvailabilityFollowsTheBase(t *testing.T) {

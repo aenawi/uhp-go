@@ -1,6 +1,10 @@
 package harness
 
-import "github.com/aenawi/uhp-go/internal/domain"
+import (
+	"strings"
+
+	"github.com/aenawi/uhp-go/internal/domain"
+)
 
 // NewGrok declares the Grok CLI harness.
 //
@@ -30,5 +34,17 @@ func NewGrok(models []string) *CLIHarness {
 			return args, nil
 		},
 		ParseLine: passthroughParseLine,
+
+		// Verified against `grok --help`: "--disallowed-tools <TOOLS>  Built-in
+		// tools to remove (comma-separated)". A real block, so the router does
+		// not fall back to asking the model nicely.
+		DisallowArgs: func(tools []string) []string {
+			return []string{"--disallowed-tools", strings.Join(tools, ",")}
+		},
+
+		// No MCPArgs: grok configures MCP through its own `grok mcp`
+		// subcommand, which writes global state rather than taking a per-run
+		// file. Declaring one here would advertise support this server cannot
+		// deliver for a single turn, which §4.1 forbids.
 	}).Build()
 }

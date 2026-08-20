@@ -34,6 +34,10 @@ var (
 
 	ErrInvalidSkill     = errors.New("service: invalid skill bundle")
 	ErrInvalidMcpServer = errors.New("service: invalid mcp server")
+
+	// ErrMcpUndeliverable is a harness configured with MCP servers on a base
+	// that has no way to connect them for a turn.
+	ErrMcpUndeliverable = errors.New("service: mcp servers cannot be delivered by this base")
 )
 
 // UnsupportedBaseError is a create naming a base this server cannot run.
@@ -69,6 +73,46 @@ type HarnessSpec struct {
 	DisabledTools  []string
 	MaxStep        *int
 	TimeoutSeconds *int
+}
+
+// Optional distinguishes the three states a JSON field has in a partial
+// update: absent, present-and-null, and present-with-a-value.
+//
+// A plain pointer collapses the first two, which is exactly the distinction a
+// PATCH needs: `{"max_step": null}` clears a budget and `{}` leaves it alone,
+// and a client that cannot say the difference can set a budget but never
+// remove one.
+type Optional[T any] struct {
+	Set   bool
+	Value T
+}
+
+// Given returns v when the field was sent and fallback when it was not.
+func (o Optional[T]) Given(fallback T) T {
+	if !o.Set {
+		return fallback
+	}
+	return o.Value
+}
+
+// HarnessPatch is a partial update: every field it does not carry is left as
+// it was.
+//
+// PATCH is not in the specification — §5.2 defines the update as a PUT that
+// replaces the mutable configuration — but replacement alone makes the safe
+// edit the expensive one: renaming a harness means resending every skill file
+// it owns, and a client that gets that wrong silently empties a folder. PATCH
+// is offered alongside PUT, not instead of it.
+type HarnessPatch struct {
+	Name           Optional[string]
+	Base           Optional[string]
+	DefaultModel   Optional[string]
+	SystemPrompt   Optional[string]
+	McpServers     Optional[[]domain.McpServer]
+	Skills         Optional[[]domain.Skill]
+	DisabledTools  Optional[[]string]
+	MaxStep        Optional[*int]
+	TimeoutSeconds Optional[*int]
 }
 
 // HarnessManagementEnabled reports whether this server can create harnesses.
@@ -125,9 +169,40 @@ func (s *TaskService) GetHarness(ctx context.Context, id string) (domain.Harness
 	return s.harnessView(cfg), true, nil
 }
 
+// HarnessSkillFiles answers GET /v1/harnesses/{id}/skills/{skill_id}/files.
+//
+// Harnesses §4.2 requires the complete file list, and requires that a round
+// trip through GET and PUT not lose skill contents. That is the failure the
+// endpoint exists to make visible: an unrelated edit silently emptying a skill
+// folder that the user cannot tell is gone until an agent behaves oddly weeks
+// later. Reading it back is how a client checks.
+//
+// The skill is addressed by name, which is what a client has: this server
+// stores bundles inline rather than out of line, so it issues no `blob`
+// handles and has no separate skill id to hand out.
+func (s *TaskService) HarnessSkillFiles(
+	ctx context.Context, harnessID, skillID string,
+) ([]domain.SkillFile, bool, error) {
+	cfg, ok, err := s.managedConfig(ctx, harnessID)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	for _, sk := range cfg.Skills {
+		if sk.Name != skillID {
+			continue
+		}
+		files := filesOf(sk)
+		if files == nil {
+			files = []domain.SkillFile{}
+		}
+		return files, true, nil
+	}
+	return nil, false, nil
+}
+
 // ModelAvailable reports whether a harness can serve a model right now.
 func (s *TaskService) ModelAvailable(ctx context.Context, harnessID, model string) bool {
-	a, ok, err := s.adapterFor(ctx, harnessID)
+	a, _, ok, err := s.adapterFor(ctx, harnessID)
 	if err != nil || !ok {
 		return false
 	}
@@ -183,6 +258,30 @@ func (s *TaskService) UpdateHarness(ctx context.Context, id string, spec Harness
 	// readable, unrunnable and uneditable, and would report `unsupported_base`
 	// for a base the client never sent.
 	base, _ := s.baseAdapter(existing.Base)
+	return s.writeHarness(ctx, existing, spec, base)
+}
+
+// PatchHarness implements PATCH /v1/harnesses/{id}: the same write as
+// UpdateHarness, over a spec built from what the harness already is.
+func (s *TaskService) PatchHarness(ctx context.Context, id string, p HarnessPatch) (domain.Harness, error) {
+	existing, err := s.managedForWrite(ctx, id)
+	if err != nil {
+		return domain.Harness{}, err
+	}
+	if p.Base.Set && p.Base.Value != "" && p.Base.Value != existing.Base {
+		return domain.Harness{}, fmt.Errorf("%w: %q is on base %q; create a separate harness for %q",
+			ErrBaseImmutable, id, existing.Base, p.Base.Value)
+	}
+	base, _ := s.baseAdapter(existing.Base)
+	return s.writeHarness(ctx, existing, p.onto(specOf(existing)), base)
+}
+
+// writeHarness validates a spec against a harness's immutable fields and
+// persists the result. Both update verbs end here, so neither can grow a rule
+// the other is missing.
+func (s *TaskService) writeHarness(
+	ctx context.Context, existing domain.HarnessConfig, spec HarnessSpec, base harness.Adapter,
+) (domain.Harness, error) {
 	cfg, err := s.applySpec(spec, domain.HarnessConfig{
 		ID:        existing.ID,
 		Base:      existing.Base,
@@ -196,6 +295,37 @@ func (s *TaskService) UpdateHarness(ctx context.Context, id string, spec Harness
 		return domain.Harness{}, fmt.Errorf("%w: persist harness: %v", ErrStorage, err)
 	}
 	return s.harnessView(cfg), nil
+}
+
+// specOf reads a stored configuration back as the spec that would produce it,
+// which is the starting point a patch merges onto.
+func specOf(cfg domain.HarnessConfig) HarnessSpec {
+	return HarnessSpec{
+		Name:           cfg.Name,
+		Base:           cfg.Base,
+		DefaultModel:   cfg.DefaultModel,
+		SystemPrompt:   cfg.SystemPrompt,
+		McpServers:     cfg.McpServers,
+		Skills:         cfg.Skills,
+		DisabledTools:  cfg.DisabledTools,
+		MaxStep:        cfg.MaxStep,
+		TimeoutSeconds: cfg.TimeoutSeconds,
+	}
+}
+
+// onto folds the fields the patch carries over a spec, leaving the rest.
+func (p HarnessPatch) onto(spec HarnessSpec) HarnessSpec {
+	spec.Name = p.Name.Given(spec.Name)
+	spec.DefaultModel = p.DefaultModel.Given(spec.DefaultModel)
+	spec.SystemPrompt = p.SystemPrompt.Given(spec.SystemPrompt)
+	spec.McpServers = p.McpServers.Given(spec.McpServers)
+	spec.Skills = p.Skills.Given(spec.Skills)
+	spec.DisabledTools = p.DisabledTools.Given(spec.DisabledTools)
+	spec.MaxStep = p.MaxStep.Given(spec.MaxStep)
+	spec.TimeoutSeconds = p.TimeoutSeconds.Given(spec.TimeoutSeconds)
+	// Base is deliberately not folded: PatchHarness has already refused a
+	// patch that names a different one, and the stored base is authoritative.
+	return spec
 }
 
 // DeleteHarness implements DELETE /v1/harnesses/{id} (Harnesses §5.3).
@@ -263,6 +393,17 @@ func (s *TaskService) applySpec(spec HarnessSpec, keep domain.HarnessConfig, bas
 	if err != nil {
 		return domain.HarnessConfig{}, err
 	}
+	// Harnesses §4.1: "A server MUST NOT advertise MCP support it cannot
+	// deliver. If the harness runtime behind it cannot speak the configured
+	// transport, that is a broken installation, and reporting it only in a log
+	// file inside the workspace is indistinguishable — to the user — from the
+	// model refusing to use the tool." So it is refused here, where the client
+	// is still listening, rather than dropped at run time.
+	if len(servers) > 0 && base != nil && !deliveryOf(base).MCPServers {
+		return domain.HarnessConfig{}, fmt.Errorf(
+			"%w: base %q has no per-run MCP mechanism, so this server cannot connect these for a turn",
+			ErrMcpUndeliverable, keep.Base)
+	}
 	skills, err := normalizeSkills(spec.Skills)
 	if err != nil {
 		return domain.HarnessConfig{}, err
@@ -308,20 +449,40 @@ func (s *TaskService) harnessView(cfg domain.HarnessConfig) domain.Harness {
 }
 
 // adapterFor resolves a harness id — compiled-in or managed, canonical or
-// alias — to something that can run a task.
-func (s *TaskService) adapterFor(ctx context.Context, id string) (harness.Adapter, bool, error) {
+// alias — to something that can run a task, plus the configuration behind it.
+//
+// The configuration comes back because a run has to materialize it before the
+// harness starts, and only a managed harness has any: for a compiled-in one
+// the returned config is the zero value, which prepareRuntime turns into no
+// files, no argv and no instructions.
+func (s *TaskService) adapterFor(
+	ctx context.Context, id string,
+) (harness.Adapter, domain.HarnessConfig, bool, error) {
 	if a, ok := s.registry.Get(id); ok {
-		return a, true, nil
+		return a, domain.HarnessConfig{}, true, nil
 	}
 	cfg, ok, err := s.managedConfig(ctx, id)
 	if err != nil || !ok {
-		return nil, false, err
+		return nil, domain.HarnessConfig{}, false, err
 	}
 	base, _ := s.baseAdapter(cfg.Base)
 	// A nil base is passed through deliberately: the harness exists and must
 	// resolve, and Managed reports the missing base rather than pretending the
 	// harness is gone.
-	return harness.NewManaged(cfg, base), true, nil
+	return harness.NewManaged(cfg, base), cfg, true, nil
+}
+
+// runtimeAdapter is the adapter whose delivery capabilities decide how a
+// harness's configuration is conveyed. For a managed harness that is the base
+// underneath it, not the wrapper.
+func (s *TaskService) runtimeAdapter(a harness.Adapter, cfg domain.HarnessConfig) harness.Adapter {
+	if cfg.Base == "" {
+		return a
+	}
+	if base, ok := s.baseAdapter(cfg.Base); ok {
+		return base
+	}
+	return a
 }
 
 // newHarnessID mints an opaque `chrn_` id.

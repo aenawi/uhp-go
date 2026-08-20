@@ -111,7 +111,7 @@ type CreateTaskRequest struct {
 // the returned Run stays valid — and the task keeps running — regardless of
 // what the caller does with it.
 func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (*domain.Task, *Run, error) {
-	adapter, ok, err := s.adapterFor(ctx, req.HarnessID)
+	adapter, harnessCfg, ok, err := s.adapterFor(ctx, req.HarnessID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -142,7 +142,19 @@ func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (*do
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// The harness's own configuration — skills on disk, an MCP config file,
+	// and the standing instructions carrying whatever the runtime cannot
+	// enforce itself. Written before the snapshot below, so none of the
+	// router's scaffolding comes back as one of the task's artifacts.
+	runtime, err := s.prepareRuntime(harnessCfg, s.runtimeAdapter(adapter, harnessCfg), workDir)
+	if err != nil {
+		return nil, nil, err
+	}
 	input := req.Input + attachmentNote(inputPaths)
+	if runtime.Instructions != "" {
+		input = runtime.Instructions + "\n\n" + input
+	}
 
 	now := time.Now().UTC()
 	task := &domain.Task{
@@ -186,6 +198,9 @@ func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (*do
 		Metadata:        req.Metadata,
 		InputFiles:      inputPaths,
 		WorkDir:         workDir,
+		SkillDirs:       runtime.SkillDirs,
+		McpConfigPath:   runtime.McpConfigPath,
+		DisabledTools:   runtime.DisabledTools,
 	})
 	if err != nil {
 		task.Status = domain.StatusFailed

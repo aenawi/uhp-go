@@ -57,17 +57,15 @@ uhp-conformance --base-url http://localhost:8080 --api-key "$UHP_API_KEY" --clas
 Details, reproduction steps and the remaining gap: [docs/conformance.md](docs/conformance.md).
 Across all three classes, that run measured **42/52** (`extended` 42/45).
 
-File support — input items, artifact capture and artifact download — landed after that
-run and has **not been re-measured**, and neither has harness management (create, update,
-delete, and refusing an unsupported base). The checks they target (`X-05`…`X-08`,
-`F-01`, `F-02`, `F-05`, `F-07`) are covered by this repository's own tests, but the
-published suite has not been run against them yet, so the score above is still the honest
-one to quote. What remains unimplemented is delivering a harness's skills, MCP servers and
-disabled tools to the agent — they are validated, stored and returned, but not yet
-materialised for the run.
+File support (issue #2) and harness management with skills, MCP and tool restrictions
+(issues #3 and #4) both landed after that run and have **not been re-measured**. The
+checks they target — `X-05`…`X-08` and `F-01`…`F-07` — are covered by this repository's
+own tests, but a passing local test is not a conformance result, so the score above is
+still the honest one to quote.
 
-This server does not claim `extended` or `full`, and its discovery document reports the
-capabilities it does not implement as `false` rather than omitting them.
+This server does not yet claim `extended` or `full` in its discovery document, because
+that claim is the suite's to confirm, not this file's. Capabilities it does not implement
+are reported as `false` rather than omitted.
 
 A skip is counted as a failure here, not as a pass.
 
@@ -108,7 +106,9 @@ internal/config/           environment-variable configuration loader
 | `POST /v1/harnesses` | Create a harness — `422 unsupported_base` if the base cannot be run |
 | `GET /v1/harnesses/{id}` | One harness |
 | `PUT /v1/harnesses/{id}` | Replace a harness's mutable configuration; `id`, `base` and `createdAt` are immutable |
+| `PATCH /v1/harnesses/{id}` | Merge into it, leaving unsent fields alone. An extension; §5.2 defines only the PUT |
 | `DELETE /v1/harnesses/{id}` | Delete a harness; its sessions and responses are kept |
+| `GET /v1/harnesses/{id}/skills/{skill_id}/files` | A skill's complete folder, nested and binary members included |
 | `GET /v1/harnesses/{id}/models` | Models for one harness, with computed availability |
 | `GET /v1/models` | Model catalogue by backend |
 | `GET /v1/sessions` | List sessions; cursor paging via `limit`, `cursor`, `harness` |
@@ -126,10 +126,9 @@ internal/config/           environment-variable configuration loader
 | `GET /healthz` | Liveness probe |
 
 Not implemented, and reported as `false` in the discovery document: session sharing and
-idempotency. Three capabilities are computed from configuration rather than asserted:
-`files_input` and `files_output` are `true` only when `UHP_WORKSPACE` is set, and
-`harness_management` only when a harness store is configured — see [Files](#files) and
-[Harness management](#harness-management).
+idempotency. `files_input` and `files_output` are computed from configuration rather than
+asserted — `true` only when `UHP_WORKSPACE` is set, because both need a per-session
+working directory. See [Files](#files) and [Harness management](#harness-management).
 
 Harness ids are `chrn_`-prefixed. The ones this server is started with derive theirs
 deterministically from the base name, so they survive a restart; a harness created over
@@ -223,11 +222,19 @@ and — once issue #4 lands — the skills, MCP servers and tool restrictions it
 with. UHP class `full` expects that configuration to be created over HTTP rather than
 compiled in.
 
-**Set `UHP_HARNESS_STORE`,** or a `UHP_WORKSPACE` that implies it. With neither, the
-`harness_management` capability is reported as `false` and the three endpoints answer
-`501`. That is deliberate: a harness a client created, stored the id of, and came back to
-after a deploy is not configuration if it did not survive the restart, so the capability
-is only offered when there is somewhere durable to keep one.
+**Set `UHP_HARNESS_STORE`,** or a `UHP_WORKSPACE` that implies it. Harness management is
+always offered, but only durable when one of those is set; with neither, `uhpd` keeps
+created harnesses in memory and says so on startup:
+
+```
+{"level":"WARN","msg":"harness store not configured; created harnesses will not survive a restart"}
+```
+
+That warning is the whole of the notice a client gets, because nothing in the discovery
+document can express "this works until the next deploy". A harness a client created,
+stored the id of, and came back to after a restart is not configuration if it is gone —
+so set the path anywhere you intend the ids to keep resolving. Issue #15's durable engine
+implements the same interface and removes the caveat.
 
 ```bash
 curl -s http://localhost:8080/v1/harnesses   -H "Authorization: Bearer devkey" -H "Content-Type: application/json"   -d '{"name":"Research agent","base":"claude-code","default_model":"claude-sonnet-4.6"}'
@@ -255,19 +262,48 @@ Three more rules the endpoints enforce rather than assume:
   merge-minded client left out.
 - **A skill is a folder and must carry a `SKILL.md`,** rejected at configuration time
   rather than ignored at run time. A member whose path escapes its own folder is refused
-  for the same reason.
+  for the same reason, as is a `content_b64` that is not valid base64.
 - **An MCP credential is never returned.** `auth` is stored and used, never serialized
   back; a `PUT` that omits it — which is all a client can do, having never been given it —
   carries the stored one forward instead of dropping it.
+- **MCP is refused on a base that cannot deliver it.** §4.1 forbids advertising MCP
+  support a server cannot provide, so a harness carrying MCP servers on a runtime with no
+  per-run mechanism is a `422` rather than a task that quietly runs without them.
 
 Deleting a harness leaves its sessions and responses alone: history that disappears when
 configuration changes cannot be audited. The harnesses this server is started with are not
 managed over the API, and trying to change or delete one is a `409` rather than a silent
 no-op.
 
-Stored skills, MCP servers and disabled tools are validated and round-tripped but are
-**not yet delivered to the agent** — that is issue #4, and until it lands this server does
-not claim conformance class `full`.
+### What reaches the agent
+
+A harness's configuration is delivered, not just stored. Before each task the router
+writes the enabled skill folders to `<session>/.uhp/skills/<name>/` — the whole folder,
+because materialising only `SKILL.md` breaks every skill carrying references, scripts or
+data — and the enabled MCP servers to `<session>/.uhp/mcp.json`, with `auth` materialised
+as the `Authorization` header that actually connects. A disabled entry of either kind is
+never written at all: §4.1 requires that a disabled server not be contacted, and
+"connected then hidden" still tells its operator the turn happened.
+
+How much of that the runtime enforces itself differs per base, and this server does not
+overstate it:
+
+| Base | Tool block | Skill loading | Per-run MCP |
+|---|---|---|---|
+| `claude-code` | `--disallowedTools` **(unverified)** | standing instruction | `--mcp-config` **(unverified)** |
+| `grok-cli` | `--disallowed-tools` (verified) | standing instruction | none — refused at config time |
+| `pi` | `--exclude-tools` (verified) | `--skill` (verified) | none — refused at config time |
+| `codex`, `opencode` | standing instruction | standing instruction | none — refused at config time |
+
+"Verified" means the flag was read from that CLI's own `--help` on a machine where it is
+installed. The two marked **unverified** are documented for Claude Code but have not been
+run against the real binary here, so they carry the same warning issue #13 carries for
+opencode's prompt delivery. If either is wrong the task fails to start rather than running
+with its tools quietly unblocked, which is the right direction for an unverified claim.
+
+Where a runtime cannot hard-block a tool, the restriction is conveyed as a standing
+instruction and described to the model as unenforced — never dropped. §4.3 is explicit
+that dropping it is the worst outcome: the operator believes a tool is off, and it is not.
 
 ## Running
 

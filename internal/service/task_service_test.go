@@ -38,6 +38,13 @@ func (echoAdapter) Run(_ context.Context, req harness.RunRequest) (<-chan harnes
 }
 func (echoAdapter) Cancel(context.Context, string) error { return nil }
 
+// echoAdapter stands in for a runtime that enforces everything natively, so
+// the configuration-delivery paths are exercised rather than skipped. See
+// plainAdapter for the opposite case.
+func (echoAdapter) Delivery() harness.Delivery {
+	return harness.Delivery{MCPServers: true, ToolBlock: true, Skills: true}
+}
+
 // slowAdapter models a real CLI harness: it emits one delta, then runs until
 // its own Cancel is called, then reports "cancelled".
 //

@@ -14,19 +14,21 @@ Across all three classes: **42/52**. `extended` stood at 42/45 when that run was
 the three outstanding checks there were all file-related.
 
 **This result predates file support and harness management.** Input items, artifact
-capture and artifact download (issue #2) and harness create/replace/delete (issue #3)
-landed afterwards and have not been re-measured against the published suite. They are
-covered by this repository's own tests — see `internal/transport/http/file_handlers_test.go`,
-`internal/service/artifacts_test.go`, `internal/transport/http/harness_handlers_test.go`
-and `internal/service/harnesses_test.go` — but a passing local test is not a conformance
-result, and the number above stays until someone runs the suite again.
+capture and artifact download (issue #2), harness create/replace/delete (issue #3) and
+skills, MCP and tool restrictions (issue #4) all landed afterwards and have not been
+re-measured against the published suite. They are covered by this repository's own
+tests — see `internal/transport/http/file_handlers_test.go`,
+`internal/service/artifacts_test.go`, `internal/transport/http/harness_handlers_test.go`,
+`internal/service/harnesses_test.go` and `internal/service/harness_runtime_test.go` — but
+a passing local test is not a conformance result, and the number above stays until someone
+runs the suite again.
 
-This server does not claim `extended` or `full`. Its discovery document reports the
-capabilities it does not implement as `false` rather than omitting them, because
-`conformance_class` must agree with the capability list. `harness_management` now reports
-`true` where it is configured, which is a capability above the claimed class rather than a
-contradiction of it: the class is what this server guarantees, not a ceiling on what it
-offers, and `full` stays unclaimed while F-03, F-04 and F-06 fail.
+`conformance_class` still reads `core`. It is not raised on the strength of local tests:
+the class is a claim the suite exists to falsify, and raising it before a run would make
+this file the thing asserting conformance rather than the thing recording it.
+`harness_management` reports `true`, which is a capability above the claimed class rather
+than a contradiction of it — the class is what this server guarantees, not a ceiling on
+what it offers.
 
 ## Reproducing it
 
@@ -68,6 +70,7 @@ Two things to know before reading a result:
 | Session listing, inspection and turns | **42/52** | X-01, X-02, X-03, X-04 |
 | Files: input items, artifact capture, download | not yet measured | targets X-05, X-06, X-07, and makes X-08 real |
 | Harness management: create, replace, delete | not yet measured | targets F-01, F-02, F-05, F-07 |
+| Skills as folders, MCP config, tool restrictions | not yet measured | targets F-03, F-04, F-06 |
 
 The 33 skips in the baseline were not 33 separate defects. They cascaded from one line:
 `GET /v1/harnesses` returned `{"data": […]}` where the suite reads `harnesses`, so it could
@@ -80,17 +83,21 @@ Fixing that one envelope is what made three steps of prior work measurable.
 |---|---|---|
 | X-05…X-07 | file input, artifact capture and download | #2 — implemented, unmeasured |
 | F-01, F-02, F-05, F-07 | harness create/replace/delete | #3 — implemented, unmeasured |
-| F-03, F-04, F-06 | skills materialised for the agent, MCP wired into the run | #4 |
+| F-03, F-04, F-06 | skills as folders, MCP config, disabled tools | #4 — implemented, unmeasured |
 
-**F-03, F-04 and F-06 are storage checks that this server now half-satisfies, and the
-half it does not is the half that matters.** A skill folder, an MCP server and a
-disabled-tool list all survive create, `GET` and a replacing `PUT` byte-for-byte —
-`TestSkillFolderSurvivesCreateAndRename` covers exactly the round trip F-04 describes —
-but none of them reaches the agent, and `GET /v1/harnesses/{id}/skills/{skill_id}/files`
-does not exist, so F-03 reads the endpoint and fails. Configuration that is stored and
-never delivered is the failure mode Harnesses §4.3 calls the worst outcome: the operator
-believes a tool is off, and it is not. The README says so, this table says so, and the
-capability stays honest until #4 lands.
+Every F check now has an implementation behind it, and each was walked through its exact
+HTTP sequence against a running server by hand. That is not the same as a suite run and is
+not counted as one.
+
+**What is genuinely weaker than the checks can see** is how much of a harness's
+configuration each runtime *enforces*, as opposed to being asked to honour. The suite
+tests that skills, MCP servers and disabled tools round-trip through the API; it does not
+test whether the agent was actually prevented from using a tool. Two of the three
+mechanisms for `claude-code` — `--disallowedTools` and `--mcp-config` — are documented but
+have not been run against the real binary, and are marked UNVERIFIED in
+`internal/harness/claude.go` for the same reason issue #13 marks opencode's prompt
+delivery. `grok-cli` and `pi` were read from their own `--help` on a machine where they are
+installed. See the delivery table in the README.
 
 **X-08 used to pass vacuously**: artifact ids could not traverse out of their container
 because the download endpoint did not exist, so every probe 404d. The endpoint exists now,
@@ -114,7 +121,13 @@ uhp-conformance --base-url http://localhost:8080 --api-key devkey \
 
 F-01 discovers a base to build on by POSTing a deliberately bogus one and reading
 `error.detail.supported` off the refusal, so that field is load-bearing for the check
-that follows it, not decoration on an error.
+that follows it, not decoration on an error. It picks the first entry, which sorts to
+`claude-code` — the one base whose delivery mechanisms are unverified, so a run on a
+machine without that CLI installed measures the API and not the enforcement.
+
+A workspace is required for more than the file checks now: skill folders are materialised
+into the session working directory, so a harness carrying skills refuses to run without
+one rather than starting an agent that never receives them.
 
 ## Re-measuring the file checks
 

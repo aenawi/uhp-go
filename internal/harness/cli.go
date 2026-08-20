@@ -76,6 +76,21 @@ type CLIHarness struct {
 	// ParseLine turns one line of stdout into zero or more updates.
 	ParseLine func(line string) []RunUpdate
 
+	// MCPArgs returns argv pointing the CLI at a generated MCP configuration
+	// file. Nil means this runtime has no per-run MCP mechanism, and a harness
+	// configured with MCP servers is refused rather than run without them.
+	MCPArgs func(configPath string) []string
+
+	// DisallowArgs returns argv hard-blocking the named tools. Nil means the
+	// runtime cannot block a tool, and the restriction is conveyed to the
+	// agent as a standing instruction instead — never dropped (§4.3).
+	DisallowArgs func(tools []string) []string
+
+	// SkillArgs returns argv loading already-materialized skill folders. Nil
+	// means the runtime has no native mechanism; the folders are still written
+	// where the agent can read them and named in a standing instruction.
+	SkillArgs func(dirs []string) []string
+
 	proc *process
 
 	healthMu sync.Mutex
@@ -102,8 +117,32 @@ func NewID(base string) string {
 
 // Build finalises a declaration into a runnable Adapter.
 func (h *CLIHarness) Build() *CLIHarness {
-	h.proc = newProcess(h.Binary, h.Prompt, h.BuildArgs, h.ParseLine)
+	h.proc = newProcess(h.Binary, h.Prompt, h.argsFor, h.ParseLine)
 	return h
+}
+
+// argsFor is BuildArgs plus whatever argv delivers this harness's own
+// configuration to the runtime.
+//
+// It is composed here, once, rather than in each declaration: a harness that
+// forgot to pass its own disabled-tool list would leave the operator believing
+// a tool is off when it is not, which Harnesses §4.3 calls the worst outcome.
+// A hook is only consulted when the run actually carries something for it.
+func (h *CLIHarness) argsFor(req RunRequest) ([]string, error) {
+	args, err := h.BuildArgs(req)
+	if err != nil {
+		return nil, err
+	}
+	if h.MCPArgs != nil && req.McpConfigPath != "" {
+		args = append(args, h.MCPArgs(req.McpConfigPath)...)
+	}
+	if h.DisallowArgs != nil && len(req.DisabledTools) > 0 {
+		args = append(args, h.DisallowArgs(req.DisabledTools)...)
+	}
+	if h.SkillArgs != nil && len(req.SkillDirs) > 0 {
+		args = append(args, h.SkillArgs(req.SkillDirs)...)
+	}
+	return args, nil
 }
 
 // DefaultModel is the model used when a task omits one: the first advertised.
@@ -132,6 +171,17 @@ func (h *CLIHarness) Info() domain.Harness {
 		Models:         h.Models,
 		Capabilities:   h.Capabilities,
 		Status:         h.status(),
+	}
+}
+
+// Delivery reports what this runtime enforces natively, derived from which
+// hooks the declaration filled in rather than asserted separately — so a
+// harness cannot claim a mechanism it did not wire up.
+func (h *CLIHarness) Delivery() Delivery {
+	return Delivery{
+		MCPServers: h.MCPArgs != nil,
+		ToolBlock:  h.DisallowArgs != nil,
+		Skills:     h.SkillArgs != nil,
 	}
 }
 

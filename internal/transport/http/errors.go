@@ -67,6 +67,9 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, service.ErrInvalidMcpServer):
 		writeErrorParam(w, http.StatusUnprocessableEntity, typeInvalidRequest,
 			vendorCodeInvalidMcpServer, err.Error(), "mcp_servers")
+	case errors.Is(err, service.ErrMcpUndeliverable):
+		writeErrorParam(w, http.StatusUnprocessableEntity, typeInvalidRequest,
+			vendorCodeMcpUndeliverable, err.Error(), "mcp_servers")
 	case errors.Is(err, service.ErrStorage):
 		// The server failed, not the request. Errors §4: this is the class a
 		// client may retry, and calling it a 4xx would tell it not to.
@@ -101,5 +104,7 @@ const (
 	vendorCodeImmutableField               = "uhpgo_immutable_field"
 	vendorCodeInvalidSkill                 = "uhpgo_invalid_skill"
 	vendorCodeInvalidMcpServer             = "uhpgo_invalid_mcp_server"
+	vendorCodeMcpUndeliverable             = "uhpgo_mcp_undeliverable"
+	vendorCodeSkillNotFound                = "uhpgo_skill_not_found"
 	vendorCodeStorageFailure               = "uhpgo_storage_failure"
 )

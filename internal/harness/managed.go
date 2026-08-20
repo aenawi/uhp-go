@@ -120,19 +120,14 @@ func (m *Managed) Available(model string) bool {
 	return false
 }
 
-// Run applies the harness's own configuration to the request and delegates.
+// Run applies the harness's default model and delegates.
 //
-// Two things are applied here rather than left to the caller, because the
-// caller has no way to know they were configured: the default model, and the
-// system prompt. Harnesses §2 defines `systemPrompt` as "additional standing
-// instructions", and prepending it to the input is how a standing instruction
-// reaches an agent through a CLI that has no separate channel for one. Storing
-// it and never delivering it would be the silent drop §4.3 calls the worst
-// outcome, one field over.
-//
-// Skills, MCP servers and disabled tools are stored and returned but not yet
-// delivered to the agent; that is issue #4, and until it lands this server
-// does not claim conformance class `full`.
+// Only the model is applied here. Everything else a harness carries — the
+// system prompt, skill folders, MCP servers, disabled tools — has to be
+// written to disk or turned into argv before the process starts, which is the
+// router's job and not this wrapper's; see service.prepareRuntime. The model
+// stays because it is the one field with nowhere else to go: the request
+// reaches the base having already lost track of which harness chose it.
 func (m *Managed) Run(ctx context.Context, req RunRequest) (<-chan RunUpdate, error) {
 	if m.base == nil {
 		return nil, fmt.Errorf("%w: %q", ErrNoBase, m.cfg.Base)
@@ -140,10 +135,16 @@ func (m *Managed) Run(ctx context.Context, req RunRequest) (<-chan RunUpdate, er
 	if req.Model == "" {
 		req.Model = m.cfg.DefaultModel
 	}
-	if m.cfg.SystemPrompt != "" {
-		req.Input = m.cfg.SystemPrompt + "\n\n" + req.Input
-	}
 	return m.base.Run(ctx, req)
+}
+
+// Delivery forwards the base's answer: a wrapper cannot enforce what the
+// runtime underneath it cannot.
+func (m *Managed) Delivery() Delivery {
+	if d, ok := m.base.(Deliverer); ok {
+		return d.Delivery()
+	}
+	return Delivery{}
 }
 
 func (m *Managed) Cancel(ctx context.Context, taskID string) error {

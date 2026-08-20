@@ -29,6 +29,13 @@ func (echoAdapter) Run(ctx context.Context, req harness.RunRequest) (<-chan harn
 }
 func (echoAdapter) Cancel(ctx context.Context, taskID string) error { return nil }
 
+// echoAdapter stands in for a runtime that enforces everything natively, so
+// the configuration-delivery paths are exercised rather than skipped. See
+// plainAdapter for the opposite case.
+func (echoAdapter) Delivery() harness.Delivery {
+	return harness.Delivery{MCPServers: true, ToolBlock: true, Skills: true}
+}
+
 func newTestServer() *Server {
 	reg := harness.NewRegistry()
 	reg.Register(echoAdapter{})
