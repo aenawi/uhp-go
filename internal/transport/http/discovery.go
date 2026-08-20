@@ -36,13 +36,17 @@ type discoveryDoc struct {
 // be able to tell "not supported" from "this server is older than the field".
 // Reporting false for something unimplemented is the honest answer and is what
 // keeps conformance_class consistent with reality.
-func capabilities() map[string]bool {
+// The two file capabilities are computed rather than asserted, because they
+// depend on configuration: file input and artifact capture both need a
+// per-session working directory, and without UHP_WORKSPACE there is nowhere to
+// put a client's file and nothing to diff for artifacts.
+func capabilities(files bool) map[string]bool {
 	return map[string]bool{
 		"streaming":          true,
 		"sessions":           true,
 		"cancellation":       true,
-		"files_input":        false,
-		"files_output":       false,
+		"files_input":        files,
+		"files_output":       files,
 		"session_listing":    true,
 		"harness_management": false,
 		"session_sharing":    false,
@@ -57,7 +61,7 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
 		Versions:         supportedVersions,
 		DefaultVersion:   UHPVersion,
 		ConformanceClass: ConformanceClass,
-		Capabilities:     capabilities(),
+		Capabilities:     capabilities(s.tasks.FilesEnabled()),
 		Implementation:   map[string]any{"name": "uhp-go", "version": Version},
 	})
 }

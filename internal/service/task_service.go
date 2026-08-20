@@ -34,6 +34,13 @@ type TaskService struct {
 	runs      *supervisor
 	log       *slog.Logger
 	workspace WorkspaceRoot
+	uploads   Uploads
+
+	// publicBaseURL is the origin clients reach this server on, used to build
+	// absolute artifact download URLs. Empty means relative URLs, which is
+	// correct whenever the client shares the API's origin and is the only
+	// honest answer when nobody has told the server its own address.
+	publicBaseURL string
 }
 
 func NewTaskService(reg Registry, store Store, log *slog.Logger, opts ...Option) *TaskService {
@@ -57,6 +64,16 @@ func WithWorkspace(root string) Option {
 	return func(s *TaskService) { s.workspace = WorkspaceRoot(root) }
 }
 
+// WithUploads enables POST /v1/files and the `file_id` form of input_file.
+func WithUploads(u Uploads) Option {
+	return func(s *TaskService) { s.uploads = u }
+}
+
+// WithPublicBaseURL makes artifact download URLs absolute.
+func WithPublicBaseURL(base string) Option {
+	return func(s *TaskService) { s.publicBaseURL = base }
+}
+
 // CreateTaskRequest mirrors the fields UHP requires from the OpenAI
 // Responses-shaped request body, plus UHP's harness_id metadata extension.
 type CreateTaskRequest struct {
@@ -65,7 +82,11 @@ type CreateTaskRequest struct {
 	HarnessID          string
 	PreviousResponseID string
 	Metadata           map[string]any
-	InputFiles         []string
+
+	// Attachments are the files the request carried as input items, in the
+	// order they appeared. They are materialized into the session's working
+	// directory before the harness starts.
+	Attachments []Attachment
 }
 
 // ListHarnesses answers GET /v1/harnesses (discovery).
@@ -117,6 +138,20 @@ func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (*do
 		return nil, nil, fmt.Errorf("%w: session %s already has a task in flight", ErrSessionBusy, sessionID)
 	}
 
+	workDir, err := s.workspace.sessionDir(sessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Input files are written before the run and fingerprinted with the rest of
+	// the directory, so a task's own input never comes back to it as one of its
+	// artifacts.
+	inputPaths, err := s.materializeAttachments(ctx, workDir, req.Attachments)
+	if err != nil {
+		return nil, nil, err
+	}
+	input := req.Input + attachmentNote(inputPaths)
+
 	now := time.Now().UTC()
 	task := &domain.Task{
 		ID:                 "resp_" + uuid.NewString(),
@@ -127,7 +162,7 @@ func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (*do
 		HarnessID:          req.HarnessID,
 		SessionID:          sessionID,
 		PreviousResponseID: req.PreviousResponseID,
-		Input:              req.Input,
+		Input:              input,
 		Metadata:           req.Metadata,
 		// Tasks §1.1: `store` defaults to true.
 		Store:     true,
@@ -147,18 +182,17 @@ func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (*do
 	// terminal update.
 	runCtx := context.WithoutCancel(ctx)
 
-	workDir, err := s.workspace.sessionDir(sessionID)
-	if err != nil {
-		return nil, nil, err
-	}
+	// Snapshot last, so that everything the router itself put in the directory
+	// is already accounted for and only the harness's own writes are artifacts.
+	rs := &runState{workDir: workDir, before: snapshotDir(workDir)}
 
 	updates, err := adapter.Run(runCtx, harness.RunRequest{
 		TaskID:          task.ID,
-		Input:           req.Input,
+		Input:           input,
 		Model:           req.Model,
 		NativeSessionID: nativeSessionID,
 		Metadata:        req.Metadata,
-		InputFiles:      req.InputFiles,
+		InputFiles:      inputPaths,
 		WorkDir:         workDir,
 	})
 	if err != nil {
@@ -175,7 +209,7 @@ func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (*do
 		}
 	})
 	s.runs.add(run)
-	go s.supervise(runCtx, run, task, updates)
+	go s.supervise(runCtx, run, task, updates, rs)
 
 	return task, run, nil
 }
@@ -237,7 +271,7 @@ func (s *TaskService) resolveSession(ctx context.Context, req CreateTaskRequest)
 // One update can produce several events, because UHP's vocabulary describes an
 // item's lifecycle: the first text delta of a run also opens an output item and
 // a content part, and a terminal update closes them.
-func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd harness.RunUpdate, seq *sequencer) ([]domain.Event, error) {
+func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd harness.RunUpdate, seq *sequencer, rs *runState) ([]domain.Event, error) {
 	// Lifecycle §3: "A server MUST NOT transition out of a terminal state."
 	if isTerminalStatus(task.Status) {
 		return nil, nil
@@ -309,7 +343,7 @@ func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd ha
 
 	case harness.UpdateCompleted:
 		task.Status = domain.StatusCompleted
-		return s.terminal(ctx, task, seq, "response.completed")
+		return s.terminal(ctx, task, seq, "response.completed", rs)
 
 	case harness.UpdateCancelled:
 		// Lifecycle §3: a cancelled task MUST report "cancelled", never
@@ -320,7 +354,7 @@ func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd ha
 		// Streaming §4: a cancelled task terminates with response.failed
 		// carrying status "cancelled"; the status field, not the event name,
 		// is authoritative.
-		return s.terminal(ctx, task, seq, "response.failed")
+		return s.terminal(ctx, task, seq, "response.failed", rs)
 
 	case harness.UpdateFailed:
 		task.Status = domain.StatusFailed
@@ -329,24 +363,40 @@ func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd ha
 			msg = upd.Err.Error()
 		}
 		task.Error = &domain.TaskError{Type: "harness_error", Code: "harness_error", Message: msg, Retryable: true}
-		return s.terminal(ctx, task, seq, "response.failed")
+		return s.terminal(ctx, task, seq, "response.failed", rs)
 
 	default:
 		return nil, nil
 	}
 }
 
-// terminal closes any open output item and emits the single terminal event.
-func (s *TaskService) terminal(ctx context.Context, task *domain.Task, seq *sequencer, evType string) ([]domain.Event, error) {
+// terminal captures what the run produced, closes any open output item, and
+// emits the single terminal event.
+//
+// Capture happens here rather than at the call sites so that every path to a
+// terminal state goes through it — including the one where an adapter closes
+// its channel without saying anything. A task that wrote a file and then
+// crashed still produced the file.
+func (s *TaskService) terminal(ctx context.Context, task *domain.Task, seq *sequencer, evType string, rs *runState) ([]domain.Event, error) {
 	var evs []domain.Event
+
+	s.captureArtifacts(ctx, task, rs)
+	s.citeArtifacts(task)
 
 	if idx, item := task.MessageItem(); item != nil {
 		item.Status = "completed"
 		text := ""
+		// The closing part repeats the item's own annotations, so a client that
+		// followed the stream ends up with the same citations as one that read
+		// only the final response.
+		annotations := []domain.Annotation{}
 		if len(item.Content) > 0 {
 			text = item.Content[0].Text
+			if item.Content[0].Annotations != nil {
+				annotations = item.Content[0].Annotations
+			}
 		}
-		part := domain.ContentPart{Type: "output_text", Text: text, Annotations: []domain.Annotation{}}
+		part := domain.ContentPart{Type: "output_text", Text: text, Annotations: annotations}
 		evs = append(evs,
 			seq.next(domain.Event{
 				Type: "response.output_text.done", Text: text,

@@ -10,8 +10,14 @@ what this server scores, how to reproduce it, and what the remaining gap is.
 CONFORMANT — UHP 2026-08-11 (core)
 ```
 
-Across all three classes: **42/52**. `extended` stands at 42/45; the three outstanding
-checks there are all file-related.
+Across all three classes: **42/52**. `extended` stood at 42/45 when that run was taken;
+the three outstanding checks there were all file-related.
+
+**This result predates file support.** Input items, artifact capture and artifact download
+(issue #2) landed afterwards and have not been re-measured against the published suite.
+They are covered by this repository's own tests — see `internal/transport/http/file_handlers_test.go`
+and `internal/service/artifacts_test.go` — but a passing local test is not a conformance
+result, and the number above stays until someone runs the suite again.
 
 This server does not claim `extended` or `full`. Its discovery document reports the
 capabilities it does not implement as `false` rather than omitting them, because
@@ -55,20 +61,39 @@ Two things to know before reading a result:
 | Event model and sequencer | 5/52 | correct but still unmeasured |
 | Contract fixes | **38/52, core 37/37** | see below |
 | Session listing, inspection and turns | **42/52** | X-01, X-02, X-03, X-04 |
+| Files: input items, artifact capture, download | not yet measured | targets X-05, X-06, X-07, and makes X-08 real |
 
 The 33 skips in the baseline were not 33 separate defects. They cascaded from one line:
 `GET /v1/harnesses` returned `{"data": […]}` where the suite reads `harnesses`, so it could
 not pick a harness and every task, stream, session and cancellation check skipped untested.
 Fixing that one envelope is what made three steps of prior work measurable.
 
-## The remaining 10
+## The remaining gap
 
 | Checks | Needs | Issue |
 |---|---|---|
-| X-05…X-07 | file input, artifact capture and download | #2 |
+| X-05…X-07 | file input, artifact capture and download | #2 — implemented, unmeasured |
 | F-01, F-02, F-05, F-07 | harness create/update/delete | #3 |
 | F-03, F-04, F-06 | skills as folders, MCP config | #4 |
 
-Note that **X-08 currently passes vacuously**: artifact ids cannot traverse out of their
-container because the download endpoint does not exist, so every probe 404s. It becomes a
-real check only once #2 lands.
+**X-08 used to pass vacuously**: artifact ids could not traverse out of their container
+because the download endpoint did not exist, so every probe 404d. The endpoint exists now,
+so the check finally means something. Both of the suite's probes are answered with a 404
+rather than a redirect — see `TestTraversalProbesAreRefused` — because `net/http` would
+otherwise answer `../../etc/passwd` with a 301 to a cleaned path, which is neither a
+refusal nor obviously safe to a caller reading status codes.
+
+## Re-measuring the file checks
+
+The file checks need a workspace, or the server honestly reports `files_input` and
+`files_output` as `false` and X-05 is refused with a 501:
+
+```bash
+UHP_API_KEYS=devkey UHP_WORKSPACE=/tmp/uhp-workspace ./bin/uhpd &
+uhp-conformance --base-url http://localhost:8080 --api-key devkey \
+  --class extended --harness-id chrn_… --model … --plain
+```
+
+X-06 and X-07 only test something if the harness actually writes a file, which the suite
+arranges by asking it to. A harness that answers in prose without touching the filesystem
+produces an empty artifact listing and a skipped download check, and a skip is not a pass.

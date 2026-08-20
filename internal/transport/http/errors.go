@@ -32,6 +32,12 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, typeInvalidRequest, "session_not_found", err.Error())
 	case errors.Is(err, service.ErrHarnessMismatch):
 		writeError(w, http.StatusConflict, typeInvalidRequest, "harness_mismatch", err.Error())
+	case errors.Is(err, service.ErrArtifactNotFound):
+		writeFileNotFound(w)
+	case errors.Is(err, service.ErrInvalidInput):
+		writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input", err.Error())
+	case errors.Is(err, service.ErrFilesUnsupported):
+		writeFilesUnsupported(w)
 	case errors.Is(err, service.ErrSessionBusy):
 		writeError(w, http.StatusConflict, typeInvalidRequest, "session_busy", err.Error())
 	case errors.Is(err, harness.ErrUnsupportedModel):

@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 )
 
@@ -31,6 +32,34 @@ func writeError(w http.ResponseWriter, status int, errType, code, message string
 	writeJSON(w, status, errorEnvelope{Error: errorPayload{
 		Type: errType, Code: code, Message: message,
 	}})
+}
+
+// writeErrorParam is writeError plus the dotted path to the offending field,
+// which Errors §1 requires whenever there is one: a client that is told only
+// "invalid_input" has to guess which field it got wrong.
+func writeErrorParam(w http.ResponseWriter, status int, errType, code, message, param string) {
+	var p *string
+	if param != "" {
+		p = &param
+	}
+	writeJSON(w, status, errorEnvelope{Error: errorPayload{
+		Type: errType, Code: code, Message: message, Param: p,
+	}})
+}
+
+// writeIfTooLarge answers a body that blew the configured limit and reports
+// whether it did. Files §1.2: an oversized upload MUST be a 413 with
+// `file_too_large` and the limit in `detail`, never a truncated file — a
+// silently truncated input produces a confident, wrong answer.
+func writeIfTooLarge(w http.ResponseWriter, err error, maxBytes int64) bool {
+	var tooLarge *http.MaxBytesError
+	if !errors.As(err, &tooLarge) {
+		return false
+	}
+	writeErrorDetail(w, http.StatusRequestEntityTooLarge, typeInvalidRequest, "file_too_large",
+		"the request exceeds this server's size limit",
+		map[string]any{"max_bytes": maxBytes})
+	return true
 }
 
 // writeErrorDetail is writeError with structured extra context, used where the

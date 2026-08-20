@@ -196,7 +196,7 @@ func (s *supervisor) sessionBusy(sessionID string) bool {
 // supervise consumes the adapter's updates and is the only writer of this
 // task's state. It runs on a context detached from the request, so the work
 // continues whether or not anyone is still listening.
-func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task, updates <-chan harness.RunUpdate) {
+func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task, updates <-chan harness.RunUpdate, rs *runState) {
 	defer func() {
 		s.runs.remove(run)
 		run.finish()
@@ -206,7 +206,7 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 	run.publish(seq.next(domain.Event{Type: "response.created", Response: cloneTask(task)}))
 
 	for upd := range updates {
-		evs, err := s.applyUpdate(ctx, task, upd, seq)
+		evs, err := s.applyUpdate(ctx, task, upd, seq, rs)
 		if err != nil {
 			s.log.Error("apply update failed", "error", err, "task_id", task.ID)
 			continue
@@ -235,7 +235,7 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 			Message: "the harness closed its update stream without reporting a terminal state",
 		}
 		task.UpdatedAt = time.Now().UTC()
-		evs, err := s.terminal(ctx, task, seq, "response.failed")
+		evs, err := s.terminal(ctx, task, seq, "response.failed", rs)
 		if err != nil {
 			s.log.Error("persist terminal state failed", "error", err, "task_id", task.ID)
 		}

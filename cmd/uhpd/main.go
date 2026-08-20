@@ -37,9 +37,12 @@ func main() {
 	}
 
 	memStore := store.NewMemoryStore()
-	opts := []service.Option{}
+	opts := []service.Option{service.WithUploads(store.NewMemoryUploads())}
 	if cfg.Workspace != "" {
 		opts = append(opts, service.WithWorkspace(cfg.Workspace))
+	}
+	if cfg.PublicBaseURL != "" {
+		opts = append(opts, service.WithPublicBaseURL(cfg.PublicBaseURL))
 	}
 	taskService := service.NewTaskService(registry, memStore, log, opts...)
 

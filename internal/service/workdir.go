@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/aenawi/uhp-go/internal/domain"
 )
 
 // WorkspaceRoot is where per-session working directories are created.
@@ -25,7 +26,7 @@ func (root WorkspaceRoot) sessionDir(sessionID string) (string, error) {
 	}
 	// The session id is server-generated, but it ends up in a filesystem path,
 	// so it is validated rather than trusted.
-	if !safeSessionID(sessionID) {
+	if !domain.ValidSessionID(sessionID) {
 		return "", fmt.Errorf("service: refusing to build a workspace path from session id %q", sessionID)
 	}
 	dir := filepath.Join(string(root), sessionID)
@@ -33,20 +34,4 @@ func (root WorkspaceRoot) sessionDir(sessionID string) (string, error) {
 		return "", fmt.Errorf("service: create session workspace: %w", err)
 	}
 	return dir, nil
-}
-
-// safeSessionID allows only the shape the router itself mints: "sess_" plus
-// hex and dashes. Anything else cannot become a path component.
-func safeSessionID(id string) bool {
-	if !strings.HasPrefix(id, "sess_") || len(id) > 128 {
-		return false
-	}
-	for _, r := range id[len("sess_"):] {
-		switch {
-		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r == '-':
-		default:
-			return false
-		}
-	}
-	return true
 }
