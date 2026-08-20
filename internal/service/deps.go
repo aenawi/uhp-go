@@ -41,3 +41,15 @@ type Store interface {
 	// ListSessionTasks returns a session's tasks in the order they ran.
 	ListSessionTasks(ctx context.Context, sessionID string) ([]*domain.Task, error)
 }
+
+// Uploads holds files a client sent ahead of a task (Files §1.2), until a task
+// references one by id.
+//
+// A second, narrow interface rather than four more methods on Store: an upload
+// has a different lifetime from a task or a session — it exists before either
+// of them — and a deployment that wants uploads on disk while tasks stay in
+// memory should be able to say so without reimplementing the rest.
+type Uploads interface {
+	Put(ctx context.Context, up domain.Upload) error
+	Get(ctx context.Context, id string) (domain.Upload, error)
+}

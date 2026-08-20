@@ -21,23 +21,6 @@ const (
 	StatusCancelled  TaskStatus = "cancelled"
 )
 
-// Artifact is a file produced by a harness run (UHP "Files" chapter).
-type Artifact struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	MimeType  string    `json:"mime_type"`
-	SizeBytes int64     `json:"size_bytes"`
-	URL       string    `json:"url"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-// Annotation cites an artifact from within assistant text.
-type Annotation struct {
-	Type     string `json:"type"`
-	FileID   string `json:"file_id,omitempty"`
-	Filename string `json:"filename,omitempty"`
-}
-
 // ContentPart is one part of an output item's content.
 type ContentPart struct {
 	Type string `json:"type"` // "output_text"
