@@ -3,6 +3,7 @@ package http
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/aenawi/uhp-go/internal/harness"
 	"github.com/aenawi/uhp-go/internal/service"
@@ -15,6 +16,16 @@ const (
 	typeAuthentication = "authentication_error"
 	typeServerError    = "server_error"
 )
+
+// retryAfterNoCapacity is the floor this server asks a refused client to wait,
+// not a prediction of when a slot frees.
+//
+// It cannot be a prediction: a run holds its slot for as long as the agent
+// works, which is minutes, and the server has no idea which of the runs in
+// flight ends first. What it can honestly assert is a minimum — come back, but
+// not immediately — and that is the whole job here, because the alternative to
+// an imperfect number is a client that reads no header and retries in a loop.
+const retryAfterNoCapacity = 5 * time.Second
 
 // writeServiceError maps a service-layer error onto the UHP status code and
 // error code the specification requires.
@@ -32,6 +43,24 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeErrorFull(w, http.StatusUnprocessableEntity, typeInvalidRequest, "unsupported_base",
 			"this server cannot run harness base "+unsupportedBase.Base,
 			"base", map[string]any{"supported": unsupportedBase.Supported})
+		return
+	}
+
+	// 503, not a 4xx. Errors §4 makes the class the retry signal, and nothing
+	// about this request is wrong — it arrived while the server was already
+	// running as many harness processes as it is configured for, and retrying
+	// is exactly what will work. A 4xx would tell the client the opposite.
+	//
+	// The status is what separates this from the 502 in the default arm below,
+	// which carries the same `harness_unavailable` code for a harness that is
+	// unavailable permanently rather than momentarily. The code is the one the
+	// specification gives for both; only 503 plus Retry-After says "later".
+	var noCapacity *service.NoCapacityError
+	if errors.As(err, &noCapacity) {
+		writeErrorRetryAfter(w, http.StatusServiceUnavailable, typeServerError, "harness_unavailable",
+			"No capacity to run this harness right now",
+			map[string]any{"max_concurrent_runs": noCapacity.Limit},
+			retryAfterNoCapacity)
 		return
 	}
 

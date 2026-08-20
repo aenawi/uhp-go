@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
@@ -84,5 +86,88 @@ func TestCreateTaskMissingHarness(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 	if w.Code != 400 {
 		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// blockingAdapter keeps its run in flight until the test releases it, so the
+// server can be observed while a task genuinely holds a run slot.
+type blockingAdapter struct {
+	echoAdapter
+	once    sync.Once
+	started chan struct{}
+	release chan struct{}
+}
+
+func newBlockingAdapter() *blockingAdapter {
+	return &blockingAdapter{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (a *blockingAdapter) Run(ctx context.Context, _ harness.RunRequest) (<-chan harness.RunUpdate, error) {
+	ch := make(chan harness.RunUpdate)
+	go func() {
+		defer close(ch)
+		select {
+		case <-a.release:
+		case <-ctx.Done():
+			return
+		}
+		select {
+		case ch <- harness.RunUpdate{Type: harness.UpdateCompleted}:
+		case <-ctx.Done():
+		}
+	}()
+	a.once.Do(func() { close(a.started) })
+	return ch, nil
+}
+
+// Issue #5: a saturated server must answer 503 `harness_unavailable`, not a
+// 4xx. Errors §4 makes the class the retry signal, and the request is not
+// wrong — it arrived at a bad moment, and retrying is exactly what will work.
+func TestSaturatedServerRefusesWith503(t *testing.T) {
+	a := newBlockingAdapter()
+	reg := harness.NewRegistry()
+	reg.Register(a)
+	svc := service.NewTaskService(reg, store.NewMemoryStore(), slog.Default(),
+		service.WithMaxConcurrentRuns(1))
+	srv := NewServer(svc, slog.Default(), nil, 0)
+
+	const body = `{"input":"hi","model":"m","metadata":{"harness_id":"echo"}}`
+	inFlight := make(chan struct{})
+	go func() {
+		defer close(inFlight)
+		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(body))
+		srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	select {
+	case <-a.started:
+	case <-time.After(10 * time.Second):
+		// Rather than block here until the package timeout kills the whole run
+		// and reports nothing about which test was stuck.
+		t.Fatal("the first request never reached the adapter, so no slot was ever held")
+	}
+	defer func() {
+		close(a.release)
+		<-inFlight
+	}()
+
+	w := do(t, srv, "POST", "/v1/responses", strings.NewReader(body))
+	var decoded map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("body is not JSON (%d): %s", w.Code, w.Body.String())
+	}
+	if w.Code != 503 {
+		t.Fatalf("status = %d, want 503: %v", w.Code, decoded)
+	}
+	if code := errorCode(t, decoded); code != "harness_unavailable" {
+		t.Fatalf("code = %q, want harness_unavailable", code)
+	}
+	// Told to retry and not told when is an invitation to hot-loop.
+	if ra := w.Header().Get("Retry-After"); ra == "" {
+		t.Error("a retryable 503 carries no Retry-After")
+	}
+	detail, _ := decoded["error"].(map[string]any)["detail"].(map[string]any)
+	if detail["max_concurrent_runs"] != float64(1) {
+		t.Errorf("detail.max_concurrent_runs = %v, want 1; a client cannot size its own "+
+			"concurrency against a bound it is not told", detail["max_concurrent_runs"])
 	}
 }

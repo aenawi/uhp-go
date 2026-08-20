@@ -15,6 +15,11 @@ type Config struct {
 	Workspace    string
 	MaxBodyBytes int64
 
+	// MaxConcurrentRuns bounds how many harness processes run at once. Every
+	// accepted task forks a CLI, so without a bound a single unauthenticated
+	// caller can fork the host to a standstill.
+	MaxConcurrentRuns int
+
 	// HarnessStore is where harnesses created over the API are kept. Empty
 	// means harness management is off, and discovery reports it as off:
 	// a harness that does not survive a restart is not configuration, so the
@@ -36,17 +41,20 @@ type Config struct {
 func Load() Config {
 	workspace := os.Getenv("UHP_WORKSPACE")
 	return Config{
-		Addr:           getEnv("UHP_ADDR", ":8080"),
-		APIKeys:        splitCSV(os.Getenv("UHP_API_KEYS")),
-		Workspace:      workspace,
-		HarnessStore:   harnessStorePath(os.Getenv("UHP_HARNESS_STORE"), workspace),
-		MaxBodyBytes:   getEnvInt("UHP_MAX_BODY_BYTES", 8<<20),
-		PublicBaseURL:  strings.TrimSuffix(os.Getenv("UHP_PUBLIC_URL"), "/"),
-		ClaudeModels:   splitCSVDefault(os.Getenv("UHP_CLAUDE_MODELS"), "claude-sonnet-4.6", "claude-opus-4.6"),
-		CodexModels:    splitCSVDefault(os.Getenv("UHP_CODEX_MODELS"), "gpt-5.2-codex"),
-		GrokModels:     splitCSVDefault(os.Getenv("UHP_GROK_MODELS"), "grok-4.6", "grok-4.5"),
-		OpenCodeModels: splitCSVDefault(os.Getenv("UHP_OPENCODE_MODELS"), "auto"),
-		PiModels:       splitCSVDefault(os.Getenv("UHP_PI_MODELS"), "auto"),
+		Addr:         getEnv("UHP_ADDR", ":8080"),
+		APIKeys:      splitCSV(os.Getenv("UHP_API_KEYS")),
+		Workspace:    workspace,
+		HarnessStore: harnessStorePath(os.Getenv("UHP_HARNESS_STORE"), workspace),
+		MaxBodyBytes: getEnvInt("UHP_MAX_BODY_BYTES", 8<<20),
+		// Zero is passed straight through to the service, which substitutes its
+		// own default. Config does not carry a second copy of that number.
+		MaxConcurrentRuns: int(getEnvInt("UHP_MAX_CONCURRENT_RUNS", 0)),
+		PublicBaseURL:     strings.TrimSuffix(os.Getenv("UHP_PUBLIC_URL"), "/"),
+		ClaudeModels:      splitCSVDefault(os.Getenv("UHP_CLAUDE_MODELS"), "claude-sonnet-4.6", "claude-opus-4.6"),
+		CodexModels:       splitCSVDefault(os.Getenv("UHP_CODEX_MODELS"), "gpt-5.2-codex"),
+		GrokModels:        splitCSVDefault(os.Getenv("UHP_GROK_MODELS"), "grok-4.6", "grok-4.5"),
+		OpenCodeModels:    splitCSVDefault(os.Getenv("UHP_OPENCODE_MODELS"), "auto"),
+		PiModels:          splitCSVDefault(os.Getenv("UHP_PI_MODELS"), "auto"),
 	}
 }
 

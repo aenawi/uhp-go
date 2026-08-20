@@ -31,6 +31,26 @@ var (
 	ErrStorage = errors.New("service: storage failure")
 )
 
+// DefaultMaxConcurrentRuns bounds concurrent harness processes when nothing
+// says otherwise.
+//
+// Every accepted task forks a CLI, those processes are overwhelmingly blocked
+// on a model rather than on this machine's CPUs, and the number is therefore
+// not derived from NumCPU. It is a deliberately conservative floor an operator
+// raises for their own hardware — the value that matters is that it is finite.
+const DefaultMaxConcurrentRuns = 8
+
+// NoCapacityError is the refusal when every run slot is already held.
+//
+// It carries the bound because a client that is told only "busy" has nothing to
+// size its own concurrency against, and would otherwise discover the limit by
+// hammering the server until it stops being refused.
+type NoCapacityError struct{ Limit int }
+
+func (e *NoCapacityError) Error() string {
+	return fmt.Sprintf("service: no capacity: %d harness runs already in flight", e.Limit)
+}
+
 // TaskService implements the "Tasks" and "Sessions" chapters of UHP.
 type TaskService struct {
 	registry  Registry
@@ -50,16 +70,27 @@ type TaskService struct {
 	// correct whenever the client shares the API's origin and is the only
 	// honest answer when nobody has told the server its own address.
 	publicBaseURL string
+
+	// maxConcurrentRuns bounds how many harness processes may run at once.
+	maxConcurrentRuns int
 }
 
 func NewTaskService(reg Registry, store Store, log *slog.Logger, opts ...Option) *TaskService {
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &TaskService{registry: reg, store: store, runs: newSupervisor(), log: log}
+	s := &TaskService{
+		registry:          reg,
+		store:             store,
+		log:               log,
+		maxConcurrentRuns: DefaultMaxConcurrentRuns,
+	}
 	for _, o := range opts {
 		o(s)
 	}
+	// After the options, so the supervisor is built with the bound it will
+	// enforce rather than having it changed underneath it.
+	s.runs = newSupervisor(s.maxConcurrentRuns)
 	return s
 }
 
@@ -87,6 +118,21 @@ func WithPublicBaseURL(base string) Option {
 // /v1/harnesses, and the `harness_management` capability.
 func WithHarnessStore(h HarnessStore) Option {
 	return func(s *TaskService) { s.harnesses = h }
+}
+
+// WithMaxConcurrentRuns bounds how many harness processes run at once.
+//
+// A value of zero or less falls back to DefaultMaxConcurrentRuns rather than
+// meaning "unbounded" or "accept nothing": a server that runs no tasks and a
+// server that forks without limit are both worse than a conservative default,
+// and neither is a plausible reading of a misconfigured number.
+func WithMaxConcurrentRuns(n int) Option {
+	return func(s *TaskService) {
+		if n <= 0 {
+			n = DefaultMaxConcurrentRuns
+		}
+		s.maxConcurrentRuns = n
+	}
 }
 
 // CreateTaskRequest mirrors the fields UHP requires from the OpenAI
@@ -119,7 +165,7 @@ func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (*do
 		return nil, nil, fmt.Errorf("%w: %q", ErrHarnessNotFound, req.HarnessID)
 	}
 
-	sessionID, nativeSessionID, err := s.resolveSession(ctx, req)
+	sessionID, nativeSessionID, fresh, err := s.resolveSession(ctx, req)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -128,6 +174,42 @@ func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (*do
 	// so two concurrent tasks in it is not a defined state.
 	if s.runs.sessionBusy(sessionID) {
 		return nil, nil, fmt.Errorf("%w: session %s already has a task in flight", ErrSessionBusy, sessionID)
+	}
+
+	// Reserved here, ahead of the working directory, the input files and the
+	// fork itself, because every one of those is work this server does on an
+	// anonymous caller's say-so: `UHP_API_KEYS` is unset by default, so
+	// authentication is not what stands between a stranger and an unbounded
+	// number of CLI processes. Nothing downstream refuses either — the
+	// per-session rule above only stops a second task in the *same*
+	// conversation, never an unbounded number of different ones.
+	//
+	// Everything above this line is a refusal specific to the request, and all
+	// of it reads. That ordering is the point: a saturated server must not
+	// answer "busy, retry" to a request naming a harness that does not exist or
+	// a response id that never did, because retrying those never works and the
+	// client has been told the opposite.
+	release, haveSlot := s.runs.acquire()
+	if !haveSlot {
+		return nil, nil, &NoCapacityError{Limit: s.runs.capacity()}
+	}
+	// The slot belongs to the run once the supervisor owns it; until then it
+	// belongs to this function, and every early return has to give it back.
+	supervised := false
+	defer func() {
+		if !supervised {
+			release()
+		}
+	}()
+
+	// Persisted only now that the task has a slot to run in. A session written
+	// for a request that was then refused is a record nothing will ever read
+	// again, and a client retrying against a saturated server would leave one
+	// behind on every attempt — turning the cheap answer into the expensive one.
+	if fresh != nil {
+		if err := s.store.CreateSession(ctx, fresh); err != nil {
+			return nil, nil, fmt.Errorf("service: create session: %w", err)
+		}
 	}
 
 	workDir, err := s.workspace.sessionDir(sessionID)
@@ -214,8 +296,9 @@ func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (*do
 		if err := adapter.Cancel(runCtx, task.ID); err != nil {
 			s.log.Debug("adapter cancel", "error", err, "task_id", task.ID)
 		}
-	})
+	}, release)
 	s.runs.add(run)
+	supervised = true
 	go s.supervise(runCtx, run, task, updates, rs)
 
 	return task, run, nil
@@ -223,7 +306,12 @@ func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (*do
 
 // resolveSession implements UHP session continuation: if PreviousResponseID
 // is set, reuse its session; otherwise mint a new session for this harness.
-func (s *TaskService) resolveSession(ctx context.Context, req CreateTaskRequest) (sessionID, nativeSessionID string, err error) {
+//
+// It reads and never writes. A new session comes back as `fresh`, unpersisted,
+// for the caller to store once the task is actually going to run: every refusal
+// between here and the fork would otherwise leave behind a session no task will
+// ever use.
+func (s *TaskService) resolveSession(ctx context.Context, req CreateTaskRequest) (sessionID, nativeSessionID string, fresh *domain.Session, err error) {
 	if req.PreviousResponseID == "" {
 		now := time.Now().UTC()
 		harnessID := req.HarnessID
@@ -238,19 +326,16 @@ func (s *TaskService) resolveSession(ctx context.Context, req CreateTaskRequest)
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
-		if err := s.store.CreateSession(ctx, sess); err != nil {
-			return "", "", fmt.Errorf("service: create session: %w", err)
-		}
-		return sess.ID, "", nil
+		return sess.ID, "", sess, nil
 	}
 
 	prevTask, err := s.store.GetTask(ctx, req.PreviousResponseID)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: previous_response_id %q", ErrResponseNotFound, req.PreviousResponseID)
+		return "", "", nil, fmt.Errorf("%w: previous_response_id %q", ErrResponseNotFound, req.PreviousResponseID)
 	}
 	sess, err := s.store.GetSession(ctx, prevTask.SessionID)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: session for %q", ErrSessionNotFound, req.PreviousResponseID)
+		return "", "", nil, fmt.Errorf("%w: session for %q", ErrSessionNotFound, req.PreviousResponseID)
 	}
 	// Lifecycle §4: continuing a conversation with a different agent is a
 	// different conversation, and doing it quietly loses work the client
@@ -264,10 +349,10 @@ func (s *TaskService) resolveSession(ctx context.Context, req CreateTaskRequest)
 		requested = canonical
 	}
 	if requested != "" && sess.HarnessID != "" && requested != sess.HarnessID {
-		return "", "", fmt.Errorf("%w: session %s runs on %q, request asked for %q",
+		return "", "", nil, fmt.Errorf("%w: session %s runs on %q, request asked for %q",
 			ErrHarnessMismatch, sess.ID, sess.HarnessID, req.HarnessID)
 	}
-	return sess.ID, sess.NativeSessionID, nil
+	return sess.ID, sess.NativeSessionID, nil, nil
 }
 
 // applyUpdate folds one harness.RunUpdate into the persisted task state and

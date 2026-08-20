@@ -54,15 +54,20 @@ type Run struct {
 	// exactly the outcome UHP forbids for a cancelled task.
 	cancel func()
 	done   chan struct{}
+
+	// release gives back the run slot this run holds. The run owns the slot
+	// for exactly as long as it owns the harness process.
+	release func()
 }
 
-func newRun(taskID, sessionID string, cancel func()) *Run {
+func newRun(taskID, sessionID string, cancel, release func()) *Run {
 	return &Run{
 		TaskID:    taskID,
 		SessionID: sessionID,
 		notify:    make(chan struct{}),
 		cancel:    cancel,
 		done:      make(chan struct{}),
+		release:   release,
 	}
 }
 
@@ -77,8 +82,16 @@ func (r *Run) publish(ev domain.Event) {
 	r.mu.Unlock()
 }
 
-// finish marks the run terminal and wakes everyone for the last time.
+// finish gives back the run's slot, marks it terminal, and wakes everyone for
+// the last time.
 func (r *Run) finish() {
+	// The slot goes back first, ahead of both ways a caller learns the run is
+	// over — the finished flag Events reads and the done channel Wait reads.
+	// A client that receives its answer and immediately asks the next question
+	// must not be refused for capacity this very run has already stopped using,
+	// and releasing afterwards makes that a race the client usually loses.
+	r.release()
+
 	r.mu.Lock()
 	r.finished = true
 	close(r.notify)
@@ -133,22 +146,65 @@ func (r *Run) Wait(ctx context.Context) error {
 	}
 }
 
-// supervisor tracks live runs so cancellation can reach them and so a session
-// can refuse to run two tasks at once.
+// supervisor tracks live runs so cancellation can reach them, so a session can
+// refuse to run two tasks at once, and so the machine is not asked to run more
+// harness processes than it was configured for.
 type supervisor struct {
 	mu     sync.Mutex
 	byTask map[string]*Run
 	// bySession enforces Lifecycle §5: "A server MUST NOT run two tasks
 	// concurrently in the same session."
 	bySession map[string]*Run
+
+	// live counts the run slots currently held and maxLive bounds them.
+	//
+	// This is a bound on processes, not on requests, which is why it lives here
+	// rather than in the transport: the per-session rule above already refuses a
+	// second task in one conversation, but nothing stopped an unbounded number
+	// of *different* sessions, and every one of them forks a CLI. maxLive is
+	// fixed at construction, so reading it needs no lock.
+	live    int
+	maxLive int
 }
 
-func newSupervisor() *supervisor {
+func newSupervisor(maxLive int) *supervisor {
+	if maxLive <= 0 {
+		maxLive = DefaultMaxConcurrentRuns
+	}
 	return &supervisor{
 		byTask:    make(map[string]*Run),
 		bySession: make(map[string]*Run),
+		maxLive:   maxLive,
 	}
 }
+
+// acquire reserves a run slot, reporting whether there was one to reserve.
+//
+// The returned release gives the slot back. It is idempotent because the two
+// callers that give a slot back — StartTask on a path that fails before the
+// supervisor takes ownership, and the supervisor when the run ends — are
+// exclusive by construction rather than by anything a reader can check locally,
+// and a double release would silently raise the bound for the life of the
+// process.
+func (s *supervisor) acquire() (release func(), ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.live >= s.maxLive {
+		return nil, false
+	}
+	s.live++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			s.live--
+			s.mu.Unlock()
+		})
+	}, true
+}
+
+// capacity is the configured maximum number of concurrent harness runs.
+func (s *supervisor) capacity() int { return s.maxLive }
 
 func (s *supervisor) add(r *Run) {
 	s.mu.Lock()
