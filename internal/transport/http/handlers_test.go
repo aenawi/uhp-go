@@ -78,6 +78,21 @@ func TestListHarnesses(t *testing.T) {
 	}
 }
 
+// Healthz is unauthenticated and carries no JSON, which is what a container
+// probe needs: no credential to configure and nothing to parse. It is served
+// against a stand-in that implements nothing, because the point is that it
+// answers without asking the service anything at all — a probe that went to
+// the store would report a busy server as an unhealthy one.
+func TestHealthz(t *testing.T) {
+	w := do(t, newFakeServer(&fakeService{}), "GET", "/healthz", nil)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if got := w.Body.String(); got != "ok" {
+		t.Fatalf("expected %q, got %q", "ok", got)
+	}
+}
+
 func TestCreateTaskMissingHarness(t *testing.T) {
 	srv := newTestServer()
 	body := `{"input":"hi"}`
