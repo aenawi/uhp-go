@@ -21,8 +21,16 @@ type RunRequest struct {
 	Model           string
 	NativeSessionID string // resume/continue if the harness supports it
 	Metadata        map[string]any
-	WorkDir         string   // working directory the harness process runs in
-	InputFiles      []string // absolute paths already materialized on disk
+
+	// WorkDir is the working directory the harness process runs in. A task's
+	// input files are already written there when the run starts, and the
+	// prompt names them: that is the whole of the file-input mechanism, because
+	// none of the five CLIs has a generic "attach this file" flag and inventing
+	// per-harness plumbing for something the filesystem already does would be
+	// five ways to get it wrong. So there is deliberately no separate list of
+	// input paths here — a field every adapter is handed and none can act on
+	// reads as if attaching were something an adapter chooses to support.
+	WorkDir string
 
 	// SkillDirs are the skill folders already written to disk, one per
 	// enabled skill, in configuration order. A runtime that can load a skill

@@ -217,6 +217,23 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 		return nil, nil, err
 	}
 
+	// A continuation on a harness that cannot resume is not a continuation.
+	// Nothing downstream would fail: the adapter is handed an empty native
+	// session id, builds argv without a resume flag, and starts an agent with
+	// no memory of the previous turn — which is answered 200 and reads, to the
+	// client, as the model having forgotten everything it was just told.
+	//
+	// Refused after resolveSession so that a request naming both a different
+	// harness and an unknown response is still told the more specific of the
+	// two, and before the busy and capacity checks below because this refusal
+	// is permanent and those are not: "try again later" is the wrong advice for
+	// a request that will be refused identically forever.
+	if req.PreviousResponseID != "" {
+		if err := requireCapability(adapter.Info(), domain.CapSessions, whyNoSessions); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	// Lifecycle §5: a session has one working directory and one conversation,
 	// so two concurrent tasks in it is not a defined state.
 	if s.runs.sessionBusy(sessionID) {
@@ -325,7 +342,6 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 		Model:           req.Model,
 		NativeSessionID: nativeSessionID,
 		Metadata:        req.Metadata,
-		InputFiles:      inputPaths,
 		WorkDir:         workDir,
 		SkillDirs:       runtime.SkillDirs,
 		McpConfigPath:   runtime.McpConfigPath,
@@ -619,12 +635,46 @@ func (s *TaskService) CancelTask(ctx context.Context, taskID string) error {
 	if !ok {
 		// Not terminal and not running: nothing owns it. Settle it here so it
 		// cannot sit "in_progress" forever.
+		//
+		// No capability check: there is no harness process to stop, so nothing
+		// is being promised that cannot be delivered. Refusing would leave the
+		// task stuck in a non-terminal state that nothing else will ever write.
 		task.Status = domain.StatusCancelled
 		task.Error = nil
 		task.UpdatedAt = time.Now().UTC()
 		return s.store.UpdateTask(ctx, task)
 	}
 
+	if err := s.requireHarnessCapability(ctx, task.HarnessID, domain.CapCancellation, whyNoCancellation); err != nil {
+		return err
+	}
+
 	run.cancel()
 	return nil
+}
+
+// requireHarnessCapability is requireCapability for a caller that has a harness
+// id rather than the harness itself.
+//
+// A harness that no longer resolves is not refused. It has been deleted since
+// the task started, so it advertises nothing at all any more, and refusing to
+// stop an agent that is demonstrably still running — the run is in flight, or
+// this would not be reached — is the worse of the two failures.
+//
+// A store that could not be read is a different thing entirely and is passed
+// on. Errors §4 makes the class the retry signal, and answering a failed read
+// with either a capability refusal or a silent success would tell a client its
+// request settled when what actually happened is that this server could not
+// read its own state.
+func (s *TaskService) requireHarnessCapability(
+	ctx context.Context, harnessID string, c domain.Capability, consequence string,
+) error {
+	h, ok, err := s.GetHarness(ctx, harnessID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	return requireCapability(h, c, consequence)
 }

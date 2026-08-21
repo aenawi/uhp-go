@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
 	"github.com/aenawi/uhp-go/internal/service"
 )
@@ -43,6 +44,23 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeErrorFull(w, http.StatusUnprocessableEntity, typeInvalidRequest, "unsupported_base",
 			"this server cannot run harness base "+unsupportedBase.Base,
 			"base", map[string]any{"supported": unsupportedBase.Supported})
+		return
+	}
+
+	// 422 rather than 501: the server is configured perfectly well, and it is
+	// the harness this particular request named that cannot do what was asked.
+	// The detail names the capability so a client can match the refusal against
+	// the `capabilities` list it was already given for that harness, instead of
+	// guessing which of its assumptions was wrong.
+	var unsupportedCapability *service.CapabilityError
+	if errors.As(err, &unsupportedCapability) {
+		writeErrorFull(w, http.StatusUnprocessableEntity, typeInvalidRequest,
+			vendorCodeCapabilityUnsupported, unsupportedCapability.Error(),
+			paramForCapability(unsupportedCapability.Capability),
+			map[string]any{
+				"harness":    unsupportedCapability.HarnessID,
+				"capability": string(unsupportedCapability.Capability),
+			})
 		return
 	}
 
@@ -113,6 +131,23 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
+// paramForCapability names the request field a client can drop to stop being
+// refused, or nothing when the request has no such field.
+//
+// Errors §1 asks for the dotted path "whenever there is one", and the second
+// half of that is load-bearing here. A continuation is refused over
+// `previous_response_id` and can be sent again without it; a cancel carries no
+// body at all, and naming a field that is not in the request would send a
+// client looking for something it cannot find, which is worse than naming
+// nothing. The wire names live here rather than in the service layer, which
+// knows Go fields and not JSON paths.
+func paramForCapability(c domain.Capability) string {
+	if c == domain.CapSessions {
+		return "previous_response_id"
+	}
+	return ""
+}
+
 func writeHarnessManagementUnsupported(w http.ResponseWriter) {
 	writeError(w, http.StatusNotImplemented, typeServerError, vendorCodeHarnessManagementUnsupported,
 		"this server is not configured with a harness store, so harnesses cannot be created or changed")
@@ -128,6 +163,7 @@ func writeHarnessManagementUnsupported(w http.ResponseWriter) {
 // semantically wrong — and answering `invalid_input` would send a client
 // looking for a type error it will never find.
 const (
+	vendorCodeCapabilityUnsupported        = "uhpgo_capability_unsupported"
 	vendorCodeHarnessManagementUnsupported = "uhpgo_harness_management_unsupported"
 	vendorCodeHarnessNotManaged            = "uhpgo_harness_not_managed"
 	vendorCodeImmutableField               = "uhpgo_immutable_field"

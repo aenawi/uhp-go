@@ -310,3 +310,50 @@ func ids(hs []domain.Harness) []string {
 	}
 	return out
 }
+
+// The capability list is no longer decoration: the router refuses a cancel for
+// a harness that does not advertise `cancellation` and a continuation for one
+// that does not advertise `sessions`. So a declaration that under-claims now
+// costs a client a feature that works, and one that over-claims costs it a
+// promise that does not — and both are checkable from the declaration itself.
+
+// Cancellation belongs to the shared runner, not to any CLI: every harness is
+// started in its own process group and stopped by killing it. Build adds it for
+// that reason, and this is the check that it reaches what a client actually
+// sees — Info, not the declaration — because a declaration that lost it would
+// refuse a cancel that would in fact have worked.
+func TestEveryCLIHarnessAdvertisesCancellation(t *testing.T) {
+	for _, h := range allCLIHarnesses() {
+		if !h.Info().HasCapability(domain.CapCancellation) {
+			t.Errorf("%s does not advertise %q, but the shared runner cancels it by killing its process group",
+				h.Base, domain.CapCancellation)
+		}
+	}
+}
+
+// Resuming needs the native session id to reach argv. A harness that advertises
+// `sessions` and builds identical arguments with and without one cannot resume,
+// and every continuation sent to it silently starts a new conversation.
+func TestAdvertisedSessionsReachArgv(t *testing.T) {
+	for _, h := range allCLIHarnesses() {
+		if !domain.HasCapability(h.Capabilities, domain.CapSessions) {
+			continue
+		}
+		fresh, err := h.BuildArgs(RunRequest{Input: "hello"})
+		if err != nil {
+			t.Fatalf("%s BuildArgs: %v", h.Base, err)
+		}
+		resumed, err := h.BuildArgs(RunRequest{Input: "hello", NativeSessionID: "s1"})
+		if err != nil {
+			t.Fatalf("%s BuildArgs(resume): %v", h.Base, err)
+		}
+		if strings.Join(fresh, "\x00") == strings.Join(resumed, "\x00") {
+			t.Errorf("%s advertises %q but its argv is unchanged by a native session id: %v",
+				h.Base, domain.CapSessions, resumed)
+		}
+	}
+}
+
+func allCLIHarnesses() []*CLIHarness {
+	return []*CLIHarness{NewClaude(nil), NewCodex(nil), NewGrok(nil), NewOpenCode(nil), NewPi(nil)}
+}

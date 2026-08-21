@@ -51,7 +51,15 @@ uhp-conformance --base-url http://localhost:8080 --api-key devkey \
   --class core --harness-id chrn_… --model … --plain
 ```
 
-Two things to know before reading a result:
+Three things to know before reading a result:
+
+- **Pick a harness that advertises what the checks exercise.** The `capabilities` list on a
+  harness object is now enforced rather than reported: a `previous_response_id` sent to a
+  harness without `sessions` is refused `422`, as is a cancel sent to one without
+  `cancellation`. Of the five bases here only `claude-code` and `codex` advertise
+  `sessions`, so a run pointed at `grok-cli`, `opencode` or `pi` fails the session and
+  continuation checks by design — the refusal is the honest answer, but it is not a
+  conformance measurement of this server's session support.
 
 - **The suite runs real agent tasks** — about six of them, costing real tokens and a few
   minutes. That is deliberate: a stream that never flushes, a cancellation that never

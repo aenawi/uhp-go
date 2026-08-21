@@ -17,9 +17,14 @@ import (
 // echoAdapter completes immediately.
 type echoAdapter struct{}
 
+// The capability list is what the router now enforces, so a double that stands
+// in for a fully-featured harness has to say so — exactly as a real declaration
+// does, and for the same reason: what is advertised is what may be asked for.
 func (echoAdapter) Info() domain.Harness {
 	return domain.Harness{ID: "chrn_echo", Base: "echo", Object: "harness", Name: "Echo",
-		Capabilities: []domain.Capability{domain.CapStreaming}}
+		Capabilities: []domain.Capability{
+			domain.CapStreaming, domain.CapSessions, domain.CapCancellation,
+		}}
 }
 
 // otherAdapter is a second, distinct harness, for the mismatch test.
@@ -65,7 +70,13 @@ func newSlowAdapter() *slowAdapter {
 	return &slowAdapter{started: make(chan struct{}), cancel: make(map[string]context.CancelFunc)}
 }
 
-func (a *slowAdapter) Info() domain.Harness              { return domain.Harness{ID: "slow", Name: "Slow"} }
+func (a *slowAdapter) Info() domain.Harness {
+	return domain.Harness{ID: "slow", Name: "Slow",
+		Capabilities: []domain.Capability{
+			domain.CapStreaming, domain.CapSessions, domain.CapCancellation,
+		}}
+}
+
 func (a *slowAdapter) HealthCheck(context.Context) error { return nil }
 
 func (a *slowAdapter) Run(ctx context.Context, req harness.RunRequest) (<-chan harness.RunUpdate, error) {

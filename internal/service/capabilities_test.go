@@ -1,0 +1,198 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/aenawi/uhp-go/internal/domain"
+)
+
+// capsAdapter is an echo harness that advertises exactly the capabilities it is
+// given, so a test can state what a harness promises a client and then check
+// that the router either keeps the promise or refuses.
+type capsAdapter struct {
+	echoAdapter
+	id   string
+	base string
+	caps []domain.Capability
+}
+
+func (a *capsAdapter) Info() domain.Harness {
+	return domain.Harness{
+		ID: a.id, Base: a.base, Object: "harness", Name: a.base,
+		Capabilities: a.caps,
+	}
+}
+
+// capsSlowAdapter is the cancellable double with a capability list, for the
+// cancel path: a run has to still be in flight for a refusal to mean anything.
+type capsSlowAdapter struct {
+	*slowAdapter
+	caps []domain.Capability
+}
+
+func (a *capsSlowAdapter) Info() domain.Harness {
+	return domain.Harness{
+		ID: "chrn_slow", Base: "slow", Object: "harness", Name: "Slow",
+		Capabilities: a.caps,
+	}
+}
+
+func TestContinuationIsRefusedWhenTheHarnessDoesNotAdvertiseSessions(t *testing.T) {
+	ctx := context.Background()
+	a := &capsAdapter{id: "chrn_amnesiac", base: "amnesiac",
+		caps: []domain.Capability{domain.CapStreaming}}
+	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger())
+
+	first, run, err := svc.StartTask(ctx, CreateTaskRequest{Input: "one", HarnessID: "amnesiac"})
+	if err != nil {
+		t.Fatalf("first task: %v", err)
+	}
+	if err := run.Wait(ctx); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+
+	_, _, err = svc.StartTask(ctx, CreateTaskRequest{
+		Input: "two", HarnessID: "amnesiac", PreviousResponseID: first.ID,
+	})
+	var capErr *CapabilityError
+	if !errors.As(err, &capErr) {
+		t.Fatalf("continuation error = %v, want a *CapabilityError", err)
+	}
+	if capErr.Capability != domain.CapSessions {
+		t.Errorf("refused capability = %q, want %q", capErr.Capability, domain.CapSessions)
+	}
+	if capErr.HarnessID != "chrn_amnesiac" {
+		t.Errorf("refusal names harness %q, want the canonical id", capErr.HarnessID)
+	}
+}
+
+func TestContinuationIsAllowedWhenTheHarnessAdvertisesSessions(t *testing.T) {
+	ctx := context.Background()
+	a := &capsAdapter{id: "chrn_recalls", base: "recalls",
+		caps: []domain.Capability{domain.CapStreaming, domain.CapSessions}}
+	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger())
+
+	first, run, err := svc.StartTask(ctx, CreateTaskRequest{Input: "one", HarnessID: "recalls"})
+	if err != nil {
+		t.Fatalf("first task: %v", err)
+	}
+	if err := run.Wait(ctx); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+
+	second, run2, err := svc.StartTask(ctx, CreateTaskRequest{
+		Input: "two", HarnessID: "recalls", PreviousResponseID: first.ID,
+	})
+	if err != nil {
+		t.Fatalf("continuation: %v", err)
+	}
+	if err := run2.Wait(ctx); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if second.SessionID != first.SessionID {
+		t.Errorf("continuation landed in session %q, want %q", second.SessionID, first.SessionID)
+	}
+}
+
+// A harness that does not advertise `cancellation` and is asked to stop must
+// say so. Answering 200 and leaving the agent running is the failure: the
+// client believes the work stopped, and it is still spending money.
+func TestCancelTaskIsRefusedWhenTheHarnessDoesNotAdvertiseCancellation(t *testing.T) {
+	ctx := context.Background()
+	a := &capsSlowAdapter{slowAdapter: newSlowAdapter(),
+		caps: []domain.Capability{domain.CapStreaming}}
+	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger())
+
+	task, _, err := svc.StartTask(ctx, CreateTaskRequest{Input: "work", HarnessID: "slow"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	<-a.started
+
+	err = svc.CancelTask(ctx, task.ID)
+	var capErr *CapabilityError
+	if !errors.As(err, &capErr) {
+		t.Fatalf("cancel error = %v, want a *CapabilityError", err)
+	}
+	if capErr.Capability != domain.CapCancellation {
+		t.Errorf("refused capability = %q, want %q", capErr.Capability, domain.CapCancellation)
+	}
+
+	// Refused means unchanged, not half-cancelled.
+	stored, err := svc.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if stored.Status != domain.StatusInProgress {
+		t.Errorf("task status after a refused cancel = %q, want %q",
+			stored.Status, domain.StatusInProgress)
+	}
+	// Leave nothing running behind the test.
+	_ = a.slowAdapter.Cancel(ctx, task.ID)
+}
+
+// Sessions §4: "Cancelling an already-terminal task MUST succeed and change
+// nothing." That rule outranks the capability check — there is no work to stop,
+// so nothing is being promised that cannot be delivered.
+func TestCancellingATerminalTaskSucceedsWithoutTheCapability(t *testing.T) {
+	ctx := context.Background()
+	a := &capsAdapter{id: "chrn_amnesiac", base: "amnesiac",
+		caps: []domain.Capability{domain.CapStreaming}}
+	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger())
+
+	task, run, err := svc.StartTask(ctx, CreateTaskRequest{Input: "one", HarnessID: "amnesiac"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := run.Wait(ctx); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if err := svc.CancelTask(ctx, task.ID); err != nil {
+		t.Fatalf("cancelling a terminal task: %v", err)
+	}
+}
+
+func TestCancelSessionIsRefusedWhenTheHarnessDoesNotAdvertiseCancellation(t *testing.T) {
+	ctx := context.Background()
+	a := &capsSlowAdapter{slowAdapter: newSlowAdapter(),
+		caps: []domain.Capability{domain.CapStreaming}}
+	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger())
+
+	task, _, err := svc.StartTask(ctx, CreateTaskRequest{Input: "work", HarnessID: "slow"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	<-a.started
+
+	err = svc.CancelSession(ctx, task.SessionID)
+	var capErr *CapabilityError
+	if !errors.As(err, &capErr) {
+		t.Fatalf("cancel session error = %v, want a *CapabilityError", err)
+	}
+	if capErr.Capability != domain.CapCancellation {
+		t.Errorf("refused capability = %q, want %q", capErr.Capability, domain.CapCancellation)
+	}
+	_ = a.slowAdapter.Cancel(ctx, task.ID)
+}
+
+// An idle session has nothing to stop, so the answer is the same one an
+// already-terminal task gets, whatever the harness advertises.
+func TestCancellingAnIdleSessionSucceedsWithoutTheCapability(t *testing.T) {
+	ctx := context.Background()
+	a := &capsAdapter{id: "chrn_amnesiac", base: "amnesiac",
+		caps: []domain.Capability{domain.CapStreaming}}
+	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger())
+
+	task, run, err := svc.StartTask(ctx, CreateTaskRequest{Input: "one", HarnessID: "amnesiac"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := run.Wait(ctx); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if err := svc.CancelSession(ctx, task.SessionID); err != nil {
+		t.Fatalf("cancelling an idle session: %v", err)
+	}
+}

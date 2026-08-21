@@ -75,14 +75,20 @@ func (s *TaskService) SessionTurns(ctx context.Context, id string) ([]domain.Tur
 // cancelling a session — and is explicit that cancelling MUST NOT delete the
 // session: the conversation remains continuable.
 func (s *TaskService) CancelSession(ctx context.Context, id string) error {
-	if _, err := s.store.GetSession(ctx, id); err != nil {
+	sess, err := s.store.GetSession(ctx, id)
+	if err != nil {
 		return fmt.Errorf("%w: %q", ErrSessionNotFound, id)
 	}
 	run, ok := s.runs.bySessionRun(id)
 	if !ok {
 		// Nothing running. Cancelling an idle session succeeds and changes
-		// nothing, for the same reason cancelling a terminal task does.
+		// nothing, for the same reason cancelling a terminal task does — and
+		// for the same reason it is not checked against the harness's
+		// capabilities: there is no work being promised a stop.
 		return nil
+	}
+	if err := s.requireHarnessCapability(ctx, sess.HarnessID, domain.CapCancellation, whyNoCancellation); err != nil {
+		return err
 	}
 	run.cancel()
 	return nil

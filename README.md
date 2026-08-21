@@ -143,6 +143,28 @@ selects which harness runs the task. Continuing a conversation is done by settin
 `previous_response_id` to a prior task's `id` — the router resolves the underlying session
 and, where the harness supports it, its native session/thread id (`--resume`, `--session`, etc.).
 
+### Capabilities are enforced, not decorative
+
+Every harness object carries a `capabilities` list, and discovery hands that list to a
+client before it sends anything. That makes it a promise, so the router keeps it or refuses
+the request that takes it up:
+
+- `previous_response_id` on a harness that does not advertise `sessions` is refused with
+  `422 uhpgo_capability_unsupported`. It used to be accepted, and the harness was then
+  started with no resume flag and no memory of the previous turn — a fresh conversation
+  answered `200` and presented to the client as a continuation.
+- A cancel for a harness that does not advertise `cancellation` is refused the same way,
+  rather than answering `200` while the agent keeps running and keeps spending money.
+
+Both refusals name the capability in `error.detail`, so a client can match them against the
+list it already holds. Cancelling an already-terminal task or an idle session still
+succeeds whatever the harness advertises (Sessions §4): there is no work to stop, so
+nothing is being promised that cannot be delivered.
+
+Of the five bases shipped here, `claude-code` and `codex` advertise `sessions`; all five
+advertise `cancellation`, because cancellation belongs to the shared runner — every harness
+runs in its own process group and is stopped by killing it — rather than to any one CLI.
+
 A stream that has gone 15 seconds with nothing to send writes an SSE comment line
 (`: keep-alive`). UHP tells clients to time a stream out on inactivity rather than on total
 duration, and an agent that thinks for two minutes before its first token would otherwise
@@ -479,6 +501,18 @@ and a key bound to the refusal would answer the retry with the same refusal for 
 actually reads a prompt from stdin — grok does not, and a `--` terminator that works for
 claude and codex does not work for grok or pi. Every one of those facts was established
 by executing the CLI, and none of them is guessable from its `--help`.
+
+**The `Capabilities` list is enforced, so declare only what the harness delivers.** Listing
+`sessions` on a harness that cannot resume turns every continuation into a silent fresh
+conversation. `cancellation` needs no declaring: `Build` adds it, because the shared runner
+delivers it for every harness.
+
+`TestAdvertisedSessionsReachArgv` catches half of the `sessions` mistake — it fails if a
+harness advertising `sessions` builds the same argv with and without a native session id.
+The other half is not mechanically checkable: the id has to be *discovered* from the CLI's
+own output by `ParseLine` before there is anything to pass back, and a `passthroughParseLine`
+harness can never produce one. `opencode` is the worked example, in the comment on its
+declaration. Check both halves by hand before you claim `sessions`.
 
 ## Testing
 

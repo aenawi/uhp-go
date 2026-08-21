@@ -48,8 +48,22 @@ type Harness struct {
 }
 
 // HasCapability reports whether the harness advertises a given capability.
-func (h Harness) HasCapability(c Capability) bool {
-	for _, have := range h.Capabilities {
+//
+// The list is a promise: it is on every harness object and in the discovery
+// document, so a client reads it before it sends anything. The router therefore
+// consults it before accepting a request that takes it up — see
+// service.requireCapability — rather than accepting the request and delivering
+// something else.
+func (h Harness) HasCapability(c Capability) bool { return HasCapability(h.Capabilities, c) }
+
+// HasCapability reports whether a capability list advertises c.
+//
+// The free function exists alongside the method because the two callers hold
+// different things: the router refuses a request against a whole Harness, while
+// a harness declaration checks its own list while it is still being built and
+// has no Harness yet.
+func HasCapability(caps []Capability, c Capability) bool {
+	for _, have := range caps {
 		if have == c {
 			return true
 		}

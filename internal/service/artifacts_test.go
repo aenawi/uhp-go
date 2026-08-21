@@ -24,7 +24,11 @@ type writingAdapter struct {
 }
 
 func (a *writingAdapter) Info() domain.Harness {
-	return domain.Harness{ID: "chrn_writer", Base: "writer", Object: "harness", Name: "Writer"}
+	return domain.Harness{ID: "chrn_writer", Base: "writer", Object: "harness", Name: "Writer",
+		Capabilities: []domain.Capability{
+			domain.CapStreaming, domain.CapFilesIn, domain.CapFilesOut,
+			domain.CapSessions, domain.CapCancellation,
+		}}
 }
 func (a *writingAdapter) HealthCheck(context.Context) error { return nil }
 func (a *writingAdapter) Cancel(context.Context, string) error {
@@ -148,8 +152,11 @@ func TestArtifactCaptureIgnoresPreexistingFilesAndItsOwnInput(t *testing.T) {
 	if err != nil || string(data) != "the secret token" {
 		t.Fatalf("input file not materialized: %v %q", err, data)
 	}
-	if a.seen.InputFiles == nil {
-		t.Errorf("adapter was not told about the input file")
+	// And the harness was told it is there. The file on disk is the delivery
+	// mechanism, but a model asked to "read the attached file" cannot know a
+	// file was attached or what it is called unless the prompt says so.
+	if !strings.Contains(a.seen.Input, "token.txt") {
+		t.Errorf("prompt does not name the attached file: %q", a.seen.Input)
 	}
 }
 

@@ -116,8 +116,19 @@ func NewID(base string) string {
 }
 
 // Build finalises a declaration into a runnable Adapter.
+//
+// It adds `cancellation` to whatever the declaration claimed, because that one
+// is the shared runner's rather than any CLI's: every harness is started in its
+// own process group and stopped by killing it, and no declaration can opt out
+// of a mechanism it does not implement. Adding it here rather than repeating it
+// five times is what stops a sixth harness from forgetting the line — and now
+// that the router refuses a cancel for a harness that does not advertise it,
+// forgetting it would refuse a cancel that in fact works.
 func (h *CLIHarness) Build() *CLIHarness {
 	h.proc = newProcess(h.Binary, h.Prompt, h.argsFor, h.ParseLine)
+	if !domain.HasCapability(h.Capabilities, domain.CapCancellation) {
+		h.Capabilities = append(h.Capabilities, domain.CapCancellation)
+	}
 	return h
 }
 

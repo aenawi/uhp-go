@@ -21,18 +21,25 @@ func NewOpenCode(models []string) *CLIHarness {
 		Vendor: "sst.dev",
 		Binary: "opencode",
 		Models: models,
+		// `sessions` is deliberately absent, and the `--session <id>` branch
+		// that used to be in BuildArgs went with it. Resuming needs two halves
+		// and only one was ever here: the id has to come back out of the CLI's
+		// own output before it can be passed back in, and ParseLine is the
+		// passthrough, which can only ever produce text deltas. So the id was
+		// never discovered, the flag was never reached, and every continuation
+		// quietly started a new conversation while the harness advertised that
+		// it had not. Restore both halves together — a ParseLine that emits
+		// UpdateSessionID, then the flag, then the capability — once the event
+		// format has been checked against the real CLI.
 		Capabilities: []domain.Capability{
 			domain.CapStreaming, domain.CapFilesIn, domain.CapFilesOut,
-			domain.CapSessions, domain.CapTools,
+			domain.CapTools,
 		},
 		Prompt: PromptStdin,
 		BuildArgs: func(req RunRequest) ([]string, error) {
 			args := []string{"run"}
 			if req.Model != "" {
 				args = append(args, "--model", req.Model)
-			}
-			if req.NativeSessionID != "" {
-				args = append(args, "--session", req.NativeSessionID)
 			}
 			return args, nil
 		},

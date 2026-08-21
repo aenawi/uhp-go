@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/internal/service"
 )
 
 // fakeService is a TaskService whose behaviour a test sets one method at a
@@ -25,6 +26,7 @@ type fakeService struct {
 	getHarness     func(context.Context, string) (domain.Harness, bool, error)
 	modelAvailable func(context.Context, string, string) bool
 
+	startTask  func(context.Context, service.CreateTaskRequest) (*domain.Task, *service.Run, error)
 	getTask    func(context.Context, string) (*domain.Task, error)
 	cancelTask func(context.Context, string) error
 
@@ -44,6 +46,12 @@ func (f *fakeService) GetHarness(ctx context.Context, id string) (domain.Harness
 
 func (f *fakeService) ModelAvailable(ctx context.Context, harnessID, model string) bool {
 	return f.modelAvailable(ctx, harnessID, model)
+}
+
+func (f *fakeService) StartTask(
+	ctx context.Context, req service.CreateTaskRequest,
+) (*domain.Task, *service.Run, error) {
+	return f.startTask(ctx, req)
 }
 
 func (f *fakeService) GetTask(ctx context.Context, id string) (*domain.Task, error) {
