@@ -211,10 +211,39 @@ type createTaskBody struct {
 	Metadata           map[string]any  `json:"metadata,omitempty"`
 }
 
+// maxIdempotencyKeyBytes bounds the `Idempotency-Key` header.
+//
+// The specification leaves the key opaque and says nothing about its length,
+// but a key is remembered for a day, so an unbounded one is a string this
+// server keeps rather than one it forwards. 255 is comfortably above anything
+// a client generates — a UUID is 36 — and refusing above it is honest, where
+// silently truncating would collapse two distinct keys into one and answer the
+// second request with the first one's task.
+const maxIdempotencyKeyBytes = 255
+
+// idempotencyKey reads the header, reporting whether it is usable.
+//
+// Surrounding whitespace is trimmed and a key that is empty afterwards is
+// treated as absent: `Idempotency-Key: ` asks for nothing, and binding every
+// such request to one shared empty key would make them all the same task.
+func idempotencyKey(r *http.Request) (string, bool) {
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	return key, len(key) <= maxIdempotencyKeyBytes
+}
+
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	// Without a bound, a single request can drive the server out of memory,
 	// and auth is off by default.
 	r.Body = http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
+
+	// Read before the body, so an unusable key is refused before the server
+	// does any of the work the key exists to avoid doing twice.
+	idempotency, ok := idempotencyKey(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input",
+			"the Idempotency-Key header is longer than this server accepts")
+		return
+	}
 
 	var body createTaskBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -247,6 +276,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		PreviousResponseID: body.PreviousResponseID,
 		Metadata:           body.Metadata,
 		Attachments:        input.Attachments,
+		IdempotencyKey:     idempotency,
 	})
 	if err != nil {
 		writeServiceError(w, err)

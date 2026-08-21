@@ -50,7 +50,12 @@ func capabilities(files, harnessManagement bool) map[string]bool {
 		"session_listing":    true,
 		"harness_management": harnessManagement,
 		"session_sharing":    false,
-		"idempotency":        false,
+		// Unconditional, unlike the two file capabilities: an idempotency key
+		// needs no configuration, only somewhere to remember it, and this
+		// server always has that. It is remembered in memory, so a restart
+		// forgets every key — and every task, in the default store, so a key
+		// that survived would point at a response that did not.
+		"idempotency": true,
 	}
 }
 
