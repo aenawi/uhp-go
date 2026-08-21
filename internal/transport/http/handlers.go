@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/aenawi/uhp-go/internal/service"
 )
@@ -22,10 +23,23 @@ type Server struct {
 	log          *slog.Logger
 	apiKeys      []string
 	maxBodyBytes int64
+
+	// keepAlive is how long a stream may stay silent before it writes a
+	// comment line. It is a field rather than a constant only so a test does
+	// not have to wait out the real interval; nothing configures it, because
+	// the number it has to beat is fixed by the protocol and not by a
+	// deployment.
+	keepAlive time.Duration
 }
 
 // defaultMaxBodyBytes bounds a request body when none is configured.
 const defaultMaxBodyBytes = 8 << 20
+
+// defaultKeepAlive is how often a stream with nothing to say writes a comment
+// line. Errors §5 asks for one at least every 30 seconds; half of that leaves
+// room for a comment to be delayed or dropped without the client's inactivity
+// timeout firing on a run that is still working.
+const defaultKeepAlive = 15 * time.Second
 
 func NewServer(tasks *service.TaskService, log *slog.Logger, apiKeys []string, maxBodyBytes int64) *Server {
 	if maxBodyBytes <= 0 {
@@ -37,6 +51,7 @@ func NewServer(tasks *service.TaskService, log *slog.Logger, apiKeys []string, m
 		log:          log,
 		apiKeys:      apiKeys,
 		maxBodyBytes: maxBodyBytes,
+		keepAlive:    defaultKeepAlive,
 	}
 	s.routes()
 	return s

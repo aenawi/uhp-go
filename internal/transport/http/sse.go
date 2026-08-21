@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/aenawi/uhp-go/internal/domain"
@@ -43,7 +44,17 @@ func (s *Server) streamSSE(w http.ResponseWriter, r *http.Request, run *service.
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	err := run.Events(r.Context(), func(ev domain.Event) error {
+	idle := service.IdleTick{
+		Every: s.keepAlive,
+		Do: func() error {
+			if err := writeKeepAlive(w); err != nil {
+				return err
+			}
+			flusher.Flush()
+			return nil
+		},
+	}
+	err := run.Events(r.Context(), idle, func(ev domain.Event) error {
 		if err := writeSSE(w, ev); err != nil {
 			return err
 		}
@@ -55,10 +66,22 @@ func (s *Server) streamSSE(w http.ResponseWriter, r *http.Request, run *service.
 	}
 }
 
+// writeKeepAlive emits an SSE comment line.
+//
+// It carries nothing, and that is the whole design: a comment is discarded by
+// every conformant client, so the only thing it changes is that bytes moved.
+// That is what a client running an inactivity timeout (Errors §5) needs from a
+// harness that has been thinking for two minutes — proof the socket is alive,
+// not a phantom event it has to reason about.
+func writeKeepAlive(w io.Writer) error {
+	_, err := io.WriteString(w, ": keep-alive\n\n")
+	return err
+}
+
 // writeSSE emits one event. Every event goes through the same shape, so the
 // stream has one schema rather than a bare task for the first event and a
 // wrapper for the rest.
-func writeSSE(w http.ResponseWriter, ev domain.Event) error {
+func writeSSE(w io.Writer, ev domain.Event) error {
 	b, err := json.Marshal(ev)
 	if err != nil {
 		return err

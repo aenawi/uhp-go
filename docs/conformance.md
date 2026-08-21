@@ -71,6 +71,7 @@ Two things to know before reading a result:
 | Files: input items, artifact capture, download | not yet measured | targets X-05, X-06, X-07, and makes X-08 real |
 | Harness management: create, replace, delete | not yet measured | targets F-01, F-02, F-05, F-07 |
 | Skills as folders, MCP config, tool restrictions | not yet measured | targets F-03, F-04, F-06 |
+| Stream keep-alives | no change expected | no check watches a silent stream — see below |
 
 The 33 skips in the baseline were not 33 separate defects. They cascaded from one line:
 `GET /v1/harnesses` returned `{"data": […]}` where the suite reads `harnesses`, so it could
@@ -98,6 +99,15 @@ have not been run against the real binary, and are marked UNVERIFIED in
 `internal/harness/claude.go` for the same reason issue #13 marks opencode's prompt
 delivery. `grok-cli` and `pi` were read from their own `--help` on a machine where they are
 installed. See the delivery table in the README.
+
+**Nothing in the suite watches a silent stream.** Every streaming check asks a harness to
+answer, so events arrive promptly and the gap Errors §5 is about never opens. Stream
+keep-alives (issue #6) are therefore held up by this repository's tests alone —
+`TestStreamKeepsAliveWhileTheHarnessIsSilent` in `internal/transport/http/sse_test.go` and
+the `EventsIdle` tests in `internal/service/supervisor_test.go` — and a green local test is
+not a conformance result here either. A check that would catch it has to keep a stream open
+across a harness's thinking time and assert bytes moved, which is exactly the kind of thing
+a schema inspection cannot see.
 
 **X-08 used to pass vacuously**: artifact ids could not traverse out of their container
 because the download endpoint did not exist, so every probe 404d. The endpoint exists now,
