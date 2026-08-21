@@ -30,3 +30,13 @@ jobs:
 
       - name: Test
         run: go test ./... -race -cover
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Building the image here is what turns a broken one into a red build
+      # rather than a 500 on the first request that reaches for a harness CLI.
+      - name: Build and check the image
+        run: make docker-check
