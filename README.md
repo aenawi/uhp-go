@@ -400,6 +400,10 @@ curl -N http://localhost:8080/v1/responses \
 | `UHP_OPENCODE_MODELS` | `auto` | Advertised OpenCode models |
 | `UHP_PI_MODELS` | `auto` | Advertised Pi models |
 
+These are the defaults of the `uhpd` binary. The Docker image presets `UHP_WORKSPACE`,
+which changes the `UHP_WORKSPACE` and `UHP_HARNESS_STORE` rows above — see
+[Building the image](#building-the-image).
+
 Each harness adapter shells out to its respective CLI binary (`claude`, `codex`, `grok`,
 `opencode`, `pi`), which must be installed and authenticated on the host/container running
 `uhpd`.
@@ -487,12 +491,39 @@ make fmt
 ## Building the image
 
 ```bash
-make docker
+make docker        # build uhp-go:local
+make docker-check  # build it, then assert what it promises
 ```
 
 The image installs `@anthropic-ai/claude-code` and `opencode-ai` via npm as examples;
 add `codex`, `grok`, and `pi` install steps as those CLIs become available in your
-environment.
+environment, and add them to the `docker-check` list too or the gate stops covering
+them. Those installs are not permitted to fail quietly: an image missing a CLI it
+claims to ship fails the build, rather than the first request that reaches for it.
+
+It runs as the unprivileged user `uhp`, uid and gid `10001`. Harness CLIs execute
+commands on behalf of authenticated clients, which is the product, but not as uid 0.
+
+Unlike the bare binary, the image presets `UHP_WORKSPACE=/workspace` — the per-session
+working directory has to exist and be writable before the first session, and an image
+that ships one is better than an image that fails on it. That default turns on the
+three capabilities a workspace implies: `files_input`, `files_output`, and — via the
+`harnesses.json` it puts there — `harness_management`. Override `UHP_WORKSPACE` or
+`UHP_HARNESS_STORE` if that is not the posture you want.
+
+`/workspace` is declared as a volume owned by the runtime user. A fresh anonymous
+volume inherits that ownership but is new on every `docker run`; to keep sessions,
+uploaded files and the harness store across restarts, mount a directory uid `10001`
+can write:
+
+```bash
+mkdir -p ./workspace && sudo chown 10001:10001 ./workspace
+docker run -p 8080:8080 -e UHP_API_KEYS=devkey \
+  -v "$PWD/workspace:/workspace" uhp-go:local
+```
+
+A bind mount keeps the host's ownership, so skipping that `chown` leaves the first
+session failing on a directory it cannot create.
 
 ## Contributing
 
