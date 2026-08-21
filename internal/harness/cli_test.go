@@ -118,13 +118,40 @@ func TestBuildArgs(t *testing.T) {
 			},
 		},
 		{
-			name: "opencode: --print-logs is not passed",
+			name: "opencode: --format json, and --print-logs is not passed",
 			h:    NewOpenCode(models),
 			req:  RunRequest{Input: "hello"},
-			want: []string{"run"},
+			// Without `--format json` opencode's default renderer writes ANSI
+			// escapes and a `> build · <model>` banner to stdout, and prints no
+			// session id anywhere — so the client is handed terminal decoration
+			// as answer text and every continuation starts a new conversation.
+			want: []string{"run", "--format", "json"},
 			checkFn: func(t *testing.T, args []string) {
 				if argvContains(args, "--print-logs") {
 					t.Fatalf("--print-logs leaks harness logs to the client: %v", args)
+				}
+			},
+		},
+		{
+			name: "opencode: --session resumes, options before it",
+			h:    NewOpenCode(models),
+			req:  RunRequest{Input: "hello", Model: "m1", NativeSessionID: "s1"},
+			want: []string{"run", "--format", "json", "--model", "m1", "--session", "s1"},
+		},
+		{
+			name: "opencode: a hyphen-leading prompt never reaches argv",
+			h:    NewOpenCode(models),
+			req:  RunRequest{Input: "--help"},
+			checkFn: func(t *testing.T, args []string) {
+				// Verified by execution: `opencode run "--help"` prints usage
+				// and runs nothing, because `message` is a yargs positional and
+				// yargs parses a leading hyphen as an option. `--` does protect
+				// it, but it also swallows every flag after it — `opencode run
+				// -- "--help" --model m1` sent `--model m1` to the model as part
+				// of the message. Stdin is the only form that carries an
+				// arbitrary prompt without either failure.
+				if argvContains(args, "--help") {
+					t.Fatalf("`opencode run --help` prints usage instead of running: %v", args)
 				}
 			},
 		},
@@ -202,6 +229,101 @@ func TestPromptNeverBecomesAnOption(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Every openCode*Event below is a verbatim line of `opencode run --format
+// json` stdout, captured 2026-08-21 from opencode 1.14.41. Same rule as the
+// model fixtures in models_test.go: a line written from memory would only move
+// the guess issue #13 exists to remove into the tests and let them pass.
+const (
+	openCodeStepStartEvent  = `{"type":"step_start","timestamp":1787318971761,"sessionID":"ses_fdb7cdbe1ffeFKmuIMghX7MCis","part":{"id":"prt_024832d6d001FAOns2VqM4At63","messageID":"msg_024832481001VmFtd8heERcvNR","sessionID":"ses_fdb7cdbe1ffeFKmuIMghX7MCis","type":"step-start"}}`
+	openCodeTextEvent       = `{"type":"text","timestamp":1787318979538,"sessionID":"ses_fdb7cdbe1ffeFKmuIMghX7MCis","part":{"id":"prt_024834b9b001bJLaBBTnOHp9xX","messageID":"msg_0248341b4001EkO13YqlWp7fMo","sessionID":"ses_fdb7cdbe1ffeFKmuIMghX7MCis","type":"text","text":"It printed ` + "`HELLO_PROBE`" + `.","time":{"start":1787318979483,"end":1787318979537}}}`
+	openCodeStepFinishEvent = `{"type":"step_finish","timestamp":1787318979539,"sessionID":"ses_fdb7cdbe1ffeFKmuIMghX7MCis","part":{"id":"prt_024834bd20019utsDe30f0ZU1x","reason":"stop","messageID":"msg_0248341b4001EkO13YqlWp7fMo","sessionID":"ses_fdb7cdbe1ffeFKmuIMghX7MCis","type":"step-finish","tokens":{"total":22547,"input":124,"output":23,"reasoning":0,"cache":{"write":0,"read":22400}},"cost":0}}`
+	openCodeToolUseEvent    = `{"type":"tool_use","timestamp":1787318976945,"sessionID":"ses_fdb7cdbe1ffeFKmuIMghX7MCis","part":{"type":"tool","tool":"bash","callID":"call_f402fe9305654968b0fa370f","state":{"status":"completed","input":{"command":"echo HELLO_PROBE"},"output":"HELLO_PROBE\n"},"id":"prt_024832e69001tPw4Ou3E3bl3vX","sessionID":"ses_fdb7cdbe1ffeFKmuIMghX7MCis","messageID":"msg_024832481001VmFtd8heERcvNR"}}`
+	openCodeErrorEvent      = `{"type":"error","timestamp":1787319016730,"sessionID":"ses_fdb7c234fffeJRICyB0b8VAws7","error":{"name":"UnknownError","data":{"message":"Model not found: bogus/nope."}}}`
+
+	// The two text parts of one run that said "Alpha", ran a bash tool, then
+	// said "Gamma". Neither part carries a separator of its own, and opencode's
+	// own renderer printed them as two lines.
+	openCodeTextEventAlpha = `{"type":"text","timestamp":1787319916361,"sessionID":"ses_fdb6e87f3ffe2R25Auz5EtTG9f","part":{"id":"prt_02491958f001oo9nHhn2lE4oD2","messageID":"msg_024917866001BhYdOvTD7p08Wf","sessionID":"ses_fdb6e87f3ffe2R25Auz5EtTG9f","type":"text","text":"Alpha","time":{"start":1787319915919,"end":1787319916359}}}`
+	openCodeTextEventGamma = `{"type":"text","timestamp":1787319919562,"sessionID":"ses_fdb6e87f3ffe2R25Auz5EtTG9f","part":{"id":"prt_02491a3a60011VcKInj9WEnIDI","messageID":"msg_02491974d001NZ2Zx8KhHXi93i","sessionID":"ses_fdb6e87f3ffe2R25Auz5EtTG9f","type":"text","text":"Gamma","time":{"start":1787319919526,"end":1787319919561}}}`
+)
+
+func TestParseOpenCodeLine(t *testing.T) {
+	t.Run("step_start yields the native session id", func(t *testing.T) {
+		got := parseOpenCodeLine(openCodeStepStartEvent)
+		if len(got) != 1 || got[0].Type != UpdateSessionID {
+			t.Fatalf("got %+v, want one %s update", got, UpdateSessionID)
+		}
+		if got[0].SessionID != "ses_fdb7cdbe1ffeFKmuIMghX7MCis" {
+			t.Errorf("session id = %q", got[0].SessionID)
+		}
+	})
+
+	t.Run("text yields the answer", func(t *testing.T) {
+		got := parseOpenCodeLine(openCodeTextEvent)
+		if len(got) != 1 || got[0].Type != UpdateDelta {
+			t.Fatalf("got %+v, want one %s update", got, UpdateDelta)
+		}
+		if got[0].Delta != "It printed `HELLO_PROBE`.\n" {
+			t.Errorf("delta = %q", got[0].Delta)
+		}
+	})
+
+	// A run that interleaves prose with tool calls emits one text part per
+	// stretch of prose, and no part carries a separator of its own. Deltas are
+	// concatenated into a single output_text, so emitting them unchanged runs
+	// two sentences together — "Alpha" and "Gamma" become "AlphaGamma". The
+	// separator is a newline because that is what opencode's own renderer
+	// prints between the same two parts.
+	t.Run("consecutive text parts do not run together", func(t *testing.T) {
+		var answer string
+		for _, line := range []string{openCodeTextEventAlpha, openCodeTextEventGamma} {
+			for _, upd := range parseOpenCodeLine(line) {
+				answer += upd.Delta
+			}
+		}
+		if answer != "Alpha\nGamma\n" {
+			t.Errorf("answer = %q, want %q", answer, "Alpha\nGamma\n")
+		}
+	})
+
+	// An `error` event is the only signal that a run failed: opencode exits 0
+	// after printing one, so a harness that ignored it would report a task that
+	// never ran as completed with empty output. Verified by execution —
+	// `opencode run --model bogus/nope` prints this line and exits 0.
+	t.Run("error fails the run, carrying the CLI's own words", func(t *testing.T) {
+		got := parseOpenCodeLine(openCodeErrorEvent)
+		if len(got) != 1 || got[0].Type != UpdateFailed {
+			t.Fatalf("got %+v, want one %s update", got, UpdateFailed)
+		}
+		if got[0].Err == nil {
+			t.Fatal("failure carries no error")
+		}
+		if !strings.Contains(got[0].Err.Error(), "Model not found: bogus/nope.") {
+			t.Errorf("error drops the CLI's message: %v", got[0].Err)
+		}
+	})
+
+	// step_finish is per step, not per run — a two-step run emits two, and the
+	// second reported input=124 against the first's 18354. task_service applies
+	// usage last-write-wins, so emitting it would publish one step's tokens as
+	// the run's total. UHP allows a null usage; it does not allow a wrong one.
+	t.Run("nothing is invented from events that carry no answer", func(t *testing.T) {
+		for _, line := range []string{openCodeStepFinishEvent, openCodeToolUseEvent} {
+			if got := parseOpenCodeLine(line); len(got) != 0 {
+				t.Errorf("line produced %+v, want nothing:\n  %s", got, line)
+			}
+		}
+	})
+
+	t.Run("a non-JSON line is not answer text", func(t *testing.T) {
+		for _, line := range []string{"", "not json", "▀▀▀▀ █▀▀▀ ▀▀▀▀"} {
+			if got := parseOpenCodeLine(line); len(got) != 0 {
+				t.Errorf("%q produced %+v, want nothing", line, got)
+			}
+		}
+	})
 }
 
 func TestValidateModel(t *testing.T) {

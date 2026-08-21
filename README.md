@@ -161,9 +161,10 @@ list it already holds. Cancelling an already-terminal task or an idle session st
 succeeds whatever the harness advertises (Sessions §4): there is no work to stop, so
 nothing is being promised that cannot be delivered.
 
-Of the five bases shipped here, `claude-code` and `codex` advertise `sessions`; all five
-advertise `cancellation`, because cancellation belongs to the shared runner — every harness
-runs in its own process group and is stopped by killing it — rather than to any one CLI.
+Of the five bases shipped here, `claude-code`, `codex` and `opencode` advertise `sessions`;
+all five advertise `cancellation`, because cancellation belongs to the shared runner — every
+harness runs in its own process group and is stopped by killing it — rather than to any one
+CLI.
 
 A stream that has gone 15 seconds with nothing to send writes an SSE comment line
 (`: keep-alive`). UHP tells clients to time a stream out on inactivity rather than on total
@@ -374,9 +375,10 @@ overstate it:
 
 "Verified" means the flag was read from that CLI's own `--help` on a machine where it is
 installed. The two marked **unverified** are documented for Claude Code but have not been
-run against the real binary here, so they carry the same warning issue #13 carries for
-opencode's prompt delivery. If either is wrong the task fails to start rather than running
-with its tools quietly unblocked, which is the right direction for an unverified claim.
+run against the real binary here — the last claim in this repository still written from
+documentation rather than from execution, opencode's prompt delivery having been settled by
+issue #13. If either is wrong the task fails to start rather than running with its tools
+quietly unblocked, which is the right direction for an unverified claim.
 
 Where a runtime cannot hard-block a tool, the restriction is conveyed as a standing
 instruction and described to the model as unenforced — never dropped. §4.3 is explicit
@@ -550,8 +552,11 @@ delivers it for every harness.
 harness advertising `sessions` builds the same argv with and without a native session id.
 The other half is not mechanically checkable: the id has to be *discovered* from the CLI's
 own output by `ParseLine` before there is anything to pass back, and a `passthroughParseLine`
-harness can never produce one. `opencode` is the worked example, in the comment on its
-declaration. Check both halves by hand before you claim `sessions`.
+harness can never produce one. `opencode` is the worked example, and it is worked in both
+directions: it once carried the flag without the parser, so every continuation silently
+started a new conversation, and issue #13 restored the two halves together — `--format json`
+so the CLI prints its `sessionID`, `parseOpenCodeLine` to read it, then the capability.
+Check both halves by hand before you claim `sessions`.
 
 ## Testing
 

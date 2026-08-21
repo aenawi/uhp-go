@@ -48,12 +48,13 @@ func NewClaude(models []string) *CLIHarness {
 		ParseLine: parseClaudeLine,
 
 		// UNVERIFIED — both flags are documented for Claude Code, but unlike
-		// grok's and pi's they have not been run against the real binary here,
-		// so they carry the same warning issue #13 carries for opencode's
-		// prompt delivery. If either is wrong the failure is loud (the CLI
-		// rejects the flag and the task fails to start) rather than silent,
-		// which is the right direction for an unverified claim: a harness that
-		// appeared to run with its tools un-blocked would be worse.
+		// grok's and pi's they have not been run against the real binary here.
+		// With issue #13 closed these are the last claims in this package still
+		// written from documentation rather than from execution. If either is
+		// wrong the failure is loud (the CLI rejects the flag and the task fails
+		// to start) rather than silent, which is the right direction for an
+		// unverified claim: a harness that appeared to run with its tools
+		// un-blocked would be worse.
 		MCPArgs: func(configPath string) []string {
 			return []string{"--mcp-config", configPath}
 		},

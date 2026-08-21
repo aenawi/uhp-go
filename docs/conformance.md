@@ -56,8 +56,8 @@ Three things to know before reading a result:
 - **Pick a harness that advertises what the checks exercise.** The `capabilities` list on a
   harness object is now enforced rather than reported: a `previous_response_id` sent to a
   harness without `sessions` is refused `422`, as is a cancel sent to one without
-  `cancellation`. Of the five bases here only `claude-code` and `codex` advertise
-  `sessions`, so a run pointed at `grok-cli`, `opencode` or `pi` fails the session and
+  `cancellation`. Of the five bases here only `claude-code`, `codex` and `opencode`
+  advertise `sessions`, so a run pointed at `grok-cli` or `pi` fails the session and
   continuation checks by design — the refusal is the honest answer, but it is not a
   conformance measurement of this server's session support.
 
@@ -107,9 +107,9 @@ tests that skills, MCP servers and disabled tools round-trip through the API; it
 test whether the agent was actually prevented from using a tool. Two of the three
 mechanisms for `claude-code` — `--disallowedTools` and `--mcp-config` — are documented but
 have not been run against the real binary, and are marked UNVERIFIED in
-`internal/harness/claude.go` for the same reason issue #13 marks opencode's prompt
-delivery. `grok-cli` and `pi` were read from their own `--help` on a machine where they are
-installed. See the delivery table in the README.
+`internal/harness/claude.go`. They are now the only such claim left: issue #13 settled
+opencode's prompt delivery by execution. `grok-cli` and `pi` were read from their own
+`--help` on a machine where they are installed. See the delivery table in the README.
 
 **Nothing in the suite watches a silent stream.** Every streaming check asks a harness to
 answer, so events arrive promptly and the gap Errors §5 is about never opens. Stream
