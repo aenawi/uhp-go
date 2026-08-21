@@ -25,6 +25,18 @@ type Event struct {
 	OutputIndex  *int   `json:"output_index,omitempty"`
 	ContentIndex *int   `json:"content_index,omitempty"`
 
+	// ResponseID and SessionID say which task an event came from, and are set
+	// only on a harness feed.
+	//
+	// A task's own stream carries one task, so naming it on every event would
+	// be noise a client already has. A feed multiplexes every task on a
+	// harness, and without these two an event cannot be attributed to
+	// anything: a `response.output_text.delta` names an item, not a response,
+	// so two tasks writing at once are one interleaved text with no way to
+	// separate them again.
+	ResponseID string `json:"response_id,omitempty"`
+	SessionID  string `json:"session_id,omitempty"`
+
 	// Set only on `error` events, which report a problem that did not end the
 	// task and MUST be followed by a terminal event.
 	Code    string  `json:"code,omitempty"`

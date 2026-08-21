@@ -151,6 +151,26 @@ func (k *idempotencyKeys) claim(key string) (*firstStart, bool) {
 	return claimed, true
 }
 
+// known reports whether a key already names a task this server started.
+//
+// It answers a question `claim` cannot be asked without also taking the key:
+// whether a stream exists to resume. A caller carrying a resume point for a key
+// nobody has used is holding a resume point for a stream that does not exist,
+// and starting one and skipping into it would silently discard its opening
+// events.
+// It sweeps first, exactly as claim does, because the answer has to be the one
+// claim would give a moment later. A key that is expired but not yet swept
+// would otherwise be reported as known, and the claim behind it would sweep it
+// and start a fresh task — which is the very case the caller asked about.
+func (k *idempotencyKeys) known(key string) bool {
+	now := k.clock()
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.evictExpired(now)
+	_, ok := k.byKey[key]
+	return ok
+}
+
 // settle records what the first request produced and wakes everything waiting
 // on it.
 //

@@ -70,6 +70,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /v1/harnesses/{id}", withVersion(s.withAuth(s.handleDeleteHarness)))
 	s.mux.HandleFunc("GET /v1/harnesses/{id}", withVersion(s.withAuth(s.handleGetHarness)))
 	s.mux.HandleFunc("GET /v1/harnesses/{id}/models", withVersion(s.withAuth(s.handleHarnessModels)))
+	s.mux.HandleFunc("GET /v1/harnesses/{id}/events", withVersion(s.withAuth(s.handleHarnessEvents)))
 	s.mux.HandleFunc("GET /v1/harnesses/{id}/skills/{skill_id}/files",
 		withVersion(s.withAuth(s.handleHarnessSkillFiles)))
 	s.mux.HandleFunc("GET /v1/models", withVersion(s.withAuth(s.handleListModels)))
@@ -245,6 +246,29 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A resume point only means something against a stream this server has
+	// already started, and the only way a POST reaches one is by repeating an
+	// idempotency key whose first request is still remembered. Anything else
+	// starts a fresh task whose stream begins at 0, and skipping into that
+	// would silently swallow its opening events — the `response.created` a
+	// client needs, and every delta before the resume point.
+	//
+	// Checking the key is known, rather than merely present, is what makes the
+	// refusal true of the case that actually happens: keys live in memory and
+	// expire, so a retry can arrive with a perfectly well-formed key that no
+	// longer names anything.
+	at, usable := resumeFrom(r)
+	if !usable {
+		writeInvalidLastEventID(w)
+		return
+	}
+	if at.present && !s.tasks.ResumableStream(idempotency) {
+		writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input",
+			"Last-Event-ID resumes a stream this server already started; send it with "+
+				"the Idempotency-Key of the request that started that stream")
+		return
+	}
+
 	var body createTaskBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		if writeIfTooLarge(w, err, s.maxBodyBytes) {
@@ -294,5 +318,17 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.streamSSE(w, r, run)
+	// Checked only now, because until StartTask returns there is no stream to
+	// check a resume point against. A run retains its log whole, so the lower
+	// bound is always zero and only the upper one can bite: a `Last-Event-ID`
+	// past what the original produced would otherwise open a stream that stays
+	// empty.
+	from := service.FromOldest
+	if at.present {
+		if !resumable(w, at.from, run.Oldest(), run.Head()) {
+			return
+		}
+		from = at.from
+	}
+	s.streamSSE(w, r, from, run.Events)
 }

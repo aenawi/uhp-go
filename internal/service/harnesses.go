@@ -169,6 +169,35 @@ func (s *TaskService) GetHarness(ctx context.Context, id string) (domain.Harness
 	return s.harnessView(cfg), true, nil
 }
 
+// HarnessFeed answers GET /v1/harnesses/{id}/events: the live event stream of
+// one harness, for a client that wants to follow the work rather than the
+// request that started it.
+//
+// The harness is resolved first so that a stream is only ever opened against
+// one that exists. Opening one for an unknown id would look identical to a
+// harness that has nothing to say, and a client would wait on it indefinitely
+// for events that can never arrive.
+func (s *TaskService) HarnessFeed(ctx context.Context, id string) (*Feed, bool, error) {
+	h, ok, err := s.GetHarness(ctx, id)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	return s.runs.feed(h.ID), true, nil
+}
+
+// canonicalHarnessID is the id a harness answers to, whichever alias a request
+// used to name it. A managed harness carries its own; a compiled-in one is
+// resolved through the registry, which knows the base name as an alias.
+func canonicalHarnessID(cfg domain.HarnessConfig, requested string, reg Registry) string {
+	if cfg.ID != "" {
+		return cfg.ID
+	}
+	if canonical, ok := reg.Resolve(requested); ok {
+		return canonical
+	}
+	return requested
+}
+
 // HarnessSkillFiles answers GET /v1/harnesses/{id}/skills/{skill_id}/files.
 //
 // Harnesses §4.2 requires the complete file list, and requires that a round
@@ -341,6 +370,11 @@ func (s *TaskService) DeleteHarness(ctx context.Context, id string) error {
 	if err := s.harnesses.DeleteHarness(ctx, id); err != nil {
 		return fmt.Errorf("%w: delete harness: %v", ErrStorage, err)
 	}
+	// Anyone following this harness is told, by their stream ending. Leaving it
+	// open would leave them waiting on something that cannot produce another
+	// event, and the history they were watching is still readable through the
+	// sessions and responses this delete deliberately keeps.
+	s.runs.closeFeed(id)
 	return nil
 }
 

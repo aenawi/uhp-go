@@ -3,9 +3,12 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/service"
@@ -24,9 +27,14 @@ func (s *Server) waitForResult(ctx context.Context, task *domain.Task, run *serv
 	return s.tasks.GetTask(context.WithoutCancel(ctx), task.ID)
 }
 
-// streamSSE subscribes to the run's event log and writes it as Server-Sent
-// Events. Disconnecting merely unsubscribes.
-func (s *Server) streamSSE(w http.ResponseWriter, r *http.Request, run *service.Run) {
+// subscription is how a stream is read, whichever stream it is: a task's own
+// run or a harness's feed. Both take the same four arguments and mean the same
+// thing by them, so the transport writes SSE once rather than once per source.
+type subscription func(context.Context, int, service.IdleTick, func(domain.Event) error) error
+
+// streamSSE subscribes to an event log and writes it as Server-Sent Events,
+// starting at sequence number `from`. Disconnecting merely unsubscribes.
+func (s *Server) streamSSE(w http.ResponseWriter, r *http.Request, from int, events subscription) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "server_error", "streaming_unsupported",
@@ -54,16 +62,130 @@ func (s *Server) streamSSE(w http.ResponseWriter, r *http.Request, run *service.
 			return nil
 		},
 	}
-	err := run.Events(r.Context(), idle, func(ev domain.Event) error {
+	err := events(r.Context(), from, idle, func(ev domain.Event) error {
 		if err := writeSSE(w, ev); err != nil {
 			return err
 		}
 		flusher.Flush()
 		return nil
 	})
-	if err != nil && r.Context().Err() == nil {
-		s.log.Error("stream failed", "error", err)
+	if err == nil || r.Context().Err() != nil {
+		return
 	}
+
+	// A subscriber can fall out of a bounded feed's window while it is reading,
+	// if it is slower than the harness is busy. The status line is long gone by
+	// then, so the only place left to say so is the stream itself — and a
+	// stream that simply stops is indistinguishable from a dropped socket, so
+	// the client would reconnect, be refused for the same gap, and never learn
+	// why. One error event before the end is what turns that into something it
+	// can act on.
+	//
+	// Streaming §4 requires an `error` event to be followed by a terminal
+	// event, and this one is not. That rule is about a task's stream, which
+	// ends terminally; a feed has no terminal event to follow anything with,
+	// and staying silent is the worse of the two departures.
+	var gap *service.EventGapError
+	if errors.As(err, &gap) {
+		// Numbered where the subscriber had got to, not at the recovery point:
+		// gap.Oldest is behind what it has already consumed, and a
+		// sequence_number that goes backwards is dropped by any client that
+		// deduplicates on it — losing the one event that explains what
+		// happened. The recovery point is in the message, where it can be read
+		// without being mistaken for a position in the stream.
+		_ = writeSSEClearingID(w, domain.Event{
+			Type: "error", Seq: gap.From,
+			Code: vendorCodeEventGap,
+			Message: fmt.Sprintf("this stream has moved on; events before %d are no longer "+
+				"retained — reconnect without a Last-Event-ID to resume from there", gap.Oldest),
+		})
+		flusher.Flush()
+		return
+	}
+	s.log.Error("stream failed", "error", err)
+}
+
+// maxEventID bounds a `Last-Event-ID` to a number this server could plausibly
+// have written.
+//
+// Without a bound, the largest int parses cleanly, passes the sign check and
+// wraps to the smallest int when the +1 below is applied — which reads as a
+// negative resume point and defeats every check downstream that assumes one
+// counts upwards. A billion events on one stream is far beyond anything this
+// server produces, so refusing above it costs nothing real.
+//
+// It is kept under the 32-bit `int` range rather than at it, so that this
+// package still builds and behaves the same way on a 32-bit target.
+const maxEventID = 1 << 30
+
+// resume is where a stream should start, and whether the client asked at all.
+//
+// The two are not the same question and collapsing them is a bug: "no header"
+// and "resume from 0" both mean a starting sequence number of zero, but a feed
+// that has evicted its first events must refuse the second and serve the
+// first. `present` is what keeps them apart.
+type resume struct {
+	from    int
+	present bool
+}
+
+// resumeFrom reads the SSE `Last-Event-ID` header, reporting where to start
+// and whether the header was usable at all.
+//
+// Issue #8: resumption MUST start at the event *after* the one named and MUST
+// NOT replay what the client already has, which is why `from` is the id plus
+// one rather than the id.
+//
+// A header that is not a number this server could have issued is refused
+// rather than ignored. Ignoring it would replay the stream from the beginning
+// — the precise thing resumption exists to avoid — and the client would have
+// no way to tell that its resume point was quietly dropped.
+func resumeFrom(r *http.Request) (resume, bool) {
+	raw := strings.TrimSpace(r.Header.Get("Last-Event-ID"))
+	if raw == "" {
+		return resume{}, true
+	}
+	last, err := strconv.Atoi(raw)
+	if err != nil || last < 0 || last >= maxEventID {
+		return resume{}, false
+	}
+	return resume{from: last + 1, present: true}, true
+}
+
+// writeInvalidLastEventID refuses a header this server could not have written.
+func writeInvalidLastEventID(w http.ResponseWriter) {
+	writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input",
+		"the Last-Event-ID header must be a sequence number this server issued")
+}
+
+// resumable checks a resume point against what a stream actually holds, and
+// reports whether the stream may be opened.
+//
+// Both bounds are answered here, before any of the streaming headers are
+// written, because afterwards there is no way left to say "no" in a form a
+// client reads as a refusal: a 200 that carries nothing is indistinguishable
+// from a harness with nothing to say.
+func resumable(w http.ResponseWriter, from, oldest, head int) bool {
+	if from < oldest {
+		// `oldest_retained` is the actionable half: without it a client can
+		// only choose between replaying what it already has and being refused
+		// forever.
+		writeErrorDetail(w, http.StatusBadRequest, typeInvalidRequest, vendorCodeEventGap,
+			"the events after the given Last-Event-ID are no longer retained by this server",
+			map[string]any{"oldest_retained": oldest})
+		return false
+	}
+	if from > head {
+		// A client cannot have seen an event that was never produced, so this
+		// is a mistake rather than a client that is merely early — and it is
+		// worth saying, because the alternative is an open stream that never
+		// delivers anything the client recognises.
+		writeErrorDetail(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input",
+			"the given Last-Event-ID is past the last event this stream has produced",
+			map[string]any{"next_sequence_number": head})
+		return false
+	}
+	return true
 }
 
 // writeKeepAlive emits an SSE comment line.
@@ -81,11 +203,39 @@ func writeKeepAlive(w io.Writer) error {
 // writeSSE emits one event. Every event goes through the same shape, so the
 // stream has one schema rather than a bare task for the first event and a
 // wrapper for the rest.
+//
+// The `id:` line is the event's own sequence number, and it is what makes
+// resumption work without the client having to parse anything: an SSE client
+// remembers the last id it saw and sends it back as `Last-Event-ID` when it
+// reconnects, which is the mechanism issue #8 asks for. Emitting it is also
+// how a client discovers resumption is on offer — a stream with no ids has
+// nothing to resume from.
 func writeSSE(w io.Writer, ev domain.Event) error {
 	b, err := json.Marshal(ev)
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, b)
+	_, err = fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.Seq, ev.Type, b)
+	return err
+}
+
+// writeSSEClearingID emits an event and clears the client's resume point.
+//
+// The empty `id:` field is doing the work, and the three options here are not
+// close. A real id would hand the client a resume point that is still outside
+// the window, so every reconnection recovers one sequence number instead of
+// rejoining. *No* id line leaves the client's own stale id in place — which
+// looks harmless until you follow it through EventSource: it reconnects with
+// that id, is refused with a 400, and a non-2xx makes the user agent fail the
+// connection permanently rather than retry. An empty value resets the buffer,
+// so the automatic reconnection carries no `Last-Event-ID` at all and is
+// served from the oldest event still retained, which is exactly what this
+// notice tells the client to do.
+func writeSSEClearingID(w io.Writer, ev domain.Event) error {
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "id: \nevent: %s\ndata: %s\n\n", ev.Type, b)
 	return err
 }

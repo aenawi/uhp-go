@@ -110,6 +110,7 @@ internal/config/           environment-variable configuration loader
 | `DELETE /v1/harnesses/{id}` | Delete a harness; its sessions and responses are kept |
 | `GET /v1/harnesses/{id}/skills/{skill_id}/files` | A skill's complete folder, nested and binary members included |
 | `GET /v1/harnesses/{id}/models` | Models for one harness, with computed availability |
+| `GET /v1/harnesses/{id}/events` | Live SSE feed of every task on that harness; resumable with `Last-Event-ID` |
 | `GET /v1/models` | Model catalogue by backend |
 | `GET /v1/sessions` | List sessions; cursor paging via `limit`, `cursor`, `harness` |
 | `GET /v1/sessions/{id}` | One session |
@@ -147,6 +148,54 @@ A stream that has gone 15 seconds with nothing to send writes an SSE comment lin
 duration, and an agent that thinks for two minutes before its first token would otherwise
 look exactly like a dropped connection. A comment carries no data and is discarded by any
 conformant SSE client, so nothing downstream has to know about it.
+
+## Reconnecting
+
+A dropped connection never aborts a task — the supervisor owns the run, and a disconnect
+only unsubscribes. Getting the rest of the answer afterwards is what this section is about.
+
+Every event on every stream carries an SSE `id:` line holding its `sequence_number`. Send
+that back as `Last-Event-ID` and the stream resumes at the event *after* it; nothing the
+client already saw is replayed.
+
+**Following a harness.** `GET /v1/harnesses/{id}/events` is a live feed of every task
+running on one harness, not just the one you started:
+
+```bash
+curl -N http://localhost:8080/v1/harnesses/claude-code/events \
+  -H "Authorization: Bearer devkey" -H "Last-Event-ID: 41"
+```
+
+A feed numbers its own stream, because it multiplexes many tasks and each task numbers
+from zero — so the ids on a feed are the feed's, not any task's. Each event carries
+`response_id` and `session_id` so it can be attributed; a `response.output_text.delta`
+names an item, not a response, and two tasks writing at once would otherwise be one
+interleaved text with no way to separate them.
+
+A feed keeps a **reconnection window, not a history**: at least the last 512 events per
+harness. That covers the seconds between noticing a dead socket and dialling again. Omit
+`Last-Event-ID` and you get everything still in the window; send one older than it and the
+request is refused with `400 uhpgo_event_gap` and `detail.oldest_retained`, rather than
+answered from wherever the log now starts — a silently later event is a gap the client has
+no way to see. A subscriber that falls behind *while reading* gets the same thing as an
+`error` event before its stream ends — that one carries an empty `id:`, which clears the
+client's resume point so its automatic reconnection is served from the window rather than
+refused for the same gap forever. An id past the end of the stream is refused too, with
+`detail.next_sequence_number`: nobody can have seen an event that was never produced.
+Deleting a harness ends the streams following it.
+
+**Following one task.** A task's own log is retained in full for the life of the task, so
+there is no window to fall out of. Reconnect by repeating the `POST /v1/responses` with the
+original request's `Idempotency-Key` plus a `Last-Event-ID`; the retry starts nothing and
+resumes the first request's stream. A `Last-Event-ID` whose key this server does not
+remember — absent, or expired — is refused, because that request would start a fresh task
+whose stream begins at 0 and skipping into it would swallow the beginning of a stream the
+client has never seen.
+
+There is no capability flag for any of this. The capability vocabulary is the
+specification's, and inventing a key for it would be a dialect no other implementation
+speaks; the `id:` lines on the wire are how a client discovers resumption is on offer,
+which is how SSE answers that question everywhere else.
 
 ## Files
 
