@@ -171,3 +171,88 @@ func TestSaturatedServerRefusesWith503(t *testing.T) {
 			"concurrency against a bound it is not told", detail["max_concurrent_runs"])
 	}
 }
+
+// postTask sends one POST /v1/responses, optionally carrying an idempotency
+// key. `do` cannot set an arbitrary header, and the header is the whole point
+// of the tests below.
+func postTask(t *testing.T, srv *Server, key string) (int, map[string]any) {
+	t.Helper()
+	const body = `{"input":"hi","model":"m","metadata":{"harness_id":"echo"}}`
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if key != "" {
+		req.Header.Set("Idempotency-Key", key)
+	}
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	var decoded map[string]any
+	if w.Body.Len() > 0 {
+		if err := json.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
+			t.Fatalf("body is not JSON (%d): %s", w.Code, w.Body.String())
+		}
+	}
+	return w.Code, decoded
+}
+
+// Issue #7 / Tasks §6: a retry carrying the first request's Idempotency-Key
+// gets the first request's response.
+func TestIdempotentRetryReturnsTheFirstResponse(t *testing.T) {
+	srv := newTestServer()
+
+	code, first := postTask(t, srv, "retry-me")
+	if code != 200 {
+		t.Fatalf("status = %d, want 200: %v", code, first)
+	}
+	code, second := postTask(t, srv, "retry-me")
+	if code != 200 {
+		t.Fatalf("retry status = %d, want 200: %v", code, second)
+	}
+	if second["id"] != first["id"] {
+		t.Fatalf("retry returned response %v, want the first request's %v", second["id"], first["id"])
+	}
+}
+
+// The header is opt-in, and a client that omits it gets what it has always
+// got: a new task per request.
+func TestPostsWithoutAnIdempotencyKeyAreIndependent(t *testing.T) {
+	srv := newTestServer()
+
+	_, first := postTask(t, srv, "")
+	_, second := postTask(t, srv, "")
+	if second["id"] == first["id"] {
+		t.Fatalf("two keyless posts both returned %v", first["id"])
+	}
+}
+
+// A key is remembered for a day, so an absurd one is refused rather than
+// stored. Errors §3.1's `invalid_input` is the closest code and it fits: the
+// request is malformed, and no retry of it unchanged will work.
+func TestOverlongIdempotencyKeyIsRefused(t *testing.T) {
+	srv := newTestServer()
+
+	code, body := postTask(t, srv, strings.Repeat("k", maxIdempotencyKeyBytes+1))
+	if code != 400 {
+		t.Fatalf("status = %d, want 400: %v", code, body)
+	}
+	if got := errorCode(t, body); got != "invalid_input" {
+		t.Fatalf("code = %q, want invalid_input", got)
+	}
+
+	code, body = postTask(t, srv, strings.Repeat("k", maxIdempotencyKeyBytes))
+	if code != 200 {
+		t.Fatalf("a key exactly at the limit was refused: %d %v", code, body)
+	}
+}
+
+// Lifecycle §2: a capability MUST report what the server actually does. This
+// one read `false` for as long as it was unimplemented; it must move now that
+// it is not.
+func TestIdempotencyIsAdvertised(t *testing.T) {
+	srv := newTestServer()
+	_, doc := callJSON(t, srv, "GET", "/v1/uhp", "")
+	caps, _ := doc["capabilities"].(map[string]any)
+	if caps["idempotency"] != true {
+		t.Fatalf("capabilities.idempotency = %v, want true", caps["idempotency"])
+	}
+}

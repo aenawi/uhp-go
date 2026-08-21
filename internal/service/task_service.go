@@ -73,6 +73,9 @@ type TaskService struct {
 
 	// maxConcurrentRuns bounds how many harness processes may run at once.
 	maxConcurrentRuns int
+
+	// idempotency remembers which Idempotency-Key started which run (Tasks §6).
+	idempotency *idempotencyKeys
 }
 
 func NewTaskService(reg Registry, store Store, log *slog.Logger, opts ...Option) *TaskService {
@@ -84,6 +87,7 @@ func NewTaskService(reg Registry, store Store, log *slog.Logger, opts ...Option)
 		store:             store,
 		log:               log,
 		maxConcurrentRuns: DefaultMaxConcurrentRuns,
+		idempotency:       newIdempotencyKeys(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -148,15 +152,48 @@ type CreateTaskRequest struct {
 	// order they appeared. They are materialized into the session's working
 	// directory before the harness starts.
 	Attachments []Attachment
+
+	// IdempotencyKey is the client's `Idempotency-Key` header, or empty. A
+	// repeat of a key returns the first request's run instead of starting a
+	// second one (Tasks §6).
+	IdempotencyKey string
 }
 
-// StartTask resolves the target harness and session, persists the initial
+// StartTask starts a task, or — for a repeated idempotency key — returns the
+// one the first request started.
+//
+// Tasks §6 is unusually blunt about why: "Agent tasks are expensive and
+// side-effecting: a retry that runs the work twice is worse than a slow
+// answer." So a repeat waits for the first request rather than being refused,
+// and it is answered with the first request's own Run, which makes the replay
+// identical to the original for both the streaming and the non-streaming path.
+//
+// The key is resolved before anything else, including the session-busy refusal
+// in startTask. A retry arriving while its first attempt is still running is
+// precisely the case where those two rules meet, and §6 decides it: a conflict
+// is the one answer the specification names and forbids.
+func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (task *domain.Task, run *Run, err error) {
+	if req.IdempotencyKey == "" {
+		return s.startTask(ctx, req)
+	}
+	first, mine := s.idempotency.claim(req.IdempotencyKey)
+	if !mine {
+		return first.await(ctx)
+	}
+	// Deferred so that a panic in startTask still settles the claim. Every
+	// request waiting on the key would otherwise block until its own context
+	// expired, and every later retry would find a claim nothing will ever fill.
+	defer func() { s.idempotency.settle(first, task, run, err) }()
+	return s.startTask(ctx, req)
+}
+
+// startTask resolves the target harness and session, persists the initial
 // task, and hands it to a supervisor goroutine that owns it from then on.
 //
 // It returns as soon as the run is started. It does not wait for the task, and
 // the returned Run stays valid — and the task keeps running — regardless of
 // what the caller does with it.
-func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (*domain.Task, *Run, error) {
+func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*domain.Task, *Run, error) {
 	adapter, harnessCfg, ok, err := s.adapterFor(ctx, req.HarnessID)
 	if err != nil {
 		return nil, nil, err

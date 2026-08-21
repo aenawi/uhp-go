@@ -26,9 +26,10 @@ runs the suite again.
 `conformance_class` still reads `core`. It is not raised on the strength of local tests:
 the class is a claim the suite exists to falsify, and raising it before a run would make
 this file the thing asserting conformance rather than the thing recording it.
-`harness_management` reports `true`, which is a capability above the claimed class rather
-than a contradiction of it — the class is what this server guarantees, not a ceiling on
-what it offers.
+`harness_management` and `idempotency` report `true`, which are capabilities above the
+claimed class rather than contradictions of it — the class is what this server guarantees,
+not a ceiling on what it offers. Lifecycle §2 constrains the class only through
+`files_input`, `files_output` and `session_listing`.
 
 ## Reproducing it
 
@@ -68,6 +69,7 @@ Two things to know before reading a result:
 | Event model and sequencer | 5/52 | correct but still unmeasured |
 | Contract fixes | **38/52, core 37/37** | see below |
 | Session listing, inspection and turns | **42/52** | X-01, X-02, X-03, X-04 |
+| Idempotency keys | no change expected | no check sends one — see below |
 | Files: input items, artifact capture, download | not yet measured | targets X-05, X-06, X-07, and makes X-08 real |
 | Harness management: create, replace, delete | not yet measured | targets F-01, F-02, F-05, F-07 |
 | Skills as folders, MCP config, tool restrictions | not yet measured | targets F-03, F-04, F-06 |
@@ -108,6 +110,15 @@ the `EventsIdle` tests in `internal/service/supervisor_test.go` — and a green 
 not a conformance result here either. A check that would catch it has to keep a stream open
 across a harness's thinking time and assert bytes moved, which is exactly the kind of thing
 a schema inspection cannot see.
+
+**Nothing in the suite sends an `Idempotency-Key`.** The string does not appear in
+`uhp_conformance/checks.py` at all, so advertising the capability moves no check and could
+not be falsified by a run. Issue #7 is therefore held up by this repository's tests alone —
+`internal/service/idempotency_test.go` and the three `Idempotency` tests in
+`internal/transport/http/handlers_test.go` — and those assert the thing a response cannot
+show: the adapter's own run count. "MUST NOT start a second execution" is invisible from the
+wire, because one execution and two executions both return a plausible-looking task; only
+the harness knows how many times it was asked to work.
 
 **X-08 used to pass vacuously**: artifact ids could not traverse out of their container
 because the download endpoint did not exist, so every probe 404d. The endpoint exists now,

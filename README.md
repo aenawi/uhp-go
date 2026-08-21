@@ -117,7 +117,7 @@ internal/config/           environment-variable configuration loader
 | `GET /v1/sessions/{id}/files` | Every artifact of a session, including earlier tasks' |
 | `GET /v1/sessions/{id}/files/archive` | The same artifacts as one zip |
 | `POST /v1/sessions/{id}/cancel` | Stop whatever is running in a session |
-| `POST /v1/responses` | Create a task (`stream:true` for SSE, else blocks until terminal) |
+| `POST /v1/responses` | Create a task (`stream:true` for SSE, else blocks until terminal). Honours `Idempotency-Key` |
 | `GET /v1/responses/{id}` | Retrieve a task's current state and output |
 | `POST /v1/responses/{id}/cancel` | Cancel an in-flight task |
 | `POST /v1/files` | Upload a file for use as task input (`multipart/form-data`) |
@@ -125,10 +125,10 @@ internal/config/           environment-variable configuration loader
 | `GET /v1/containers/{cid}/files/{fid}/pdf` | Rendered preview — always `501 preview_unavailable` |
 | `GET /healthz` | Liveness probe |
 
-Not implemented, and reported as `false` in the discovery document: session sharing and
-idempotency. `files_input` and `files_output` are computed from configuration rather than
-asserted — `true` only when `UHP_WORKSPACE` is set, because both need a per-session
-working directory. See [Files](#files) and [Harness management](#harness-management).
+Not implemented, and reported as `false` in the discovery document: session sharing.
+`files_input` and `files_output` are computed from configuration rather than asserted —
+`true` only when `UHP_WORKSPACE` is set, because both need a per-session working
+directory. See [Files](#files) and [Harness management](#harness-management).
 
 Harness ids are `chrn_`-prefixed. The ones this server is started with derive theirs
 deterministically from the base name, so they survive a restart; a harness created over
@@ -376,6 +376,44 @@ the client the truth while it can still act on it.
 The bound is not tuned for your hardware. Raise it once you know what a run actually costs
 on the host; a value of zero or less is treated as a misconfiguration and falls back to the
 default rather than meaning "unbounded".
+
+## Idempotency
+
+**Put an `Idempotency-Key` on every retry of `POST /v1/responses`.** Without one, a retry
+after a timeout runs the task a second time — and the first may still be running, editing
+the same files in the same working directory. Errors §4 calls this the single most damaging
+mistake a UHP client can make.
+
+```bash
+KEY=$(uuidgen)
+curl -s http://localhost:8080/v1/responses -H "Authorization: Bearer devkey" \
+  -H "Content-Type: application/json" -H "Idempotency-Key: $KEY" \
+  -d '{"input":"refactor the parser","metadata":{"harness_id":"codex"}}'
+# time out, retry with the same $KEY → the same response, not a second run
+```
+
+A repeat of a key returns the first request's response and starts nothing. If the first
+request is still running, the repeat **waits for it** rather than being refused: Tasks §6 is
+explicit that a slow answer beats running expensive, side-effecting work twice, so a retry
+arriving into its own in-flight first attempt is answered with that attempt rather than with
+`409 session_busy`. Both forms work — a non-streaming retry blocks until the original is
+terminal, and a streaming one replays the original's events, with the same sequence numbers,
+from the beginning.
+
+The answer is bound to the key, not to the body. A key sent with different input still gets
+the first request's response, which is what §6 requires and is the reason to generate a
+fresh key per logical request rather than per client.
+
+Keys are kept for 24 hours **after the run they started is terminal**, not after the request
+that sent them. An agent can work for longer than a day, and dating the key from the request
+would mean the retry that finally came to collect the result is the one that finds the key
+expired and starts the work again. Keys live in memory and do not survive a restart; neither
+do responses, in the default store, so a key that outlived one would point at something that
+is gone. Both become durable together (issue #15).
+
+A request that never started anything — an unknown `harness_id`, a full server answering
+`503` — leaves its key free. Errors §4 tells a client to retry those *with the same key*,
+and a key bound to the refusal would answer the retry with the same refusal for a day.
 
 ## Extending with a new harness
 

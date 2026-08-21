@@ -188,6 +188,17 @@ func (r *Run) Events(ctx context.Context, idle IdleTick, fn func(domain.Event) e
 	}
 }
 
+// terminated reports whether the run is over, without blocking. It answers the
+// question Wait answers, for a caller that cannot afford to wait for it.
+func (r *Run) terminated() bool {
+	select {
+	case <-r.done:
+		return true
+	default:
+		return false
+	}
+}
+
 // Wait blocks until the run reaches a terminal state, or ctx is cancelled.
 // Cancelling ctx abandons the wait; it does not abandon the run.
 func (r *Run) Wait(ctx context.Context) error {
