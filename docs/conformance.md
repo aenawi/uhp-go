@@ -74,6 +74,7 @@ Two things to know before reading a result:
 | Harness management: create, replace, delete | not yet measured | targets F-01, F-02, F-05, F-07 |
 | Skills as folders, MCP config, tool restrictions | not yet measured | targets F-03, F-04, F-06 |
 | Stream keep-alives | no change expected | no check watches a silent stream — see below |
+| Harness event feed and `Last-Event-ID` resumption | no change expected | no check reconnects a stream — see below |
 
 The 33 skips in the baseline were not 33 separate defects. They cascaded from one line:
 `GET /v1/harnesses` returned `{"data": […]}` where the suite reads `harnesses`, so it could
@@ -110,6 +111,20 @@ the `EventsIdle` tests in `internal/service/supervisor_test.go` — and a green 
 not a conformance result here either. A check that would catch it has to keep a stream open
 across a harness's thinking time and assert bytes moved, which is exactly the kind of thing
 a schema inspection cannot see.
+
+**Nothing in the suite reconnects a stream.** Every streaming check opens one stream and
+reads it to its terminal event, so neither `GET /v1/harnesses/{id}/events` nor
+`Last-Event-ID` resumption (issue #8) is reachable from a run. Both are held up by this
+repository's tests alone — `internal/service/feed_test.go` and
+`internal/transport/http/harness_events_test.go`. The thing those assert is the thing a
+single connection cannot show: that a second subscriber attaching at sequence *n* is handed
+exactly the events from *n* onward and none of the ones before it.
+
+Nothing is advertised for either in the discovery document. The capability vocabulary is
+the specification's and neither feature has a key in it, so a key invented here would be a
+private dialect rather than a claim a client could rely on. What is on the wire instead is
+an SSE `id:` line per event, which is how a client discovers resumption everywhere else
+SSE is used.
 
 **Nothing in the suite sends an `Idempotency-Key`.** The string does not appear in
 `uhp_conformance/checks.py` at all, so advertising the capability moves no check and could

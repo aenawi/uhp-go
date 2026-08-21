@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
 	"github.com/aenawi/uhp-go/internal/service"
 	"github.com/aenawi/uhp-go/internal/store"
@@ -88,6 +89,21 @@ func TestDefaultKeepAliveBeatsTheProtocolBound(t *testing.T) {
 	}
 	if srv := NewServer(nil, slog.Default(), nil, 0); srv.keepAlive != defaultKeepAlive {
 		t.Fatalf("NewServer keepAlive = %s, want %s", srv.keepAlive, defaultKeepAlive)
+	}
+}
+
+// A gap notice must clear the client's resume point, not set one and not leave
+// the stale one in place. An EventSource reconnecting with an id that is
+// already outside the window gets a 400, and a non-2xx makes the user agent
+// fail the connection permanently — so leaving the id alone ends the very
+// stream this notice exists to keep alive.
+func TestGapNoticeClearsTheEventID(t *testing.T) {
+	var sb strings.Builder
+	if err := writeSSEClearingID(&sb, domain.Event{Type: "error", Seq: 12, Code: "uhpgo_event_gap"}); err != nil {
+		t.Fatalf("writeSSEClearingID: %v", err)
+	}
+	if !strings.HasPrefix(sb.String(), "id: \nevent: error\n") {
+		t.Fatalf("wrote %q, want an empty id line before the event", sb.String())
 	}
 }
 

@@ -35,12 +35,15 @@ type Run struct {
 	TaskID    string
 	SessionID string
 
-	mu     sync.Mutex
-	events []domain.Event
-	// notify is closed and replaced on every publish, which wakes every
-	// waiting subscriber without the supervisor ever blocking on one of them.
-	notify   chan struct{}
-	finished bool
+	// log is this task's own stream, retained in full: it dies with the task,
+	// so there is nothing to bound.
+	log *eventLog
+
+	// feed is the harness-wide stream this run also publishes to, so a client
+	// that never held this request can still follow the work. It is not
+	// optional — every run belongs to a harness, and a run that could be
+	// created without one would be a run whose events silently went nowhere.
+	feed *Feed
 
 	// cancel stops the underlying harness run.
 	//
@@ -60,26 +63,29 @@ type Run struct {
 	release func()
 }
 
-func newRun(taskID, sessionID string, cancel, release func()) *Run {
+func newRun(taskID, sessionID string, feed *Feed, cancel, release func()) *Run {
 	return &Run{
 		TaskID:    taskID,
 		SessionID: sessionID,
-		notify:    make(chan struct{}),
+		log:       newEventLog(0),
+		feed:      feed,
 		cancel:    cancel,
 		done:      make(chan struct{}),
 		release:   release,
 	}
 }
 
-// publish appends an event to the retained log and wakes every subscriber.
-// It never blocks on a subscriber: a slow or vanished client cannot stall the
-// task, which is the whole point of separating the two.
+// publish appends an event to this task's retained log and to its harness's
+// feed, and wakes the subscribers of both. It never blocks on a subscriber: a
+// slow or vanished client cannot stall the task, which is the whole point of
+// separating the two.
+//
+// Both writes happen here, in the one place an event enters the world, so
+// there is no path that reaches a task's own stream without also reaching the
+// harness feed — the two cannot disagree about what happened.
 func (r *Run) publish(ev domain.Event) {
-	r.mu.Lock()
-	r.events = append(r.events, ev)
-	close(r.notify)
-	r.notify = make(chan struct{})
-	r.mu.Unlock()
+	r.log.append(ev)
+	r.feed.publish(ev, r.TaskID, r.SessionID)
 }
 
 // finish gives back the run's slot, marks it terminal, and wakes everyone for
@@ -92,101 +98,29 @@ func (r *Run) finish() {
 	// and releasing afterwards makes that a race the client usually loses.
 	r.release()
 
-	r.mu.Lock()
-	r.finished = true
-	close(r.notify)
-	r.notify = make(chan struct{})
-	r.mu.Unlock()
+	r.log.close()
 	close(r.done)
 }
 
-// IdleTick asks Events to call Do every Every of silence. Its zero value asks
-// for nothing, which is what a subscriber that only wants events passes.
+// Events calls fn for every event of this run numbered `from` or later, until
+// the run is terminal or ctx is cancelled. Zero is the whole stream.
 //
-// The two fields are one decision and are meaningless apart, so they travel as
-// one value rather than as two arguments that have to be checked against each
-// other.
-type IdleTick struct {
-	Every time.Duration
-	Do    func() error
+// Because the log is retained in full, a subscriber that attaches late still
+// sees everything, and the sequence numbers it sees are the same ones every
+// other subscriber sees. Streaming and non-streaming therefore cannot
+// disagree: they read the same log. A reconnecting client passes the number it
+// last saw plus one and is handed the rest, with nothing replayed.
+func (r *Run) Events(ctx context.Context, from int, idle IdleTick, fn func(domain.Event) error) error {
+	return r.log.subscribe(ctx, from, idle, fn)
 }
 
-func (t IdleTick) wanted() bool { return t.Every > 0 && t.Do != nil }
+// Oldest is the oldest sequence number this run can still replay, which is
+// always zero: a task's log is retained whole for as long as the task is.
+func (r *Run) Oldest() int { return r.log.retained() }
 
-// Events calls fn for every event of this run, starting from the first one,
-// until the run is terminal or ctx is cancelled.
-//
-// Because the log is retained and replayed from index zero, a subscriber that
-// attaches late still sees the whole stream, and the sequence numbers it sees
-// are the same ones every other subscriber sees. Streaming and non-streaming
-// therefore cannot disagree: they read the same log.
-//
-// A run that is working says nothing, and silence is also what a dead
-// connection sounds like. idle is how a subscriber hears the difference: its
-// Do runs on the same goroutine as fn, in the gaps between events, and an
-// error from it ends the subscription exactly as an error from fn does. What
-// to put on the wire in that gap belongs to the transport; all this knows is
-// that the gap happened.
-func (r *Run) Events(ctx context.Context, idle IdleTick, fn func(domain.Event) error) error {
-	// A nil channel blocks forever in a select, so a subscriber that asked for
-	// no tick reads exactly as it did before there was one.
-	var tick *time.Ticker
-	var ticks <-chan time.Time
-	if idle.wanted() {
-		tick = time.NewTicker(idle.Every)
-		defer tick.Stop()
-		ticks = tick.C
-	}
-
-	i := 0
-	for {
-		r.mu.Lock()
-		delivered := false
-		for i < len(r.events) {
-			ev := r.events[i]
-			i++
-			r.mu.Unlock()
-			if err := fn(ev); err != nil {
-				return err
-			}
-			delivered = true
-			r.mu.Lock()
-		}
-		if r.finished {
-			r.mu.Unlock()
-			return nil
-		}
-		wait := r.notify
-		r.mu.Unlock()
-
-		// An event is itself proof the connection is alive, so the countdown
-		// starts again from the last one rather than running on a fixed
-		// schedule through a busy stream.
-		//
-		// The channel is drained first: a tick that landed while fn was
-		// writing survives Reset, and would then fire on the very next select
-		// — a keep-alive immediately after an event, which is the one case
-		// this reset exists to avoid.
-		if delivered && tick != nil {
-			tick.Stop()
-			select {
-			case <-tick.C:
-			default:
-			}
-			tick.Reset(idle.Every)
-		}
-
-		select {
-		case <-wait:
-		case <-ticks:
-			if err := idle.Do(); err != nil {
-				return err
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-}
+// Head is one past the newest sequence number this run has published. A
+// resumption from anything later names an event the client cannot have seen.
+func (r *Run) Head() int { return r.log.head() }
 
 // terminated reports whether the run is over, without blocking. It answers the
 // question Wait answers, for a caller that cannot afford to wait for it.
@@ -229,6 +163,16 @@ type supervisor struct {
 	// fixed at construction, so reading it needs no lock.
 	live    int
 	maxLive int
+
+	// feeds is one live event stream per harness, and unlike the two maps above
+	// its entries outlive the runs that write to them: a client following a
+	// harness is waiting precisely when nothing is running on it.
+	//
+	// A deleted harness leaves an entry behind — see closeFeed for why — but
+	// the entry it leaves holds no events, so what accumulates is one small
+	// closed feed per harness ever deleted rather than the window each one was
+	// retaining.
+	feeds map[string]*Feed
 }
 
 func newSupervisor(maxLive int) *supervisor {
@@ -238,7 +182,56 @@ func newSupervisor(maxLive int) *supervisor {
 	return &supervisor{
 		byTask:    make(map[string]*Run),
 		bySession: make(map[string]*Run),
+		feeds:     make(map[string]*Feed),
 		maxLive:   maxLive,
+	}
+}
+
+// feed returns a harness's live event stream, minting it if this is the first
+// anyone has asked.
+//
+// It is created on demand rather than alongside the harness because a harness
+// can also arrive from a file on disk at startup or from another process
+// writing the harness store, and a feed that only existed for harnesses this
+// process created would be missing for exactly those.
+func (s *supervisor) feed(harnessID string) *Feed {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.feeds[harnessID]
+	if !ok {
+		f = newFeed(feedRetention)
+		s.feeds[harnessID] = f
+	}
+	return f
+}
+
+// closeFeed ends every subscription to a harness's feed. A subscriber left
+// waiting on a harness that no longer exists would wait forever: no event is
+// coming, and nothing else would ever tell it why.
+//
+// A closed feed stays in the map rather than the entry being deleted.
+// Deleting it would leave a window in which a subscription that had already
+// checked the harness exists mints a fresh, open feed for one that has just
+// been deleted — and hangs on it. Leaving a closed one makes that race end the
+// subscription instead, which is the answer it was going to get a moment
+// earlier anyway. Nothing reuses the entry, because a `chrn_` id is random per
+// create and the compiled-in harnesses cannot be deleted at all.
+//
+// What stays is a *new* empty feed, not the one being closed. The retained
+// window is the expensive part — every `response.created` in it pins a whole
+// task — and a marker that says "this harness is gone" needs to remember
+// nothing at all. The real feed is closed too, for the subscribers already on
+// it.
+func (s *supervisor) closeFeed(harnessID string) {
+	s.mu.Lock()
+	previous := s.feeds[harnessID]
+	tombstone := newFeed(feedRetention)
+	s.feeds[harnessID] = tombstone
+	s.mu.Unlock()
+
+	tombstone.close()
+	if previous != nil {
+		previous.close()
 	}
 }
 

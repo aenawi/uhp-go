@@ -217,14 +217,14 @@ func TestNonPositiveLimitFallsBackToTheDefault(t *testing.T) {
 // to produce something on the wire. Events on its own is silent between
 // publishes, so a transport needs a tick it can hang a keep-alive off.
 func TestIdleTickFiresWhileNothingIsPublished(t *testing.T) {
-	run := newRun("resp_idle", "sess_idle", func() {}, func() {})
+	run := newRun("resp_idle", "sess_idle", newFeed(0), func() {}, func() {})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	ticks := make(chan struct{}, 8)
 	done := make(chan error, 1)
 	go func() {
-		done <- run.Events(ctx, IdleTick{
+		done <- run.Events(ctx, 0, IdleTick{
 			Every: time.Millisecond,
 			Do: func() error {
 				select {
@@ -259,7 +259,7 @@ func TestIdleTickFiresWhileNothingIsPublished(t *testing.T) {
 // subscriber sees, and in what order, must not depend on whether the transport
 // asked for one.
 func TestIdleTickChangesNoEventOrder(t *testing.T) {
-	run := newRun("resp_both", "sess_both", func() {}, func() {})
+	run := newRun("resp_both", "sess_both", newFeed(0), func() {}, func() {})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -269,7 +269,7 @@ func TestIdleTickChangesNoEventOrder(t *testing.T) {
 	run.finish()
 
 	var got []int
-	err := run.Events(ctx, IdleTick{Every: time.Millisecond, Do: func() error { return nil }},
+	err := run.Events(ctx, 0, IdleTick{Every: time.Millisecond, Do: func() error { return nil }},
 		func(ev domain.Event) error { got = append(got, ev.Seq); return nil })
 	if err != nil {
 		t.Fatalf("Events: %v", err)
@@ -283,7 +283,7 @@ func TestIdleTickChangesNoEventOrder(t *testing.T) {
 // error it returns has to end the subscription the same way an event write
 // failure does.
 func TestIdleTickErrorEndsTheSubscription(t *testing.T) {
-	run := newRun("resp_gone", "sess_gone", func() {}, func() {})
+	run := newRun("resp_gone", "sess_gone", newFeed(0), func() {}, func() {})
 	defer run.finish()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -291,7 +291,7 @@ func TestIdleTickErrorEndsTheSubscription(t *testing.T) {
 	want := errors.New("client went away")
 	done := make(chan error, 1)
 	go func() {
-		done <- run.Events(ctx, IdleTick{Every: time.Millisecond, Do: func() error { return want }},
+		done <- run.Events(ctx, 0, IdleTick{Every: time.Millisecond, Do: func() error { return want }},
 			func(domain.Event) error { return nil })
 	}()
 

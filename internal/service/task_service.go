@@ -187,6 +187,16 @@ func (s *TaskService) StartTask(ctx context.Context, req CreateTaskRequest) (tas
 	return s.startTask(ctx, req)
 }
 
+// ResumableStream reports whether an idempotency key names a stream this
+// server has already started, and so whether a `Last-Event-ID` sent alongside
+// it resumes anything.
+//
+// An empty key names nothing: a request without one always starts a fresh
+// task, whose stream begins at zero and has no resume point to offer.
+func (s *TaskService) ResumableStream(key string) bool {
+	return key != "" && s.idempotency.known(key)
+}
+
 // startTask resolves the target harness and session, persists the initial
 // task, and hands it to a supervisor goroutine that owns it from then on.
 //
@@ -329,7 +339,11 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 		return task, nil, err
 	}
 
-	run := newRun(task.ID, sessionID, func() {
+	// The feed is keyed on the canonical id, so a task started through an alias
+	// still shows up on the stream a client opened against the harness itself.
+	feed := s.runs.feed(canonicalHarnessID(harnessCfg, req.HarnessID, s.registry))
+
+	run := newRun(task.ID, sessionID, feed, func() {
 		if err := adapter.Cancel(runCtx, task.ID); err != nil {
 			s.log.Debug("adapter cancel", "error", err, "task_id", task.ID)
 		}

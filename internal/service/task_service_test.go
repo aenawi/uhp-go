@@ -145,7 +145,7 @@ func collect(t *testing.T, run *Run) []domain.Event {
 	var evs []domain.Event
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := run.Events(ctx, IdleTick{}, func(ev domain.Event) error {
+	if err := run.Events(ctx, 0, IdleTick{}, func(ev domain.Event) error {
 		evs = append(evs, ev)
 		return nil
 	}); err != nil {
