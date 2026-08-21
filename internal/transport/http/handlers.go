@@ -19,7 +19,7 @@ import (
 
 type Server struct {
 	mux          *http.ServeMux
-	tasks        *service.TaskService
+	tasks        TaskService
 	log          *slog.Logger
 	apiKeys      []string
 	maxBodyBytes int64
@@ -41,7 +41,7 @@ const defaultMaxBodyBytes = 8 << 20
 // timeout firing on a run that is still working.
 const defaultKeepAlive = 15 * time.Second
 
-func NewServer(tasks *service.TaskService, log *slog.Logger, apiKeys []string, maxBodyBytes int64) *Server {
+func NewServer(tasks TaskService, log *slog.Logger, apiKeys []string, maxBodyBytes int64) *Server {
 	if maxBodyBytes <= 0 {
 		maxBodyBytes = defaultMaxBodyBytes
 	}
