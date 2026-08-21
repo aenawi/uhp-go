@@ -45,13 +45,27 @@ func TestBuildArgs(t *testing.T) {
 			name: "claude: --verbose is mandatory with stream-json",
 			h:    NewClaude(models),
 			req:  RunRequest{Input: "hello"},
-			want: []string{"-p", "--output-format", "stream-json", "--verbose", "--bare"},
+			want: []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--bare"},
 		},
 		{
 			name: "claude: model and resume",
 			h:    NewClaude(models),
 			req:  RunRequest{Input: "hello", Model: "m1", NativeSessionID: "s1"},
-			want: []string{"-p", "--output-format", "stream-json", "--verbose", "--model", "m1", "--resume", "s1", "--bare"},
+			want: []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "m1", "--resume", "s1", "--bare"},
+		},
+		{
+			// Issue #14. Without it stream-json emits one event per finished
+			// assistant message, so a one-message answer is a single event
+			// delivered at the end — a buffered stream wearing a streaming
+			// harness's capability list.
+			name: "claude: partial messages are what makes the stream progressive",
+			h:    NewClaude(models),
+			req:  RunRequest{Input: "hello"},
+			checkFn: func(t *testing.T, args []string) {
+				if !argvContains(args, "--include-partial-messages") {
+					t.Fatalf("claude advertises streaming but asks for whole messages: %v", args)
+				}
+			},
 		},
 		{
 			name: "claude: prompt is never in argv",
@@ -107,15 +121,26 @@ func TestBuildArgs(t *testing.T) {
 			},
 		},
 		{
-			name: "pi: -p, and no bogus run subcommand",
+			// `--mode json` is not optional, for the same reason opencode's
+			// `--format json` is not. Issue #14: pi's default text mode prints
+			// nothing until the run is over — its own `runPrintMode` writes the
+			// last assistant message only after `session.prompt()` resolves —
+			// so the previous invocation advertised `streaming` and buffered.
+			name: "pi: -p --mode json, and no bogus run subcommand",
 			h:    NewPi(models),
 			req:  RunRequest{Input: "hello"},
-			want: []string{"-p"},
+			want: []string{"-p", "--mode", "json"},
 			checkFn: func(t *testing.T, args []string) {
 				if argvContains(args, "run") {
 					t.Fatalf("pi has no run subcommand, but argv has one: %v", args)
 				}
 			},
+		},
+		{
+			name: "pi: model is passed after the output mode",
+			h:    NewPi(models),
+			req:  RunRequest{Input: "hello", Model: "m2"},
+			want: []string{"-p", "--mode", "json", "--model", "m2"},
 		},
 		{
 			name: "opencode: --format json, and --print-logs is not passed",
@@ -324,6 +349,271 @@ func TestParseOpenCodeLine(t *testing.T) {
 			}
 		}
 	})
+}
+
+// Every claude*Event below is a line of `claude -p --output-format stream-json
+// --verbose --include-partial-messages --bare` from Claude Code 2.1.238.
+//
+// The init and result lines were captured from a real run on 2026-08-21 and are
+// abridged to the fields this parser reads: the real init line is 2.6 KB of
+// tool and slash-command inventory no adapter looks at. That run also settles
+// the flag itself by execution — the CLI accepted
+// `--include-partial-messages` and failed on the login, not on the option.
+//
+// The three stream_event lines could not be captured, because the CLI on that
+// machine is not logged in and fails before it reaches the API. They are read
+// instead out of the binary that emits them: `strings` on the 2.1.238
+// executable carries both the envelope this adapter unwraps
+// (`type:"stream_event",event:e.event,session_id:…,parent_tool_use_id:null,uuid:…`)
+// and a literal example of the event inside it
+// (`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}`).
+// That is weaker evidence than a captured line and is marked as such here and
+// in claude.go.
+const (
+	claudeInitEvent = `{"type":"system","subtype":"init","cwd":"/w","session_id":"45b84817-020e-4a0b-9c94-93a0106c5814","tools":["Bash","Edit","Read"],"mcp_servers":[],"model":"claude-opus-5","permissionMode":"default"}`
+
+	claudeTextDeltaEvent = `{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}},"session_id":"45b84817-020e-4a0b-9c94-93a0106c5814","parent_tool_use_id":null,"uuid":"ebccd3b6-6744-4001-ba9c-aa2a9a65ea5a"}`
+
+	// Reasoning, not answer. Streaming it would publish the model's private
+	// working as the task's output_text.
+	claudeThinkingDeltaEvent = `{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"weighing it up"}},"session_id":"45b84817-020e-4a0b-9c94-93a0106c5814","parent_tool_use_id":null,"uuid":"c1a0a0f0-0000-4000-8000-000000000001"}`
+
+	// A tool call's arguments arriving a fragment at a time.
+	claudeToolInputDeltaEvent = `{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\""}},"session_id":"45b84817-020e-4a0b-9c94-93a0106c5814","parent_tool_use_id":null,"uuid":"c1a0a0f0-0000-4000-8000-000000000002"}`
+
+	// The whole assistant message, repeated after its deltas have all arrived.
+	claudeAssistantEvent = `{"type":"assistant","message":{"id":"msg_01","role":"assistant","model":"claude-opus-5","type":"message","content":[{"type":"text","text":"Hello, world"}],"stop_reason":"end_turn"},"session_id":"45b84817-020e-4a0b-9c94-93a0106c5814"}`
+
+	claudeResultEvent = `{"type":"result","subtype":"success","is_error":false,"session_id":"45b84817-020e-4a0b-9c94-93a0106c5814","usage":{"input_tokens":12,"cache_creation_input_tokens":7,"cache_read_input_tokens":22400,"output_tokens":5},"result":"Hello, world","duration_ms":1131,"num_turns":1}`
+
+	claudeErrorResultEvent = `{"type":"result","subtype":"success","is_error":true,"session_id":"45b84817-020e-4a0b-9c94-93a0106c5814","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0},"result":"Not logged in · Please run /login","duration_ms":113,"num_turns":1}`
+)
+
+func TestParseClaudeLine(t *testing.T) {
+	t.Run("init yields the native session id, once", func(t *testing.T) {
+		got := parseClaudeLine(claudeInitEvent)
+		if len(got) != 1 || got[0].Type != UpdateSessionID {
+			t.Fatalf("got %+v, want one %s update", got, UpdateSessionID)
+		}
+		if got[0].SessionID != "45b84817-020e-4a0b-9c94-93a0106c5814" {
+			t.Errorf("session id = %q", got[0].SessionID)
+		}
+	})
+
+	t.Run("a text delta is the answer arriving", func(t *testing.T) {
+		got := parseClaudeLine(claudeTextDeltaEvent)
+		if len(got) != 1 || got[0].Type != UpdateDelta {
+			t.Fatalf("got %+v, want one %s update", got, UpdateDelta)
+		}
+		if got[0].Delta != "Hello" {
+			t.Errorf("delta = %q, want %q", got[0].Delta, "Hello")
+		}
+	})
+
+	// The whole point of issue #14. `--include-partial-messages` does not
+	// replace the finished `assistant` message, it precedes it — so a parser
+	// that reads both publishes every answer twice. Deltas are the progressive
+	// half, so they are the half that is read.
+	t.Run("the finished assistant message is not answer text as well", func(t *testing.T) {
+		var answer string
+		for _, line := range []string{
+			claudeTextDeltaEvent, claudeTextDeltaEvent, claudeAssistantEvent,
+		} {
+			for _, upd := range parseClaudeLine(line) {
+				answer += upd.Delta
+			}
+		}
+		if answer != "HelloHello" {
+			t.Errorf("answer = %q, want %q — the finished message is being read on top of its own deltas",
+				answer, "HelloHello")
+		}
+	})
+
+	t.Run("thinking and tool arguments are not answer text", func(t *testing.T) {
+		for _, line := range []string{claudeThinkingDeltaEvent, claudeToolInputDeltaEvent} {
+			if got := parseClaudeLine(line); len(got) != 0 {
+				t.Errorf("line produced %+v, want nothing:\n  %s", got, line)
+			}
+		}
+	})
+
+	t.Run("the result event carries the run totals", func(t *testing.T) {
+		got := parseClaudeLine(claudeResultEvent)
+		if len(got) != 1 || got[0].Type != UpdateUsage || got[0].Usage == nil {
+			t.Fatalf("got %+v, want one %s update", got, UpdateUsage)
+		}
+		want := domain.Usage{
+			InputTokens: 12, OutputTokens: 5, TotalTokens: 17,
+			CacheReadTokens: 22400, CacheWriteTokens: 7,
+		}
+		if *got[0].Usage != want {
+			t.Errorf("usage = %+v, want %+v", *got[0].Usage, want)
+		}
+	})
+
+	// Reading the deltas rather than the finished message costs the one thing
+	// the finished message used to supply on a failed run: its words. claude
+	// exits 1 here, so the run already fails — but with an empty stderr and
+	// therefore "exit status 1" as the whole explanation. The result event is
+	// where the CLI actually says what went wrong.
+	t.Run("a failed result fails the run in the CLI's own words", func(t *testing.T) {
+		got := parseClaudeLine(claudeErrorResultEvent)
+		var failed *RunUpdate
+		for i := range got {
+			if got[i].Type == UpdateFailed {
+				failed = &got[i]
+			}
+		}
+		if failed == nil {
+			t.Fatalf("got %+v, want a %s update", got, UpdateFailed)
+		}
+		if failed.Err == nil || !strings.Contains(failed.Err.Error(), "Not logged in") {
+			t.Errorf("failure drops the CLI's message: %v", failed.Err)
+		}
+	})
+
+	t.Run("a non-JSON line is not answer text", func(t *testing.T) {
+		for _, line := range []string{"", "not json", "[2026-08-21] warming up"} {
+			if got := parseClaudeLine(line); len(got) != 0 {
+				t.Errorf("%q produced %+v, want nothing", line, got)
+			}
+		}
+	})
+}
+
+// Every pi*Event below is shaped from pi 0.83.0's own event definitions and
+// from a captured `pi -p --mode json` run on 2026-08-21.
+//
+// The lifecycle lines — session, agent_start, message_start, message_end,
+// turn_end — are verbatim from that run, abridged to the fields this parser
+// reads. The run itself failed at the provider (a groq per-minute token limit),
+// which is why it is also the source of the error fixture and why no
+// message_update line could be captured from it: pi emits those only once the
+// model starts producing text.
+//
+// message_update is therefore read from the shipped package instead.
+// `dist/modes/print-mode.js` writes one JSON line per session event as it
+// fires, and `pi-agent-core/dist/types.d.ts` declares that event as
+// `{type:"message_update", message, assistantMessageEvent}` where the inner
+// event is `{type:"text_delta", contentIndex, delta, partial}`.
+//
+// The same two files are what settle the mode change: in text mode
+// `runPrintMode` writes nothing until `await session.prompt()` has returned and
+// then prints the last assistant message, so `pi -p` alone cannot stream
+// whatever the harness advertises.
+const (
+	piSessionEvent   = `{"type":"session","version":3,"id":"01a024aa-0d2e-7755-82ec-18e89a44e099","timestamp":"2026-08-21T14:11:59.406Z","cwd":"/w"}`
+	piAgentStart     = `{"type":"agent_start"}`
+	piTurnStart      = `{"type":"turn_start"}`
+	piUserMessageEnd = `{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Count from 1 to 30."}],"timestamp":1787321519450}}`
+
+	piTextDeltaEvent = `{"type":"message_update","message":{"role":"assistant","content":[{"type":"text","text":"Al"}]},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Al","partial":{"role":"assistant","content":[{"type":"text","text":"Al"}]}}}`
+
+	piThinkingDeltaEvent = `{"type":"message_update","message":{"role":"assistant","content":[]},"assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"weighing it up","partial":{"role":"assistant","content":[]}}}`
+
+	// The finished assistant message, carrying the whole answer its deltas
+	// already delivered.
+	piAssistantMessageEnd = `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Alpha"}],"provider":"groq","model":"openai/gpt-oss-20b","stopReason":"stop","timestamp":1787321519971}}`
+
+	// Verbatim from the failed run. pi exits 0 after printing this in json
+	// mode — only its text mode turns an error into a non-zero exit — so a
+	// harness that ignored it would report a run that never happened as
+	// completed with empty output.
+	piErrorMessageEnd = `{"type":"message_end","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"groq","model":"openai/gpt-oss-20b","stopReason":"error","timestamp":1787321519971,"errorMessage":"413: Request too large for model ` + "`openai/gpt-oss-20b`" + ` on tokens per minute (TPM): Limit 8000, Requested 66050"}}`
+
+	// The same failure, repeated on the events that follow it.
+	piErrorTurnEnd = `{"type":"turn_end","message":{"role":"assistant","content":[],"provider":"groq","model":"openai/gpt-oss-20b","stopReason":"error","timestamp":1787321519971,"errorMessage":"413: Request too large"},"toolResults":[]}`
+)
+
+func TestParsePiLine(t *testing.T) {
+	t.Run("a text delta is the answer arriving", func(t *testing.T) {
+		got := parsePiLine(piTextDeltaEvent)
+		if len(got) != 1 || got[0].Type != UpdateDelta {
+			t.Fatalf("got %+v, want one %s update", got, UpdateDelta)
+		}
+		if got[0].Delta != "Al" {
+			t.Errorf("delta = %q, want %q", got[0].Delta, "Al")
+		}
+	})
+
+	// pi announces each assistant message twice over: as a stream of deltas
+	// and again, whole, at message_end. Reading both doubles every answer.
+	t.Run("the finished assistant message is not answer text as well", func(t *testing.T) {
+		var answer string
+		for _, line := range []string{piTextDeltaEvent, piTextDeltaEvent, piAssistantMessageEnd} {
+			for _, upd := range parsePiLine(line) {
+				answer += upd.Delta
+			}
+		}
+		if answer != "AlAl" {
+			t.Errorf("answer = %q, want %q — the finished message is being read on top of its own deltas",
+				answer, "AlAl")
+		}
+	})
+
+	t.Run("thinking is not answer text", func(t *testing.T) {
+		if got := parsePiLine(piThinkingDeltaEvent); len(got) != 0 {
+			t.Errorf("thinking produced %+v, want nothing", got)
+		}
+	})
+
+	t.Run("an errored message fails the run, carrying pi's own words", func(t *testing.T) {
+		got := parsePiLine(piErrorMessageEnd)
+		if len(got) != 1 || got[0].Type != UpdateFailed {
+			t.Fatalf("got %+v, want one %s update", got, UpdateFailed)
+		}
+		if got[0].Err == nil || !strings.Contains(got[0].Err.Error(), "Limit 8000") {
+			t.Errorf("error drops pi's message: %v", got[0].Err)
+		}
+	})
+
+	// The same failure is repeated on turn_end and agent_end. Only one update
+	// is emitted for it, from message_end, so a client is not told three times.
+	t.Run("the failure is reported once, not on every event repeating it", func(t *testing.T) {
+		if got := parsePiLine(piErrorTurnEnd); len(got) != 0 {
+			t.Errorf("turn_end produced %+v, want nothing — message_end already reported it", got)
+		}
+	})
+
+	t.Run("nothing is invented from lifecycle events", func(t *testing.T) {
+		for _, line := range []string{piSessionEvent, piAgentStart, piTurnStart, piUserMessageEnd} {
+			if got := parsePiLine(line); len(got) != 0 {
+				t.Errorf("line produced %+v, want nothing:\n  %s", got, line)
+			}
+		}
+	})
+
+	t.Run("a non-JSON line is not answer text", func(t *testing.T) {
+		for _, line := range []string{"", "not json", "  Loading extensions…"} {
+			if got := parsePiLine(line); len(got) != 0 {
+				t.Errorf("%q produced %+v, want nothing", line, got)
+			}
+		}
+	})
+}
+
+// Three adapters now report a failure their CLI printed rather than exited
+// with, so the shape lives in one place. What it must never produce is an
+// error with nothing in it: "harness: pi: " reads to a client as a bug in this
+// server rather than as something the harness said.
+func TestHarnessFailureAlwaysSaysSomething(t *testing.T) {
+	for _, message := range []string{"", "   ", "\n\t"} {
+		upd := harnessFailure("pi", message)
+		if upd.Type != UpdateFailed {
+			t.Fatalf("type = %s, want %s", upd.Type, UpdateFailed)
+		}
+		if upd.Err == nil {
+			t.Fatalf("%q produced a failure carrying no error", message)
+		}
+		if !strings.Contains(upd.Err.Error(), "without reporting a reason") {
+			t.Errorf("%q produced %q, want a stated reason", message, upd.Err)
+		}
+	}
+
+	upd := harnessFailure("opencode", "  Model not found: bogus/nope.  ")
+	if got := upd.Err.Error(); got != "harness: opencode: Model not found: bogus/nope." {
+		t.Errorf("error = %q", got)
+	}
 }
 
 func TestValidateModel(t *testing.T) {

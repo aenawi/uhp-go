@@ -2,6 +2,7 @@ package http
 
 import (
 	"bufio"
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -75,6 +76,98 @@ func TestStreamKeepsAliveWhileTheHarnessIsSilent(t *testing.T) {
 			t.Fatalf("comment line = %q, want %q", got, ": keep-alive")
 		}
 		return
+	}
+}
+
+// drippingAdapter says something and then keeps working, which is the shape of
+// every real agent run: a first token long before a last one.
+type drippingAdapter struct {
+	echoAdapter
+	release chan struct{}
+}
+
+func newDrippingAdapter() *drippingAdapter {
+	return &drippingAdapter{release: make(chan struct{})}
+}
+
+func (a *drippingAdapter) Run(ctx context.Context, _ harness.RunRequest) (<-chan harness.RunUpdate, error) {
+	ch := make(chan harness.RunUpdate)
+	go func() {
+		defer close(ch)
+		send := func(u harness.RunUpdate) bool {
+			select {
+			case ch <- u:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		if !send(harness.RunUpdate{Type: harness.UpdateDelta, Delta: "first"}) {
+			return
+		}
+		select {
+		case <-a.release:
+		case <-ctx.Done():
+			return
+		}
+		send(harness.RunUpdate{Type: harness.UpdateCompleted})
+	}()
+	return ch, nil
+}
+
+// Issue #14 / Streaming §1: a delta must be on the wire when the harness
+// produced it, not when the run is over.
+//
+// This is the invariant the conformance suite's S-09 is aiming at and cannot
+// actually reach. S-09 measures the spread between the first and last events of
+// a stream, and this server publishes `response.created` the instant a run
+// starts — so the spread it measures is the whole duration of the task no
+// matter what happens in between. Measured against grok on 2026-08-21: the
+// suite passed S-09 twice, reporting spreads of 8.4s and 17.3s, and a stream
+// from the same harness timed by hand carried `response.created` at 0.00s,
+// nothing whatsoever until 8.09s, and its other 16 events inside the following
+// 0.9s — silent for ninety per cent of the run, and passing.
+//
+// So the check cannot fail this server and cannot be relied on to notice if
+// this stops being true. What can is a test that releases nothing: if the
+// delta only arrives once the run has ended, this hangs until the deadline
+// below rather than passing.
+func TestADeltaReachesTheClientBeforeTheRunEnds(t *testing.T) {
+	a := newDrippingAdapter()
+	reg := harness.NewRegistry()
+	reg.Register(a)
+	svc := service.NewTaskService(reg, store.NewMemoryStore(), slog.Default())
+	srv := NewServer(svc, slog.Default(), nil, 0)
+	// Long enough that a keep-alive cannot be mistaken for progress: if the
+	// only thing this test reads is a comment line, it has proved nothing.
+	srv.keepAlive = time.Hour
+	t.Cleanup(func() { close(a.release) })
+
+	resp := openStream(t, srv)
+
+	// Closing the body unblocks the read, so a buffered stream fails here with
+	// its own message rather than hanging until the package timeout.
+	deadline := time.AfterFunc(10*time.Second, func() { resp.Body.Close() })
+	defer deadline.Stop()
+
+	br := bufio.NewReader(resp.Body)
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("the run is still in flight and no delta has arrived: %v", err)
+		}
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		if strings.Contains(line, `"response.output_text.delta"`) {
+			if !strings.Contains(line, `"first"`) {
+				t.Fatalf("delta event does not carry the harness's text: %s", line)
+			}
+			return
+		}
+		if strings.Contains(line, `"response.completed"`) {
+			t.Fatal("the run completed before any delta reached the client, which it cannot have: nothing released it")
+		}
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -397,4 +398,22 @@ func (h *CLIHarness) validateModel(model string) error {
 // Used by every CLI that emits plain text rather than structured events.
 func passthroughParseLine(line string) []RunUpdate {
 	return []RunUpdate{{Type: UpdateDelta, Delta: line + "\n"}}
+}
+
+// harnessFailure is the terminal update for a run whose CLI reported a problem
+// in its own output rather than by its exit code.
+//
+// Three of the five now need one — opencode and pi both exit 0 after printing
+// an error, and claude exits 1 but writes the reason to stdout and leaves
+// stderr empty — so the shape lives here rather than three times. The part
+// each adapter keeps is the only part that differs: which field of its own
+// event schema holds the words. What is shared is that the words are prefixed
+// with the harness they came from, and that a failure with nothing to say
+// still says something, because "the run failed" with an empty reason reads to
+// a client as a bug in this server.
+func harnessFailure(base, message string) RunUpdate {
+	if message = strings.TrimSpace(message); message == "" {
+		message = "the run failed without reporting a reason"
+	}
+	return RunUpdate{Type: UpdateFailed, Err: fmt.Errorf("harness: %s: %s", base, message)}
 }

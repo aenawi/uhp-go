@@ -2,7 +2,6 @@ package harness
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/aenawi/uhp-go/internal/domain"
@@ -122,7 +121,7 @@ func parseOpenCodeLine(line string) []RunUpdate {
 		// otherwise report a run that never happened as completed with empty
 		// output. The supervisor settles on the first terminal update and
 		// drains the rest, so the trailing "completed" is correctly ignored.
-		return []RunUpdate{{Type: UpdateFailed, Err: fmt.Errorf("harness: opencode: %s", openCodeErrorMessage(ev))}}
+		return []RunUpdate{harnessFailure("opencode", openCodeErrorMessage(ev))}
 	}
 
 	// Everything else — step_finish, tool_use, and any event type a later
@@ -140,17 +139,16 @@ func parseOpenCodeLine(line string) []RunUpdate {
 
 // openCodeErrorMessage picks the most specific words opencode gave for a
 // failure, so the client is told "Model not found: bogus/nope." rather than
-// that something went wrong.
+// the error class it belongs to. Empty when it gave neither; harnessFailure
+// owns what is said then.
 func openCodeErrorMessage(ev openCodeEvent) string {
-	if ev.Error != nil {
-		if msg := strings.TrimSpace(ev.Error.Data.Message); msg != "" {
-			return msg
-		}
-		if name := strings.TrimSpace(ev.Error.Name); name != "" {
-			return name
-		}
+	if ev.Error == nil {
+		return ""
 	}
-	return "the run failed without reporting a reason"
+	if msg := strings.TrimSpace(ev.Error.Data.Message); msg != "" {
+		return msg
+	}
+	return ev.Error.Name
 }
 
 // parseOpenCodeModels reads `opencode models`, which prints one id per line.
