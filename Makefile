@@ -1,4 +1,4 @@
-.PHONY: build run test vet fmt fmt-check tidy docker docker-check conformance
+.PHONY: build run test vet fmt fmt-check tidy docker docker-check conformance conformance-gate
 
 build:
 	go build -o bin/uhpd ./cmd/uhpd
@@ -51,3 +51,35 @@ docker-check: docker
 conformance:
 	uhp-conformance --base-url $${UHP_BASE_URL:-http://localhost:8080} \
 		--api-key "$$UHP_API_KEY" --class $${UHP_CLASS:-full} --plain
+
+# The recorded core score (docs/conformance.md), and the report the gate reads.
+# Raise the floor when a run raises the score; it is the number the gate
+# defends, so leaving it behind lets the score fall back to it unnoticed.
+CONFORMANCE_FLOOR ?= 37
+CONFORMANCE_REPORT ?= conformance-report.json
+
+# Gate for CI: the same suite, but its result is asserted rather than read.
+#
+# UHP_HARNESS_ID is required and not defaulted. The suite runs real agent tasks
+# and takes "the first harness listed" when it is not told which to use, so a
+# gate that left it out would measure whichever harness happens to sort first
+# on the machine it ran on — and the answer depends on which CLIs are installed
+# there. See docs/conformance.md for which harness this repository's gate picks
+# and why.
+#
+# The suite's exit code is not the whole verdict, which is why the report is
+# read afterwards: skips exit zero, and a skip is never a pass.
+conformance-gate:
+	@test -n "$$UHP_HARNESS_ID" || { echo "UHP_HARNESS_ID is required: the gate must name the harness it measures"; exit 1; }
+	# Removed before the run, not after it. The suite writes this file only if
+	# it got far enough to have a result, so a run that fails to launch would
+	# otherwise leave the previous run's report in place for the check below to
+	# read — and yesterday's pass reported as today's is the exact failure this
+	# gate exists to catch. CI is safe on a fresh checkout; a developer's
+	# working copy is not.
+	@rm -f $(CONFORMANCE_REPORT)
+	-uhp-conformance --base-url $${UHP_BASE_URL:-http://localhost:8080} \
+		--api-key "$$UHP_API_KEY" --class $${UHP_CLASS:-core} \
+		--harness-id "$$UHP_HARNESS_ID" \
+		--json $(CONFORMANCE_REPORT) --plain
+	@python3 scripts/check-conformance.py $(CONFORMANCE_REPORT) $(CONFORMANCE_FLOOR)

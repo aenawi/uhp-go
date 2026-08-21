@@ -2,6 +2,10 @@ bin/
 *.log
 .env
 
+# Output of `make conformance-gate`. Evidence of one run on one machine, not a
+# record: docs/conformance.md is where a score is written down.
+conformance-report.json
+
 # Claude Code: share project settings, keep personal overrides local.
 .claude/settings.local.json
 .claude/*.local.json

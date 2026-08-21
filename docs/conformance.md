@@ -56,8 +56,8 @@ Three things to know before reading a result:
 - **Pick a harness that advertises what the checks exercise.** The `capabilities` list on a
   harness object is now enforced rather than reported: a `previous_response_id` sent to a
   harness without `sessions` is refused `422`, as is a cancel sent to one without
-  `cancellation`. Of the five bases here only `claude-code` and `codex` advertise
-  `sessions`, so a run pointed at `grok-cli`, `opencode` or `pi` fails the session and
+  `cancellation`. Of the five bases here only `claude-code`, `codex` and `opencode`
+  advertise `sessions`, so a run pointed at `grok-cli` or `pi` fails the session and
   continuation checks by design — the refusal is the honest answer, but it is not a
   conformance measurement of this server's session support.
 
@@ -66,6 +66,93 @@ Three things to know before reading a result:
   terminates, and an artifact that cannot be downloaded are all invisible to anything that
   only inspects a schema.
 - **A skip is never a pass.** The suite reports skips separately and so does this file.
+
+## The CI gate
+
+The score above is now defended by a build rather than remembered from a run. The
+`conformance` job in `.github/workflows/ci.yml` starts `uhpd`, points the suite at it and
+refuses a result worse than the one recorded here.
+
+**It measures `claude-code`, and that is a decision rather than a default** (issue #14).
+Three constraints pick it between them:
+
+- *It has to advertise what the core checks exercise.* `capabilities` is enforced, so a run
+  against `grok-cli` or `pi` fails `C-01` and `C-02` by design and the gate would be red
+  from the day it was written.
+- *It has to actually stream.* A gate for `S-09` driven by a harness that buffers measures
+  nothing about streaming. `claude-code` streams token-level content blocks, but only with
+  `--include-partial-messages`, which is why the invocation grew that flag.
+- *It has to be installed.* The image already ships `@anthropic-ai/claude-code`, and its CLI
+  reads `ANTHROPIC_API_KEY` from the environment without further configuration.
+
+The job skips itself, loudly, when no `ANTHROPIC_API_KEY` secret is visible — which is the
+case for every pull request from a fork. The alternative is a job that is red for reasons
+nobody can fix, and a red build everyone has learned to ignore defends less than no gate.
+
+**It is skipping on every run until that secret is set**, which is the state this repository
+is in as of the commit that added the job. Nothing here can set it; a maintainer must:
+
+```bash
+gh secret set ANTHROPIC_API_KEY --repo aenawi/uhp-go
+```
+
+Until then the gate is wiring rather than a gate, and the score above is still a number
+someone measured by hand.
+
+The suite's own exit code is not the whole verdict, because it is zero when checks are
+skipped. `scripts/check-conformance.py` reads the JSON report and refuses three things: a
+failure or error, *any* skip, and a pass count below `CONFORMANCE_FLOOR` in the Makefile.
+The last one is what stops the denominator shrinking quietly — "0 failed" over 12 checks is
+not the result that "0 failed" over 37 checks was.
+
+`CONFORMANCE_FLOOR` is the enforced copy of the score, and the score also appears in prose
+here and in the README. Nothing links them mechanically, so a run that raises the score has
+to raise the floor too — otherwise the number this file claims and the number CI defends
+drift apart, with the lower one silently winning.
+
+The suite is pinned to a commit, not to a branch. It is another project's repository, and a
+gate that can go red because somebody else pushed is a gate people stop believing.
+
+Run the same thing by hand:
+
+```bash
+UHP_API_KEY=devkey UHP_HARNESS_ID=chrn_… make conformance-gate
+```
+
+### What S-09 does and does not defend
+
+`S-09` is the check issue #14 was opened about, and measuring it properly changed what can
+honestly be claimed for it.
+
+The check reads the arrival times of a stream's events and fails one whose first and last
+arrive within 50 ms of each other. **It cannot fail this server**, because `supervise`
+publishes `response.created` the instant a run starts — so the spread it measures is the
+whole duration of the task regardless of what happens in between.
+
+Measured against `grok-cli` on 2026-08-21. Two suite runs passed it, reporting *"events
+spread over 17.3s"* and *"events spread over 8.4s"*. A third stream from the same harness,
+timed by hand at the socket rather than by the suite, shows what those numbers are made of
+— 17 events, of which 16 arrive in the last second:
+
+```text
+ 0.00s  response.created
+ 8.09s  response.output_item.added      ← nothing at all for eight seconds
+ 8.09s  response.output_text.delta      "1\n"
+   …    (ten deltas over 0.3s)
+ 8.95s  response.completed
+```
+
+`S-09`'s rule applied to that stream gives a spread of 8.95s and a pass, on a stream that
+was silent for ninety per cent of the run — the state Streaming §1 calls indistinguishable
+from a hang. The suite is not wrong to measure what it measures; it is measuring the only
+thing a single connection can see without knowing when the harness had something to say.
+
+So the gate defends the *score*, and this repository's own test defends *progressive
+delivery*: `TestADeltaReachesTheClientBeforeTheRunEnds` in
+`internal/transport/http/sse_test.go` opens a stream against a harness that speaks once and
+then keeps working, and asserts the delta arrives while the run is still in flight. Deleting
+the per-event `flusher.Flush()` turns it red, which is the property `S-09` is aiming at and
+cannot reach.
 
 ## History
 
@@ -83,6 +170,7 @@ Three things to know before reading a result:
 | Skills as folders, MCP config, tool restrictions | not yet measured | targets F-03, F-04, F-06 |
 | Stream keep-alives | no change expected | no check watches a silent stream — see below |
 | Harness event feed and `Last-Event-ID` resumption | no change expected | no check reconnects a stream — see below |
+| Progressive streaming for `claude-code` and `pi`, CI gate | no change expected | S-09 cannot fail this server either way — see above |
 
 The 33 skips in the baseline were not 33 separate defects. They cascaded from one line:
 `GET /v1/harnesses` returned `{"data": […]}` where the suite reads `harnesses`, so it could
@@ -107,9 +195,9 @@ tests that skills, MCP servers and disabled tools round-trip through the API; it
 test whether the agent was actually prevented from using a tool. Two of the three
 mechanisms for `claude-code` — `--disallowedTools` and `--mcp-config` — are documented but
 have not been run against the real binary, and are marked UNVERIFIED in
-`internal/harness/claude.go` for the same reason issue #13 marks opencode's prompt
-delivery. `grok-cli` and `pi` were read from their own `--help` on a machine where they are
-installed. See the delivery table in the README.
+`internal/harness/claude.go`. They are now the only such claim left: issue #13 settled
+opencode's prompt delivery by execution. `grok-cli` and `pi` were read from their own
+`--help` on a machine where they are installed. See the delivery table in the README.
 
 **Nothing in the suite watches a silent stream.** Every streaming check asks a harness to
 answer, so events arrive promptly and the gap Errors §5 is about never opens. Stream

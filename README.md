@@ -69,6 +69,13 @@ are reported as `false` rather than omitted.
 
 A skip is counted as a failure here, not as a pass.
 
+That score is defended by CI rather than remembered: the `conformance` job runs the suite
+against `claude-code` and refuses a failure, *any* skip, or a pass count below the recorded
+one. It skips itself with a notice when no `ANTHROPIC_API_KEY` secret is visible, because a
+fork's pull request cannot have one and a permanently red job defends nothing. Why that
+harness, and what `S-09` can and cannot see, are both in
+[docs/conformance.md](docs/conformance.md).
+
 ## Architecture
 
 Layered, dependency-inverted design (Clean/Hexagonal architecture):
@@ -161,9 +168,10 @@ list it already holds. Cancelling an already-terminal task or an idle session st
 succeeds whatever the harness advertises (Sessions §4): there is no work to stop, so
 nothing is being promised that cannot be delivered.
 
-Of the five bases shipped here, `claude-code` and `codex` advertise `sessions`; all five
-advertise `cancellation`, because cancellation belongs to the shared runner — every harness
-runs in its own process group and is stopped by killing it — rather than to any one CLI.
+Of the five bases shipped here, `claude-code`, `codex` and `opencode` advertise `sessions`;
+all five advertise `cancellation`, because cancellation belongs to the shared runner — every
+harness runs in its own process group and is stopped by killing it — rather than to any one
+CLI.
 
 A stream that has gone 15 seconds with nothing to send writes an SSE comment line
 (`: keep-alive`). UHP tells clients to time a stream out on inactivity rather than on total
@@ -374,9 +382,16 @@ overstate it:
 
 "Verified" means the flag was read from that CLI's own `--help` on a machine where it is
 installed. The two marked **unverified** are documented for Claude Code but have not been
-run against the real binary here, so they carry the same warning issue #13 carries for
-opencode's prompt delivery. If either is wrong the task fails to start rather than running
-with its tools quietly unblocked, which is the right direction for an unverified claim.
+run against the real binary here. If either is wrong the task fails to start rather than
+running with its tools quietly unblocked, which is the right direction for an unverified
+claim.
+
+They are not the only unverified claims left. Issue #14 added one that fails in the worse
+direction: `parseClaudeLine` now reads `stream_event` envelopes whose shape was read out of
+the Claude Code binary rather than captured from a live run, and a wrong shape produces an
+empty answer rather than a refusal. What holds it up is the CI conformance gate, which
+measures that harness on every build and fails loudly on an empty answer — see
+[docs/conformance.md](docs/conformance.md).
 
 Where a runtime cannot hard-block a tool, the restriction is conveyed as a standing
 instruction and described to the model as unenforced — never dropped. §4.3 is explicit
@@ -550,8 +565,21 @@ delivers it for every harness.
 harness advertising `sessions` builds the same argv with and without a native session id.
 The other half is not mechanically checkable: the id has to be *discovered* from the CLI's
 own output by `ParseLine` before there is anything to pass back, and a `passthroughParseLine`
-harness can never produce one. `opencode` is the worked example, in the comment on its
-declaration. Check both halves by hand before you claim `sessions`.
+harness can never produce one. `opencode` is the worked example, and it is worked in both
+directions: it once carried the flag without the parser, so every continuation silently
+started a new conversation, and issue #13 restored the two halves together — `--format json`
+so the CLI prints its `sessionID`, `parseOpenCodeLine` to read it, then the capability.
+Check both halves by hand before you claim `sessions`.
+
+**`streaming` has the same two halves, and the second one is easy to miss.** Several of
+these CLIs default to an output mode that prints nothing until the run is over, so an
+invocation can be perfectly correct and still buffer: `pi -p` writes the finished answer
+after its own `session.prompt()` resolves, and `claude -p --output-format stream-json`
+emits one event per *completed* assistant message. Both needed a flag — `--mode json` and
+`--include-partial-messages` — before the capability they already advertised was true.
+Read the CLI's own streaming mode, not just its exit code, and note that whichever text the
+incremental mode gives you is usually repeated whole at the end, so `ParseLine` must read
+one or the other and never both.
 
 ## Testing
 
@@ -559,6 +587,14 @@ declaration. Check both halves by hand before you claim `sessions`.
 make test   # go test ./... -race -cover
 make vet
 make fmt
+```
+
+The conformance gate is separate, because it spends real tokens on real agent tasks. It
+needs the suite installed and a running server; see
+[docs/conformance.md](docs/conformance.md) for both.
+
+```bash
+UHP_API_KEY=devkey UHP_HARNESS_ID=chrn_… make conformance-gate
 ```
 
 ## Building the image
