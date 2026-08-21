@@ -2,6 +2,7 @@ package harness
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -48,6 +49,55 @@ func (p *process) healthCheck(ctx context.Context) error {
 		return fmt.Errorf("harness: %s health check failed: %w", p.binary, err)
 	}
 	return nil
+}
+
+// maxCaptureBytes bounds the output of a short-lived query such as "list your
+// models". It is generous because it has to be — codex's catalogue is around
+// 325 KB, since every entry embeds that model's own system prompt — and it
+// exists only so that a CLI which streams without end cannot take the router's
+// memory with it.
+const maxCaptureBytes = 16 * 1024 * 1024
+
+// capture runs the CLI to completion and returns its stdout.
+//
+// Unlike run, this is for a question with an answer rather than a task with a
+// stream: nothing is parsed incrementally and stderr is not collected, because
+// a query that failed has no output worth reporting — the caller falls back.
+// The process group and WaitDelay are here for the same reason they are in
+// run: these CLIs are wrappers that spawn node or bun, and a grandchild
+// holding the stdout pipe open would otherwise outlive the timeout.
+func (p *process) capture(ctx context.Context, args []string) (string, error) {
+	cmd := exec.CommandContext(ctx, p.binary, args...)
+	isolateProcessGroup(cmd)
+	cmd.WaitDelay = 5 * time.Second
+
+	var out cappedBuffer
+	out.limit = maxCaptureBytes
+	cmd.Stdout = &out
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("harness: %s %v: %w", p.binary, args, err)
+	}
+	return out.buf.String(), nil
+}
+
+// cappedBuffer accumulates up to limit bytes and silently drops the rest,
+// reporting every write as accepted so the child is never handed a write error
+// and killed over output nobody needed.
+type cappedBuffer struct {
+	limit int
+	buf   bytes.Buffer
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if room := c.limit - c.buf.Len(); room > 0 {
+		if len(p) > room {
+			p = p[:room]
+		}
+		c.buf.Write(p)
+	}
+	return n, nil
 }
 
 func (p *process) run(ctx context.Context, req RunRequest) (<-chan RunUpdate, error) {

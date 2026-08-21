@@ -314,7 +314,7 @@ so set the path anywhere you intend the ids to keep resolving. Issue #15's durab
 implements the same interface and removes the caveat.
 
 ```bash
-curl -s http://localhost:8080/v1/harnesses   -H "Authorization: Bearer devkey" -H "Content-Type: application/json"   -d '{"name":"Research agent","base":"claude-code","default_model":"claude-sonnet-4.6"}'
+curl -s http://localhost:8080/v1/harnesses   -H "Authorization: Bearer devkey" -H "Content-Type: application/json"   -d '{"name":"Research agent","base":"claude-code","default_model":"claude-sonnet-5"}'
 ```
 
 A base this server cannot run is refused at configuration time:
@@ -394,7 +394,7 @@ Create a task:
 ```bash
 curl -s http://localhost:8080/v1/responses \
   -H "Authorization: Bearer devkey" -H "Content-Type: application/json" \
-  -d '{"input":"Summarise README.md in three bullets.","model":"claude-sonnet-4.6","metadata":{"harness_id":"claude-code"}}'
+  -d '{"input":"Summarise README.md in three bullets.","model":"claude-sonnet-5","metadata":{"harness_id":"claude-code"}}'
 ```
 
 Stream it:
@@ -402,7 +402,7 @@ Stream it:
 ```bash
 curl -N http://localhost:8080/v1/responses \
   -H "Authorization: Bearer devkey" -H "Content-Type: application/json" \
-  -d '{"input":"...","model":"gpt-5.2-codex","metadata":{"harness_id":"codex"},"stream":true}'
+  -d '{"input":"...","model":"gpt-5.6-sol","metadata":{"harness_id":"codex"},"stream":true}'
 ```
 
 ## Configuration
@@ -416,15 +416,54 @@ curl -N http://localhost:8080/v1/responses \
 | `UHP_MAX_BODY_BYTES` | `8388608` | Maximum accepted request body, and the upload limit |
 | `UHP_MAX_CONCURRENT_RUNS` | `8` | Harness processes allowed to run at once; beyond it, `503 harness_unavailable` |
 | `UHP_PUBLIC_URL` | (unset = relative URLs) | Origin used to build absolute artifact download URLs |
-| `UHP_CLAUDE_MODELS` | `claude-sonnet-4.6,claude-opus-4.6` | Advertised Claude Code models |
-| `UHP_CODEX_MODELS` | `gpt-5.2-codex` | Advertised Codex models |
-| `UHP_GROK_MODELS` | `grok-4.6,grok-4.5` | Advertised Grok models |
-| `UHP_OPENCODE_MODELS` | `auto` | Advertised OpenCode models |
-| `UHP_PI_MODELS` | `auto` | Advertised Pi models |
+| `UHP_CLAUDE_MODELS` | `claude-sonnet-5,claude-opus-5` | Claude Code models — see [Where the model list comes from](#where-the-model-list-comes-from) |
+| `UHP_CODEX_MODELS` | `gpt-5.6-sol` | Codex fallback models |
+| `UHP_GROK_MODELS` | `grok-4.6,grok-4.5` | Grok fallback models |
+| `UHP_OPENCODE_MODELS` | (unset) | OpenCode fallback models |
+| `UHP_PI_MODELS` | (unset) | Pi fallback models |
 
 These are the defaults of the `uhpd` binary. The Docker image presets `UHP_WORKSPACE`,
 which changes the `UHP_WORKSPACE` and `UHP_HARNESS_STORE` rows above — see
 [Building the image](#building-the-image).
+
+### Where the model list comes from
+
+The five `*_MODELS` variables are **fallbacks, not the catalogue**. Four of the five CLIs
+can be asked what they serve, and are:
+
+| Harness | Asked with | Fallback used when |
+|---|---|---|
+| `claude-code` | — (no listing command exists) | always |
+| `codex` | `codex debug models` | codex is missing, or cannot render its catalogue |
+| `grok-cli` | `grok models` | grok is missing, or cannot list |
+| `opencode` | `opencode models` | opencode is missing, or cannot list |
+| `pi` | `pi --list-models` | pi is missing, or cannot list |
+
+The first request pays for the lookup so that it is right from the start; after that the
+answer is served from a five-minute cache and refreshed in the background. A CLI that is
+not installed is never asked.
+
+If neither source names a model, the harness advertises none — and then accepts whatever
+model you name, because a server that cannot enumerate a runtime's catalogue has no
+grounds to refuse one. Nothing is promised, so nothing is over-promised; the CLI answers
+in its own words.
+
+This is why `UHP_OPENCODE_MODELS` and `UHP_PI_MODELS` have no default. Both route through
+whichever providers *you* have logged in to, so there is no model id that is true on
+someone else's machine. With nothing to fall back to, the server advertises no model for
+them rather than a wrong one, leaves `--model` off the command line so the CLI picks its
+own, and lets you pin a list if you want one.
+
+`UHP_CLAUDE_MODELS` is the one that carries real weight, because Claude Code has no
+listing command — nothing checks it, so it goes stale silently. It was last verified
+against the CLI on 2026-08-21.
+
+The reason any of this matters: `GET /v1/models` publishes these ids, and UHP §3.1 says
+`available` is a promise — "A server MUST compute `available`, not assert it. Listing a
+model as available and then failing the task is the worst outcome for a client." A task
+naming a model this server does not advertise is refused before anything is dispatched,
+so an advertised list that does not match reality passes the server's own check and then
+fails at the CLI: the worst of both.
 
 Each harness adapter shells out to its respective CLI binary (`claude`, `codex`, `grok`,
 `opencode`, `pi`), which must be installed and authenticated on the host/container running

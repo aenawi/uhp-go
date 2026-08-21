@@ -22,6 +22,12 @@ type echoAdapter struct{}
 // does, and for the same reason: what is advertised is what may be asked for.
 func (echoAdapter) Info() domain.Harness {
 	return domain.Harness{ID: "chrn_echo", Base: "echo", Object: "harness", Name: "Echo",
+		// A real adapter that can enumerate its models advertises them, and
+		// the router refuses anything outside the list. A double with an empty
+		// list would exercise the opposite path — "this base does not know
+		// what it serves" — so it names one.
+		Models:       []string{"echo-1"},
+		DefaultModel: "echo-1",
 		Capabilities: []domain.Capability{
 			domain.CapStreaming, domain.CapSessions, domain.CapCancellation,
 		}}

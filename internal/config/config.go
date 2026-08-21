@@ -31,6 +31,10 @@ type Config struct {
 	// relative, which is correct whenever the client shares the API's origin.
 	PublicBaseURL string
 
+	// The five model lists are fallbacks, not the advertised catalogue. Four
+	// of the five CLIs can enumerate their own models and are asked; these
+	// values stand only where a CLI cannot be asked or cannot be reached. See
+	// harness.CLIHarness.models.
 	ClaudeModels   []string
 	CodexModels    []string
 	GrokModels     []string
@@ -50,11 +54,26 @@ func Load() Config {
 		// own default. Config does not carry a second copy of that number.
 		MaxConcurrentRuns: int(getEnvInt("UHP_MAX_CONCURRENT_RUNS", 0)),
 		PublicBaseURL:     strings.TrimSuffix(os.Getenv("UHP_PUBLIC_URL"), "/"),
-		ClaudeModels:      splitCSVDefault(os.Getenv("UHP_CLAUDE_MODELS"), "claude-sonnet-4.6", "claude-opus-4.6"),
-		CodexModels:       splitCSVDefault(os.Getenv("UHP_CODEX_MODELS"), "gpt-5.2-codex"),
-		GrokModels:        splitCSVDefault(os.Getenv("UHP_GROK_MODELS"), "grok-4.6", "grok-4.5"),
-		OpenCodeModels:    splitCSVDefault(os.Getenv("UHP_OPENCODE_MODELS"), "auto"),
-		PiModels:          splitCSVDefault(os.Getenv("UHP_PI_MODELS"), "auto"),
+		// Claude Code cannot be asked what it serves, so this list is the only
+		// answer there will be. Both ids were checked against the real CLI on
+		// 2026-08-21: the previous `claude-sonnet-4.6` / `claude-opus-4.6`
+		// still resolve but are retired, and the CLI says so.
+		ClaudeModels: splitCSVDefault(os.Getenv("UHP_CLAUDE_MODELS"), "claude-sonnet-5", "claude-opus-5"),
+		// Read from `codex debug models` on 2026-08-21, where it is the
+		// highest-priority listed slug. Reached when codex is not installed,
+		// or is installed but cannot render its catalogue.
+		CodexModels: splitCSVDefault(os.Getenv("UHP_CODEX_MODELS"), "gpt-5.6-sol"),
+		// Read from `grok models` on 2026-08-21, default first.
+		GrokModels: splitCSVDefault(os.Getenv("UHP_GROK_MODELS"), "grok-4.6", "grok-4.5"),
+		// No fallback for either, deliberately. Both route through whichever
+		// providers the operator has logged in to, so there is no id that is
+		// true on someone else's machine — `auto`, which both used to
+		// advertise, is not a model to either of them. Empty means this server
+		// advertises no model rather than a wrong one, `--model` is then left
+		// off the command line and the CLI picks its own, and an operator who
+		// wants a fixed list sets UHP_OPENCODE_MODELS / UHP_PI_MODELS.
+		OpenCodeModels: splitCSV(os.Getenv("UHP_OPENCODE_MODELS")),
+		PiModels:       splitCSV(os.Getenv("UHP_PI_MODELS")),
 	}
 }
 

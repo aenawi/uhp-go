@@ -2,6 +2,7 @@ package harness
 
 import (
 	"encoding/json"
+	"sort"
 
 	"github.com/aenawi/uhp-go/internal/domain"
 )
@@ -28,6 +29,13 @@ func NewCodex(models []string) *CLIHarness {
 			domain.CapStreaming, domain.CapFilesIn, domain.CapFilesOut,
 			domain.CapSessions, domain.CapCancellation, domain.CapTools,
 		},
+		// `codex debug models` renders the raw model catalogue as JSON, which
+		// is the only place the real slugs appear — `codex --help` names none,
+		// and a wrong one is not rejected locally but 400s at the API after
+		// the run has started. Verified by execution.
+		ModelsArgs:  []string{"debug", "models"},
+		ParseModels: parseCodexModels,
+
 		Prompt: PromptStdin,
 		BuildArgs: func(req RunRequest) ([]string, error) {
 			args := []string{"exec"}
@@ -45,6 +53,53 @@ func NewCodex(models []string) *CLIHarness {
 		},
 		ParseLine: parseCodexLine,
 	}).Build()
+}
+
+// codexCatalog is the subset of `codex debug models` this server reads. The
+// real document also carries each model's system prompt and reasoning levels,
+// none of which a catalogue of ids needs.
+type codexCatalog struct {
+	Models []struct {
+		Slug string `json:"slug"`
+
+		// Visibility is "list" for a model a user may pick and "hide" for
+		// codex's internal ones (`gpt-reserve`, `codex-auto-review`). Offering
+		// a hidden model would advertise something no client should ask for.
+		Visibility string `json:"visibility"`
+
+		// Priority is codex's own ordering, lowest first. The first model this
+		// server advertises is what a task naming none gets, so codex's idea
+		// of its best model becomes ours rather than whatever order the
+		// document happened to arrive in.
+		Priority int `json:"priority"`
+	} `json:"models"`
+}
+
+func parseCodexModels(stdout string) []string {
+	var catalog codexCatalog
+	if err := json.Unmarshal([]byte(stdout), &catalog); err != nil {
+		return nil
+	}
+
+	listed := make([]int, 0, len(catalog.Models))
+	for i, m := range catalog.Models {
+		if m.Slug == "" || m.Visibility != "list" {
+			continue
+		}
+		listed = append(listed, i)
+	}
+	sort.SliceStable(listed, func(a, b int) bool {
+		return catalog.Models[listed[a]].Priority < catalog.Models[listed[b]].Priority
+	})
+
+	if len(listed) == 0 {
+		return nil
+	}
+	models := make([]string, 0, len(listed))
+	for _, i := range listed {
+		models = append(models, catalog.Models[i].Slug)
+	}
+	return models
 }
 
 type codexEvent struct {

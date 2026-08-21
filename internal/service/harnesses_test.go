@@ -125,6 +125,29 @@ func TestCreateHarnessRefusesAnUnservableDefaultModel(t *testing.T) {
 	}
 }
 
+// The other half of that rule: a base advertising no models has not said it
+// cannot serve this one, only that it does not know what it serves. Refusing
+// there rejects a default that works, and tells the client "supported: []".
+func TestCreateHarnessAcceptsADefaultModelWhenTheBaseListsNone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "harnesses.json")
+	hs, err := store.NewFileHarnesses(path)
+	if err != nil {
+		t.Fatalf("harness store: %v", err)
+	}
+	reg := harness.NewRegistry()
+	reg.Register(otherAdapter{}) // base "other", advertising no models
+	svc := NewTaskService(reg, store.NewMemoryStore(), slog.Default(), WithHarnessStore(hs))
+
+	h, err := svc.CreateHarness(context.Background(), HarnessSpec{
+		Name: "x", Base: "other", DefaultModel: "whatever-the-cli-knows"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if h.DefaultModel != "whatever-the-cli-knows" {
+		t.Errorf("DefaultModel = %q, want the one that was asked for", h.DefaultModel)
+	}
+}
+
 // F-05: a bundle with no SKILL.md would be stored and then silently ignored at
 // run time, which is the hardest kind of failure for a user to diagnose.
 func TestCreateHarnessRefusesASkillWithoutAManifest(t *testing.T) {

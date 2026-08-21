@@ -23,6 +23,14 @@ func NewClaude(models []string) *CLIHarness {
 			domain.CapStreaming, domain.CapFilesIn, domain.CapFilesOut,
 			domain.CapSessions, domain.CapCancellation, domain.CapTools,
 		},
+		// No ModelsArgs: Claude Code is the one harness here that cannot
+		// enumerate its own models. `claude --help` has no listing command and
+		// no subcommand prints one; an unknown `--model` is a warning rather
+		// than a refusal, so probing tells you nothing either. The configured
+		// list is therefore all there is, which makes keeping it current a
+		// standing obligation rather than a one-off fix — as of 2026-08-21
+		// `claude-sonnet-4.6` and `claude-opus-4.6` are recognised but retired,
+		// which the CLI says out loud when they are used.
 		Prompt: PromptStdin,
 		BuildArgs: func(req RunRequest) ([]string, error) {
 			// `--verbose` is mandatory: Claude Code rejects

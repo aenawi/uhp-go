@@ -22,7 +22,15 @@ func NewPi(models []string) *CLIHarness {
 		Binary:       "pi",
 		Models:       models,
 		Capabilities: []domain.Capability{domain.CapStreaming, domain.CapTools},
-		Prompt:       PromptStdin,
+		// `pi --list-models` prints the models pi will route to, filtered by
+		// which providers have credentials — the same "computed, not asserted"
+		// answer §3.1 asks for. Verified by execution; it is what caught
+		// `auto`, which pi does not reject but fuzzy-matches to an unrelated
+		// provider.
+		ModelsArgs:  []string{"--list-models"},
+		ParseModels: parsePiModels,
+
+		Prompt: PromptStdin,
 		BuildArgs: func(req RunRequest) ([]string, error) {
 			args := []string{"-p"}
 			if req.Model != "" {
@@ -48,4 +56,42 @@ func NewPi(models []string) *CLIHarness {
 			return args
 		},
 	}).Build()
+}
+
+// parsePiModels reads the table `pi --list-models` prints:
+//
+//	provider  model                     context  max-out  thinking  images
+//	groq      llama-3.3-70b-versatile   131.1K   32.8K    no        no
+//
+// The id `pi --model` takes is `provider/id`, so the first two columns are
+// joined. The model column may itself contain a slash
+// (`meta-llama/llama-4-scout-17b-16e-instruct`), which is why the columns are
+// read positionally rather than by splitting an id apart afterwards.
+//
+// Nothing is read until the header has been seen, and then only lines as wide
+// as the header was. With no catalogue to show pi prints prose to the same
+// stream — `pi --list-models zzz` answers `No models matching "zzz"` — and the
+// first two words of a sentence read as a provider and a model just as well as
+// a row does. A message advertised as a model is published by /v1/models as
+// available, which is the failure §3.1 calls the worst outcome for a client.
+//
+// Taking the width from the header rather than hard-coding six also means a
+// column added to the table is followed rather than fatal.
+func parsePiModels(stdout string) []string {
+	var models []string
+	width := 0
+
+	for _, line := range strings.Split(stdout, "\n") {
+		fields := strings.Fields(line)
+		// The header names its own columns, so it identifies itself.
+		if len(fields) >= 2 && fields[0] == "provider" && fields[1] == "model" {
+			width = len(fields)
+			continue
+		}
+		if width == 0 || len(fields) != width {
+			continue
+		}
+		models = append(models, fields[0]+"/"+fields[1])
+	}
+	return models
 }

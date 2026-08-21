@@ -534,6 +534,12 @@ func validateDefaultModel(base harness.Adapter, model string) error {
 		return nil
 	}
 	info := base.Info()
+	// An empty catalogue is not a refusal, for the reason spelled out in
+	// harness.CLIHarness.validateModel: the base has not said it cannot serve
+	// this model, only that it does not know what it serves.
+	if len(info.Models) == 0 {
+		return nil
+	}
 	for _, m := range info.Models {
 		if m == model {
 			return nil

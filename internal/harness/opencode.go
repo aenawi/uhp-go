@@ -1,6 +1,10 @@
 package harness
 
-import "github.com/aenawi/uhp-go/internal/domain"
+import (
+	"strings"
+
+	"github.com/aenawi/uhp-go/internal/domain"
+)
 
 // NewOpenCode declares the OpenCode harness (`opencode run`).
 //
@@ -35,6 +39,14 @@ func NewOpenCode(models []string) *CLIHarness {
 			domain.CapStreaming, domain.CapFilesIn, domain.CapFilesOut,
 			domain.CapTools,
 		},
+		// `opencode models` prints the models this install's configured
+		// providers actually expose, which is the only honest source: there is
+		// no universal opencode model id, only whatever the operator has
+		// logged in to. Verified by execution; it is what caught `auto`, which
+		// opencode rejects with "Model not found: auto/.".
+		ModelsArgs:  []string{"models"},
+		ParseModels: parseOpenCodeModels,
+
 		Prompt: PromptStdin,
 		BuildArgs: func(req RunRequest) ([]string, error) {
 			args := []string{"run"}
@@ -45,4 +57,22 @@ func NewOpenCode(models []string) *CLIHarness {
 		},
 		ParseLine: passthroughParseLine,
 	}).Build()
+}
+
+// parseOpenCodeModels reads `opencode models`, which prints one id per line.
+//
+// A line only counts as a model if it has the shape opencode's own `--model`
+// takes — `provider/model`, no spaces. Without that check a banner, a prompt
+// to log in, or an error message would each be advertised as a model, and
+// `/v1/models` would publish it as available.
+func parseOpenCodeModels(stdout string) []string {
+	var models []string
+	for _, line := range strings.Split(stdout, "\n") {
+		id := strings.TrimSpace(line)
+		if id == "" || strings.ContainsAny(id, " \t") || !strings.Contains(id, "/") {
+			continue
+		}
+		models = append(models, id)
+	}
+	return models
 }
