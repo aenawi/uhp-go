@@ -1,4 +1,4 @@
-.PHONY: build run test vet fmt fmt-check tidy docker docker-check conformance conformance-gate
+.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate
 
 build:
 	go build -o bin/uhpd ./cmd/uhpd
@@ -25,6 +25,13 @@ fmt-check:
 
 tidy:
 	go mod tidy
+
+# Point git at the hooks this repository ships. One command per clone; there is
+# no hook manager and no dependency to install, because `core.hooksPath` is the
+# whole feature and this is a Go repository with no package manager to borrow.
+hooks:
+	@git config core.hooksPath .githooks
+	@echo "git hooks enabled: $$(ls .githooks | tr '\n' ' ')"
 
 docker:
 	docker build -t uhp-go:local .

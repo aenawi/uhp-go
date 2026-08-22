@@ -8,10 +8,17 @@ on:
 permissions:
   contents: read
 
-# A branch pushed three times in a minute is three runs of a job that spends
-# real tokens to measure two revisions nobody will look at again. The newest
-# push is the only one whose answer is wanted; `main` is exempt, because its
-# runs are the record.
+# A branch pushed three times in a minute is three runs measuring two revisions
+# nobody will look at again. The newest push is the only one whose answer is
+# wanted; `main` is exempt, because its runs are the record.
+#
+# Everything here is free: compilation, tests and an image build. Nothing in
+# this file starts an agent or spends a token, and that is deliberate — the
+# conformance suite runs real agent tasks against a real CLI, and a job that
+# bills a maintainer for every push is one they turn off rather than trust.
+# GitHub also withholds secrets from a fork's pull request, so a remote gate
+# could never have measured a contribution anyway. It runs on a maintainer's
+# machine before a merge instead; see docs/conformance.md.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -48,141 +55,3 @@ jobs:
       # rather than a 500 on the first request that reaches for a harness CLI.
       - name: Build and check the image
         run: make docker-check
-
-  # The conformance score, defended rather than measured by hand (issue #14).
-  #
-  # This job runs real agent tasks against a real CLI, which costs real tokens
-  # and a few minutes. That is the point: a stream that never flushes, a
-  # cancellation that never terminates and an artifact that cannot be
-  # downloaded are all invisible to anything that only inspects a schema.
-  #
-  # It measures `claude-code`, and the choice is not arbitrary — see
-  # docs/conformance.md. It is the one base that both advertises everything the
-  # core checks exercise and streams incrementally, and `--include-partial-
-  # messages` is what makes the second half true.
-  conformance:
-    runs-on: ubuntu-latest
-    # Nothing is spent on a change that does not compile or whose tests are
-    # red: the score is a claim about working software, and measuring broken
-    # software costs money to learn something the job above already said.
-    needs: build
-    # Six agent tasks and a few minutes. Ten times that is a wedged CLI or a
-    # provider that stopped answering, and a paid job with no upper bound is
-    # the wrong way to find out.
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      # Whether there is a credential to run agent tasks with, answered once.
-      #
-      # A fork's pull request gets no secrets, and neither does this repository
-      # until someone sets one, so the alternative to skipping is a permanently
-      # red build that everyone learns to ignore — which defends less than no
-      # gate at all. The skip is announced rather than silent: a gate nobody
-      # can see not running is the failure mode this is trying to avoid.
-      - name: Is there a credential to measure with?
-        id: credential
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          if [ -n "$ANTHROPIC_API_KEY" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Conformance gate skipped::No ANTHROPIC_API_KEY secret is visible to this run, so the suite cannot start an agent task. The recorded score is not defended by this build."
-          fi
-
-      - uses: actions/setup-go@v5
-        if: steps.credential.outputs.present == 'true'
-        with:
-          go-version: '1.22'
-          check-latest: true
-
-      - uses: actions/setup-python@v5
-        if: steps.credential.outputs.present == 'true'
-        with:
-          python-version: '3.12'
-
-      - uses: actions/setup-node@v4
-        if: steps.credential.outputs.present == 'true'
-        with:
-          node-version: '22'
-
-      - name: Install the harness CLI
-        if: steps.credential.outputs.present == 'true'
-        run: npm install -g @anthropic-ai/claude-code
-
-      # Pinned to a commit, not to a branch. The suite is another project's
-      # repository: tracking its HEAD means this gate can go red because
-      # somebody else pushed, which teaches everyone to disbelieve it. Bumping
-      # this is a deliberate act that belongs in a commit of its own, together
-      # with whatever the new suite revision moved.
-      - name: Install the conformance suite
-        if: steps.credential.outputs.present == 'true'
-        env:
-          SUITE_REF: cacac15816ec104e9a4e0734a0f92e6d421c40f3
-        run: |
-          git clone --filter=blob:none https://github.com/HarnessRouter/harnessrouter suite
-          git -C suite checkout --quiet "$SUITE_REF"
-          pip install -e suite/protocol/conformance
-
-      # A workspace is not optional. Without one the server honestly reports
-      # `files_input`, `files_output` and `harness_management` as false, and
-      # the checks behind them are refused rather than measured.
-      #
-      # ANTHROPIC_API_KEY belongs on *this* step and is load-bearing here, not
-      # on the step that runs the suite. `process.run` never sets `cmd.Env`, so
-      # the claude CLI inherits the environment of the uhpd started here — and
-      # the suite itself only ever speaks HTTP, so a copy of the key beside it
-      # would authenticate nothing.
-      - name: Start uhpd
-        if: steps.credential.outputs.present == 'true'
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          go build -o bin/uhpd ./cmd/uhpd
-          mkdir -p "$RUNNER_TEMP/uhp-workspace"
-          UHP_API_KEYS=ci-key UHP_WORKSPACE="$RUNNER_TEMP/uhp-workspace" \
-            ./bin/uhpd > "$RUNNER_TEMP/uhpd.log" 2>&1 &
-          for _ in $(seq 1 30); do
-            curl -sf http://localhost:8080/v1/uhp >/dev/null && exit 0
-            sleep 1
-          done
-          echo "uhpd did not become ready:"; cat "$RUNNER_TEMP/uhpd.log"; exit 1
-
-      # Asked rather than assumed. The id is derived from the base name and is
-      # therefore stable, but writing a derived value down by hand is how the
-      # model lists in issue #12 came to name models that did not exist.
-      - name: Resolve the harness to measure
-        if: steps.credential.outputs.present == 'true'
-        id: harness
-        run: |
-          pick='import sys,json; print(next((h["id"] for h in json.load(sys.stdin)["harnesses"] if h["base"] == "claude-code"), ""))'
-          id="$(curl -sf -H 'Authorization: Bearer ci-key' http://localhost:8080/v1/harnesses | python3 -c "$pick")"
-          test -n "$id" || { echo "no claude-code harness is configured"; exit 1; }
-          echo "id=$id" >> "$GITHUB_OUTPUT"
-
-      - name: Run the conformance gate
-        if: steps.credential.outputs.present == 'true'
-        env:
-          UHP_API_KEY: ci-key
-          UHP_HARNESS_ID: ${{ steps.harness.outputs.id }}
-        run: make conformance-gate
-
-      # Uploaded on failure too — especially on failure. The report names which
-      # checks fell over and what the server actually answered, which is the
-      # whole of the evidence and is gone with the runner otherwise.
-      #
-      # `error` rather than `warn`: the gate deletes the report before each run
-      # and the suite writes one even when every check fails, so nothing here
-      # means the run did not happen — and a job that reaches this step having
-      # produced no evidence should say so rather than shrug.
-      - name: Keep the report
-        if: always() && steps.credential.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: conformance-report
-          path: |
-            conformance-report.json
-            ${{ runner.temp }}/uhpd.log
-          if-no-files-found: error
