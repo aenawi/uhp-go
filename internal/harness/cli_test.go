@@ -168,13 +168,15 @@ func TestBuildArgs(t *testing.T) {
 			h:    NewOpenCode(models),
 			req:  RunRequest{Input: "--help"},
 			checkFn: func(t *testing.T, args []string) {
-				// Verified by execution: `opencode run "--help"` prints usage
-				// and runs nothing, because `message` is a yargs positional and
-				// yargs parses a leading hyphen as an option. `--` does protect
-				// it, but it also swallows every flag after it — `opencode run
-				// -- "--help" --model m1` sent `--model m1` to the model as part
-				// of the message. Stdin is the only form that carries an
-				// arbitrary prompt without either failure.
+				// Verified by execution on 1.14.41 and again on 1.18.21:
+				// `opencode run "--help"` prints usage and runs nothing,
+				// because `message` is a yargs positional and yargs parses a
+				// leading hyphen as an option. `--` does protect it, but it
+				// also swallows every flag after it — `opencode run --format
+				// json -- "<prompt>" --model opencode/hy3-free` came back with
+				// the model echoing "--model opencode/hy3-free" as part of the
+				// message it had been sent. Stdin is the only form that carries
+				// an arbitrary prompt without either failure.
 				if argvContains(args, "--help") {
 					t.Fatalf("`opencode run --help` prints usage instead of running: %v", args)
 				}
@@ -257,9 +259,15 @@ func TestPromptNeverBecomesAnOption(t *testing.T) {
 }
 
 // Every openCode*Event below is a verbatim line of `opencode run --format
-// json` stdout, captured 2026-08-21 from opencode 1.14.41. Same rule as the
-// model fixtures in models_test.go: a line written from memory would only move
-// the guess issue #13 exists to remove into the tests and let them pass.
+// json` stdout, captured 2026-08-21 from opencode 1.14.41 unless the name says
+// otherwise. Same rule as the model fixtures in models_test.go: a line written
+// from memory would only move the guess issue #13 exists to remove into the
+// tests and let them pass.
+//
+// Issue #13 was re-run against opencode 1.18.21 on 2026-08-22 and every event
+// shape below still parses unchanged. The one thing that did change there is
+// how a failed run exits, which no event carries — see
+// TestOpenCodeErrorBeatsTheExitCode.
 const (
 	openCodeStepStartEvent  = `{"type":"step_start","timestamp":1787318971761,"sessionID":"ses_fdb7cdbe1ffeFKmuIMghX7MCis","part":{"id":"prt_024832d6d001FAOns2VqM4At63","messageID":"msg_024832481001VmFtd8heERcvNR","sessionID":"ses_fdb7cdbe1ffeFKmuIMghX7MCis","type":"step-start"}}`
 	openCodeTextEvent       = `{"type":"text","timestamp":1787318979538,"sessionID":"ses_fdb7cdbe1ffeFKmuIMghX7MCis","part":{"id":"prt_024834b9b001bJLaBBTnOHp9xX","messageID":"msg_0248341b4001EkO13YqlWp7fMo","sessionID":"ses_fdb7cdbe1ffeFKmuIMghX7MCis","type":"text","text":"It printed ` + "`HELLO_PROBE`" + `.","time":{"start":1787318979483,"end":1787318979537}}}`
@@ -313,10 +321,12 @@ func TestParseOpenCodeLine(t *testing.T) {
 		}
 	})
 
-	// An `error` event is the only signal that a run failed: opencode exits 0
-	// after printing one, so a harness that ignored it would report a task that
-	// never ran as completed with empty output. Verified by execution —
-	// `opencode run --model bogus/nope` prints this line and exits 0.
+	// An `error` event is what carries the reason a run failed. On 1.14.41 it
+	// was also the only signal that one had: opencode exited 0 after printing
+	// it, so a harness that ignored it reported a task that never ran as
+	// completed with empty output. On 1.18.21 opencode exits 1 as well, so the
+	// run fails either way — but an exit code has no words in it, and these are
+	// the CLI's own. Verified by execution on both versions.
 	t.Run("error fails the run, carrying the CLI's own words", func(t *testing.T) {
 		got := parseOpenCodeLine(openCodeErrorEvent)
 		if len(got) != 1 || got[0].Type != UpdateFailed {

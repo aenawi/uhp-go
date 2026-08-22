@@ -12,12 +12,21 @@ import (
 // behaviour can be tested without depending on any agent CLI being installed.
 func shHarness(t *testing.T, script string, prompt PromptMode) *CLIHarness {
 	t.Helper()
+	return shHarnessParsing(t, script, prompt, passthroughParseLine)
+}
+
+// shHarnessParsing is shHarness with a real adapter's ParseLine, for the tests
+// that need a script's output interpreted the way one CLI's would be. The
+// parser must be passed in rather than assigned afterwards: Build captures it
+// into the process, so a later `h.ParseLine = …` is silently ignored.
+func shHarnessParsing(t *testing.T, script string, prompt PromptMode, parse func(string) []RunUpdate) *CLIHarness {
+	t.Helper()
 	return (&CLIHarness{
 		ID:        "sh",
 		Binary:    "/bin/sh",
 		Prompt:    prompt,
 		BuildArgs: func(RunRequest) ([]string, error) { return []string{"-c", script}, nil },
-		ParseLine: passthroughParseLine,
+		ParseLine: parse,
 	}).Build()
 }
 
@@ -72,6 +81,52 @@ func TestNonZeroExitIsFailedAndCarriesStderr(t *testing.T) {
 	}
 	if l.Err == nil || !strings.Contains(l.Err.Error(), "boom") {
 		t.Fatalf("failure does not carry stderr: %v", l.Err)
+	}
+}
+
+// Issue #13: opencode 1.14.41 exited 0 after printing an `error` event and
+// 1.18.21 exits 1, so the run now fails twice over — once from the parsed line,
+// once from the exit code. Only the parsed one has the CLI's words in it; the
+// exit-code failure says "exited: exit status 1" and nothing about why.
+//
+// This pins the order, because nothing else does. Deleting the `error` branch
+// from parseOpenCodeLine still leaves a failing run on 1.18.21, so every
+// version-agnostic test of that function keeps passing while the client
+// silently loses the reason — which is exactly the regression harnessFailure
+// exists to prevent.
+func TestOpenCodeErrorBeatsTheExitCode(t *testing.T) {
+	// Constructed from two real halves: a captured `error` line, and the exit 1
+	// that 1.18.21 follows one with. The line is the 1.14.41 capture because
+	// its message names a cause, which an exit-code failure never could — so
+	// seeing it prove the reason survived cannot be a coincidence.
+	h := shHarnessParsing(t, "echo '"+openCodeErrorEvent+"'; exit 1", PromptArgs, parseOpenCodeLine)
+
+	ch, err := h.Run(context.Background(), RunRequest{TaskID: "t-oc-err"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := drain(t, ch)
+
+	var first *RunUpdate
+	for i, u := range got {
+		if u.Type == UpdateFailed || u.Type == UpdateCompleted || u.Type == UpdateCancelled {
+			first = &got[i]
+			break
+		}
+	}
+	if first == nil {
+		t.Fatalf("no terminal update at all: %+v", got)
+	}
+	if first.Type != UpdateFailed {
+		t.Fatalf("first terminal update = %q, want %q", first.Type, UpdateFailed)
+	}
+	// The supervisor keeps the first terminal update, so this is the one the
+	// client is told. It must be the parsed line, not the exit code.
+	if !strings.Contains(first.Err.Error(), "Model not found: bogus/nope.") {
+		t.Errorf("client loses opencode's own words to the exit code: %v", first.Err)
+	}
+	if strings.Contains(first.Err.Error(), "exit status") {
+		t.Errorf("first failure is the exit code, not the parsed reason: %v", first.Err)
 	}
 }
 

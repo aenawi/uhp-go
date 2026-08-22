@@ -28,13 +28,29 @@ const grokModelsOutput = "You are logged in with grok.com.\n" +
 	"  * grok-4.6 (default)\n" +
 	"  - grok-4.5\n"
 
-// openCodeModelsOutput is `opencode models`, captured 2026-08-21. Every line is
-// a `provider/model` id, which is the form `opencode run --model` takes.
+// openCodeModelsOutput is `opencode models`, captured 2026-08-21 from opencode
+// 1.14.41. Every line is a `provider/model` id, which is the form
+// `opencode run --model` takes.
 const openCodeModelsOutput = "opencode/big-pickle\n" +
 	"opencode/deepseek-v4-flash-free\n" +
 	"opencode/mimo-v2.5-free\n" +
 	"opencode/nemotron-3-ultra-free\n" +
 	"opencode/north-mini-code-free\n"
+
+// openCodeModelsOutput1_18 is the same command captured 2026-08-22 from
+// opencode 1.18.21 (issue #13). It is here rather than replacing the one above
+// because the ids differ between the two captures and neither list is wrong:
+// `opencode models` prints what this install's configured providers expose, so
+// the ids are a property of the machine and only the shape is a property of the
+// CLI. Keeping both is what makes that claim checkable — and it grounds
+// `opencode/hy3-free`, which the probes in cli_test.go cite.
+const openCodeModelsOutput1_18 = "opencode/big-pickle\n" +
+	"opencode/hy3-free\n" +
+	"opencode/mimo-v2.5-free\n" +
+	"opencode/muse-spark-1.2-contributor-free\n" +
+	"opencode/nemotron-3-ultra-free\n" +
+	"opencode/nemotron-3.5-lightning-free\n" +
+	"opencode/x-preview-f-free\n"
 
 // piModelsOutput is `pi --list-models`, captured 2026-08-21. A whitespace
 // table with a header row; the id `pi --model` takes is `provider/model`, and
@@ -107,6 +123,22 @@ func TestParseModels(t *testing.T) {
 				"opencode/mimo-v2.5-free",
 				"opencode/nemotron-3-ultra-free",
 				"opencode/north-mini-code-free",
+			},
+		},
+		{
+			// Issue #13's re-probe. The install changed and the ids with it;
+			// the parse did not, which is the whole claim.
+			name:  "opencode 1.18.21: same shape, different ids",
+			parse: parseOpenCodeModels,
+			out:   openCodeModelsOutput1_18,
+			want: []string{
+				"opencode/big-pickle",
+				"opencode/hy3-free",
+				"opencode/mimo-v2.5-free",
+				"opencode/muse-spark-1.2-contributor-free",
+				"opencode/nemotron-3-ultra-free",
+				"opencode/nemotron-3.5-lightning-free",
+				"opencode/x-preview-f-free",
 			},
 		},
 		{

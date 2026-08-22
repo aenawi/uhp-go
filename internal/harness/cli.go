@@ -403,14 +403,21 @@ func passthroughParseLine(line string) []RunUpdate {
 // harnessFailure is the terminal update for a run whose CLI reported a problem
 // in its own output rather than by its exit code.
 //
-// Three of the five now need one — opencode and pi both exit 0 after printing
-// an error, and claude exits 1 but writes the reason to stdout and leaves
-// stderr empty — so the shape lives here rather than three times. The part
-// each adapter keeps is the only part that differs: which field of its own
-// event schema holds the words. What is shared is that the words are prefixed
-// with the harness they came from, and that a failure with nothing to say
-// still says something, because "the run failed" with an empty reason reads to
-// a client as a bug in this server.
+// Three of the five need one. pi exits 0 after printing an error; claude exits
+// 1 but writes the reason to stdout and leaves stderr empty; opencode exited 0
+// on 1.14.41 and exits 1 on 1.18.21 (issue #13, verified by execution on both).
+// That last one is why this does not hang on the exit code: an exit code says a
+// run failed and cannot say why, so the reason is worth lifting out of the
+// CLI's own output whether or not the code agrees. Both updates are sent and
+// the supervisor keeps the first, which is the parsed one — see
+// TestOpenCodeErrorBeatsTheExitCode.
+//
+// So the shape lives here rather than three times. The part each adapter keeps
+// is the only part that differs: which field of its own event schema holds the
+// words. What is shared is that the words are prefixed with the harness they
+// came from, and that a failure with nothing to say still says something,
+// because "the run failed" with an empty reason reads to a client as a bug in
+// this server.
 func harnessFailure(base, message string) RunUpdate {
 	if message = strings.TrimSpace(message); message == "" {
 		message = "the run failed without reporting a reason"

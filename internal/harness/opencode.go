@@ -10,8 +10,9 @@ import (
 // NewOpenCode declares the OpenCode harness (`opencode run --format json`).
 //
 // Issue #13: this invocation used to be the one guess in the set. It has now
-// been run against opencode 1.14.41 (2026-08-21), through the same four probes
-// the other four harnesses were held to:
+// been run against opencode 1.14.41 (2026-08-21) and re-run against 1.18.21
+// (2026-08-22), through the same four probes the other four harnesses were
+// held to. All four answered the same way on both versions:
 //
 //   - A prompt on stdin is read and answered, so PromptStdin stands. It was
 //     the conservative default; it turns out to also be the correct one.
@@ -117,10 +118,13 @@ func parseOpenCodeLine(line string) []RunUpdate {
 		return []RunUpdate{{Type: UpdateDelta, Delta: ev.Part.Text + "\n"}}
 
 	case ev.Type == "error":
-		// opencode exits 0 after printing this, so the shared runner would
-		// otherwise report a run that never happened as completed with empty
-		// output. The supervisor settles on the first terminal update and
-		// drains the rest, so the trailing "completed" is correctly ignored.
+		// The reason the run failed, which no exit code can carry. On 1.14.41
+		// this was also the only signal that it had failed at all: opencode
+		// exited 0 after printing it, so the shared runner would otherwise have
+		// reported a run that never happened as completed with empty output.
+		// 1.18.21 exits 1 as well, so that hole is now closed at both ends —
+		// but only this end has words in it. See harnessFailure for why the
+		// exit code is not what any of this hangs on.
 		return []RunUpdate{harnessFailure("opencode", openCodeErrorMessage(ev))}
 	}
 
@@ -138,9 +142,9 @@ func parseOpenCodeLine(line string) []RunUpdate {
 }
 
 // openCodeErrorMessage picks the most specific words opencode gave for a
-// failure, so the client is told "Model not found: bogus/nope." rather than
-// the error class it belongs to. Empty when it gave neither; harnessFailure
-// owns what is said then.
+// failure, so the client is told "Model not found: bogus/nope." rather than the
+// error class it belongs to. Empty when it gave neither; harnessFailure owns
+// what is said then.
 func openCodeErrorMessage(ev openCodeEvent) string {
 	if ev.Error == nil {
 		return ""
