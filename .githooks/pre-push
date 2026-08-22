@@ -1,0 +1,25 @@
+#!/bin/sh
+# Everything CI's `build` job checks, run before the push rather than after it.
+#
+# pre-push and not pre-commit: the suite takes about twenty seconds cold, which
+# is tolerable once per push and intolerable per commit. A hook people disable
+# because it is slow checks nothing at all.
+#
+# What is deliberately NOT here is the conformance suite. It starts real agent
+# tasks against a real CLI, costs real tokens and takes minutes; a hook that
+# bills you for a push is a hook you pass --no-verify to. Conformance is a
+# thing a maintainer runs on purpose before a merge — `make conformance-gate`,
+# see docs/conformance.md.
+#
+# Enable with: make hooks   (or: git config core.hooksPath .githooks)
+# Bypass once with: git push --no-verify
+set -e
+
+echo "pre-push: build, vet, format, test"
+
+go build ./...
+go vet ./...
+make fmt-check
+go test ./... -race
+
+echo "pre-push: ok"

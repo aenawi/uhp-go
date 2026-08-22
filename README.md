@@ -69,11 +69,16 @@ are reported as `false` rather than omitted.
 
 A skip is counted as a failure here, not as a pass.
 
-That score is defended by CI rather than remembered: the `conformance` job runs the suite
-against `claude-code` and refuses a failure, *any* skip, or a pass count below the recorded
-one. It skips itself with a notice when no `ANTHROPIC_API_KEY` secret is visible, because a
-fork's pull request cannot have one and a permanently red job defends nothing. Why that
-harness, and what `S-09` can and cannot see, are both in
+That score is defended by a maintainer running `make conformance-gate` before a merge, not
+by CI. The gate points the suite at a running `uhpd` and refuses a failure, *any* skip, or a
+pass count below the recorded one — but it runs on a person's machine, because the suite
+starts real agent tasks against a real CLI and costs real tokens. GitHub withholds secrets
+from a fork's pull request anyway, so a remote job could never have measured a contribution.
+CI keeps the free checks: compilation, tests, and an image build.
+
+That is weaker than a machine-enforced gate and is stated as such: what holds the score up
+is a procedure, and a maintainer who skips it leaves nothing red behind. Why `claude-code`
+is the harness measured, when to run the gate, and what `S-09` can and cannot see are all in
 [docs/conformance.md](docs/conformance.md).
 
 ## Architecture
@@ -389,8 +394,9 @@ claim.
 They are not the only unverified claims left. Issue #14 added one that fails in the worse
 direction: `parseClaudeLine` now reads `stream_event` envelopes whose shape was read out of
 the Claude Code binary rather than captured from a live run, and a wrong shape produces an
-empty answer rather than a refusal. What holds it up is the CI conformance gate, which
-measures that harness on every build and fails loudly on an empty answer — see
+empty answer rather than a refusal. What would settle it is a conformance run against that
+harness, which fails loudly on an empty answer — but the gate is a maintainer's local run
+rather than a CI job, so this stays unverified until someone performs one. See
 [docs/conformance.md](docs/conformance.md).
 
 Where a runtime cannot hard-block a tool, the restriction is conveyed as a standing
@@ -589,9 +595,20 @@ make vet
 make fmt
 ```
 
-The conformance gate is separate, because it spends real tokens on real agent tasks. It
-needs the suite installed and a running server; see
-[docs/conformance.md](docs/conformance.md) for both.
+Run those four before a push automatically:
+
+```bash
+make hooks   # git config core.hooksPath .githooks
+```
+
+`.githooks/pre-push` builds, vets, checks formatting and runs the tests — about twenty
+seconds, no tokens. It is the same set CI runs, so a failure here is a red build you did not
+have to wait for. Bypass a single push with `git push --no-verify`.
+
+The conformance gate is separate and is *not* in that hook, because it spends real tokens on
+real agent tasks. It needs the suite installed and a running server, and it is a thing you
+run on purpose before merging something that could move the score — see
+[docs/conformance.md](docs/conformance.md) for when, and for the pinned suite revision.
 
 ```bash
 UHP_API_KEY=devkey UHP_HARNESS_ID=chrn_… make conformance-gate

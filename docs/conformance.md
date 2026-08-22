@@ -67,11 +67,34 @@ Three things to know before reading a result:
   only inspects a schema.
 - **A skip is never a pass.** The suite reports skips separately and so does this file.
 
-## The CI gate
+## The gate
 
-The score above is now defended by a build rather than remembered from a run. The
-`conformance` job in `.github/workflows/ci.yml` starts `uhpd`, points the suite at it and
-refuses a result worse than the one recorded here.
+The gate runs on a maintainer's machine, not in CI, and that is a deliberate choice rather
+than a missing feature.
+
+`make conformance-gate` starts nothing by itself: it points the suite at a `uhpd` you are
+already running and refuses a result worse than the one recorded above. What it refuses is
+in `scripts/check-conformance.py`, which reads the JSON report rather than the suite's exit
+code — because that code is zero when checks are skipped. It rejects three things: a failure
+or error, *any* skip, and a pass count below `CONFORMANCE_FLOOR` in the Makefile. The last
+one is what stops the denominator shrinking quietly — "0 failed" over 12 checks is not the
+result that "0 failed" over 37 checks was.
+
+**Why it is not a CI job.** It was one, briefly. The suite runs about six real agent tasks
+against a real CLI, which costs real tokens and minutes, and two things follow from that:
+
+- *GitHub withholds secrets from a fork's pull request.* A remote gate could therefore never
+  have measured a contribution — it would have skipped every one of them. Running it locally
+  gives up nothing that was working.
+- *A gate that bills the maintainer for every push is a gate they switch off.* Free
+  compilation, tests and an image build stay in CI, where they cost nothing and catch what a
+  developer's own machine cannot: a Linux build, and `-race` on a different scheduler.
+
+**What this costs, stated plainly.** A local gate is not enforcement. `git push --no-verify`
+skips the hooks, nothing in GitHub can prove the suite was run, and a maintainer who forgets
+leaves the score undefended without anything turning red. The score above is held up by a
+person following the procedure below — not by a build. That is weaker than a CI gate, and
+the honest thing is to say so here rather than let this file imply a machine is checking.
 
 **It measures `claude-code`, and that is a decision rather than a default** (issue #14).
 Three constraints pick it between them:
@@ -83,41 +106,76 @@ Three constraints pick it between them:
   nothing about streaming. `claude-code` streams token-level content blocks, but only with
   `--include-partial-messages`, which is why the invocation grew that flag.
 - *It has to be installed.* The image already ships `@anthropic-ai/claude-code`, and its CLI
-  reads `ANTHROPIC_API_KEY` from the environment without further configuration.
+  reads `ANTHROPIC_API_KEY` from the environment without further configuration — which is
+  the same variable your own shell already has if you use that CLI.
 
-The job skips itself, loudly, when no `ANTHROPIC_API_KEY` secret is visible — which is the
-case for every pull request from a fork. The alternative is a job that is red for reasons
-nobody can fix, and a red build everyone has learned to ignore defends less than no gate.
+### Running it
 
-**It is skipping on every run until that secret is set**, which is the state this repository
-is in as of the commit that added the job. Nothing here can set it; a maintainer must:
+Pin the suite to the revision the recorded score was taken against. It is another project's
+repository, and a score that moves because somebody else pushed is a score nobody can
+reproduce.
 
 ```bash
-gh secret set ANTHROPIC_API_KEY --repo aenawi/uhp-go
+git clone --filter=blob:none https://github.com/HarnessRouter/harnessrouter suite
+git -C suite checkout --quiet cacac15816ec104e9a4e0734a0f92e6d421c40f3
+pip install -e suite/protocol/conformance
 ```
 
-Until then the gate is wiring rather than a gate, and the score above is still a number
-someone measured by hand.
+Then start a server with a workspace — without one, `files_input`, `files_output` and
+`harness_management` are honestly reported `false` and the checks behind them are refused
+rather than measured — and point the gate at the `claude-code` harness:
 
-The suite's own exit code is not the whole verdict, because it is zero when checks are
-skipped. `scripts/check-conformance.py` reads the JSON report and refuses three things: a
-failure or error, *any* skip, and a pass count below `CONFORMANCE_FLOOR` in the Makefile.
-The last one is what stops the denominator shrinking quietly — "0 failed" over 12 checks is
-not the result that "0 failed" over 37 checks was.
+```bash
+go build -o bin/uhpd ./cmd/uhpd
+UHP_API_KEYS=devkey UHP_WORKSPACE=/tmp/uhp-workspace ./bin/uhpd &
+
+# Ask which id it serves rather than writing a derived value down by hand.
+pick='import sys,json; print(next((h["id"] for h in json.load(sys.stdin)["harnesses"] if h["base"] == "claude-code"), ""))'
+curl -sf -H 'Authorization: Bearer devkey' localhost:8080/v1/harnesses | python3 -c "$pick"
+
+UHP_API_KEY=devkey UHP_HARNESS_ID=chrn_… make conformance-gate
+```
+
+`ANTHROPIC_API_KEY` is read from your environment by the `claude` CLI that `uhpd` spawns.
+`process.run` never sets `cmd.Env`, so the CLI inherits the environment `uhpd` was started
+in — exporting it beside the *suite* would authenticate nothing, because the suite only ever
+speaks HTTP.
+
+### When to run it
+
+Before merging anything that could move the score: a change to the transport, the event
+model, the supervisor, a harness runtime, or the discovery document. Not on every commit,
+and not from a hook — six agent tasks and a few minutes is a cost you should choose to pay.
+
+**A contribution is a maintainer's run, not the contributor's.** CI checks that a pull
+request compiles, passes tests and builds an image. It does not and cannot run the suite:
+GitHub gives a fork no secrets, and asking a contributor to spend their own tokens to prove
+your score is not a reasonable thing to ask. So when a pull request touches anything on that
+list, check the branch out locally, run the gate, and record the result in the pull request
+before merging.
 
 `CONFORMANCE_FLOOR` is the enforced copy of the score, and the score also appears in prose
 here and in the README. Nothing links them mechanically, so a run that raises the score has
-to raise the floor too — otherwise the number this file claims and the number CI defends
-drift apart, with the lower one silently winning.
+to raise the floor too — otherwise the number this file claims and the number the gate
+defends drift apart, with the lower one silently winning.
 
-The suite is pinned to a commit, not to a branch. It is another project's repository, and a
-gate that can go red because somebody else pushed is a gate people stop believing.
+### The free checks that did stay in CI
 
-Run the same thing by hand:
+`.github/workflows/ci.yml` still runs `go build`, `go vet`, `make fmt-check`,
+`go test ./... -race -cover` and `make docker-check` on every push and pull request, because
+those cost nothing and catch what a developer's machine does not: a Linux build, and the
+race detector on a different scheduler.
+
+The same four commands run locally as a `pre-push` hook, so the round trip to a red build is
+usually avoided rather than waited on:
 
 ```bash
-UHP_API_KEY=devkey UHP_HARNESS_ID=chrn_… make conformance-gate
+make hooks   # git config core.hooksPath .githooks
 ```
+
+The hook deliberately excludes the conformance suite. It takes about twenty seconds; a hook
+that took minutes and spent tokens is one people pass `--no-verify` to, and a hook that is
+routinely bypassed checks nothing.
 
 ### What S-09 does and does not defend
 
