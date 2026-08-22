@@ -400,6 +400,13 @@ func passthroughParseLine(line string) []RunUpdate {
 	return []RunUpdate{{Type: UpdateDelta, Delta: line + "\n"}}
 }
 
+// failureWithoutReason is what a client is told when the CLI failed the run but
+// gave no words for why. It is exported to the package because an adapter that
+// has something to add to it — opencode appends a correlation id, see
+// openCodeErrorMessage — must add it to this sentence rather than to a second
+// copy of it.
+const failureWithoutReason = "the run failed without reporting a reason"
+
 // harnessFailure is the terminal update for a run whose CLI reported a problem
 // in its own output rather than by its exit code.
 //
@@ -420,7 +427,7 @@ func passthroughParseLine(line string) []RunUpdate {
 // this server.
 func harnessFailure(base, message string) RunUpdate {
 	if message = strings.TrimSpace(message); message == "" {
-		message = "the run failed without reporting a reason"
+		message = failureWithoutReason
 	}
 	return RunUpdate{Type: UpdateFailed, Err: fmt.Errorf("harness: %s: %s", base, message)}
 }

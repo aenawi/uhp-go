@@ -275,6 +275,14 @@ const (
 	openCodeToolUseEvent    = `{"type":"tool_use","timestamp":1787318976945,"sessionID":"ses_fdb7cdbe1ffeFKmuIMghX7MCis","part":{"type":"tool","tool":"bash","callID":"call_f402fe9305654968b0fa370f","state":{"status":"completed","input":{"command":"echo HELLO_PROBE"},"output":"HELLO_PROBE\n"},"id":"prt_024832e69001tPw4Ou3E3bl3vX","sessionID":"ses_fdb7cdbe1ffeFKmuIMghX7MCis","messageID":"msg_024832481001VmFtd8heERcvNR"}}`
 	openCodeErrorEvent      = `{"type":"error","timestamp":1787319016730,"sessionID":"ses_fdb7c234fffeJRICyB0b8VAws7","error":{"name":"UnknownError","data":{"message":"Model not found: bogus/nope."}}}`
 
+	// The same failure on opencode 1.18.21, captured 2026-08-22 from
+	// `opencode run --format json --model bogus/nope`. The message no longer
+	// names the model: `--model opencode/nonexistent-xyz` produced this same
+	// sentence, differing only in `ref`. Two failures is not the whole of
+	// opencode's error vocabulary, but it is enough to establish that `ref` can
+	// be the only field telling one from another.
+	openCodeRefErrorEvent = `{"type":"error","timestamp":1787378638332,"sessionID":"ses_fd7ee637effe22QKKO5wjJW274","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details.","ref":"err_7879a6cf"}}}`
+
 	// The two text parts of one run that said "Alpha", ran a bash tool, then
 	// said "Gamma". Neither part carries a separator of its own, and opencode's
 	// own renderer printed them as two lines.
@@ -337,6 +345,70 @@ func TestParseOpenCodeLine(t *testing.T) {
 		}
 		if !strings.Contains(got[0].Err.Error(), "Model not found: bogus/nope.") {
 			t.Errorf("error drops the CLI's message: %v", got[0].Err)
+		}
+	})
+
+	// On 1.18.21 the message stopped being the reason. Every failure now says
+	// "Unexpected server error. Check server logs for details.", so passing it
+	// through alone hands the client a sentence that is true of every failure
+	// and identifies none of them — including two different bad models, which
+	// produced this text twice and differed only in `ref`. `ref` is also the
+	// token the message's own advice needs: "check server logs" is unfollowable
+	// without something to look for.
+	t.Run("a 1.18 error keeps the ref that is all that distinguishes it", func(t *testing.T) {
+		got := parseOpenCodeLine(openCodeRefErrorEvent)
+		if len(got) != 1 || got[0].Type != UpdateFailed {
+			t.Fatalf("got %+v, want one %s update", got, UpdateFailed)
+		}
+		msg := got[0].Err.Error()
+		if !strings.Contains(msg, "Unexpected server error.") {
+			t.Errorf("error drops the CLI's message: %v", msg)
+		}
+		if !strings.Contains(msg, "err_7879a6cf") {
+			t.Errorf("error drops the ref, leaving nothing to tell this failure from any other: %v", msg)
+		}
+	})
+
+	// The ref is an addition to the reason, never a replacement for it. These
+	// four are the whole cross-product of (reason present?) x (ref present?),
+	// because the last of them is the only branch that constructs a sentence of
+	// its own and nothing observed on either version reaches it: opencode has
+	// always sent a `name`, so `message` being empty falls back to that rather
+	// than to nothing. It is written down because dropping a ref that arrived
+	// alone is the one way this function can destroy the only identifying
+	// thing it was given.
+	t.Run("ref is appended to the reason, never substituted for it", func(t *testing.T) {
+		for _, tc := range []struct{ name, line, want string }{
+			{
+				name: "reason and ref: reason leads, ref trails",
+				line: `{"type":"error","error":{"name":"UnknownError","data":{"message":"Model not found: bogus/nope.","ref":"err_abc123"}}}`,
+				want: "harness: opencode: Model not found: bogus/nope. (ref: err_abc123)",
+			},
+			{
+				name: "reason, no ref: unchanged from 1.14.41",
+				line: `{"type":"error","error":{"name":"UnknownError","data":{"message":"Model not found: bogus/nope."}}}`,
+				want: "harness: opencode: Model not found: bogus/nope.",
+			},
+			{
+				name: "no message, no ref: the error class is the reason",
+				line: `{"type":"error","error":{"name":"UnknownError","data":{}}}`,
+				want: "harness: opencode: UnknownError",
+			},
+			{
+				name: "ref alone: borrows harnessFailure's sentence rather than a second copy",
+				line: `{"type":"error","error":{"name":"","data":{"ref":"err_abc123"}}}`,
+				want: "harness: opencode: " + failureWithoutReason + " (ref: err_abc123)",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				got := parseOpenCodeLine(tc.line)
+				if len(got) != 1 || got[0].Type != UpdateFailed {
+					t.Fatalf("got %+v, want one %s update", got, UpdateFailed)
+				}
+				if msg := got[0].Err.Error(); msg != tc.want {
+					t.Errorf("error =\n  %q\nwant\n  %q", msg, tc.want)
+				}
+			})
 		}
 	})
 

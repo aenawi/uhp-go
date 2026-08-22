@@ -88,6 +88,11 @@ type openCodeEvent struct {
 		Name string `json:"name"`
 		Data struct {
 			Message string `json:"message"`
+			// A correlation id, new in 1.18.21 and absent from every 1.14.41
+			// line captured. It earns a field because on that version it was
+			// the only thing separating two unrelated failures whose `message`
+			// was identical — see openCodeErrorMessage.
+			Ref string `json:"ref"`
 		} `json:"data"`
 	} `json:"error"`
 }
@@ -143,16 +148,38 @@ func parseOpenCodeLine(line string) []RunUpdate {
 
 // openCodeErrorMessage picks the most specific words opencode gave for a
 // failure, so the client is told "Model not found: bogus/nope." rather than the
-// error class it belongs to. Empty when it gave neither; harnessFailure owns
-// what is said then.
+// error class it belongs to. Empty when it gave nothing at all; harnessFailure
+// owns what is said then.
+//
+// The `ref` is appended rather than substituted, because on 1.18.21 the reason
+// and the identity of a failure can live in different fields. Both failures
+// probed on that version — a bad provider, and a bad model under a real
+// provider — came back with `data.message` reading "Unexpected server error.
+// Check server logs for details." and differing only in `data.ref`, so
+// forwarding the message alone would have told a client that something went
+// wrong and nothing about which thing. Whether that sentence is opencode's only
+// one was not established; two of two is enough to stop dropping the field that
+// separated them. Neither field replaces the other, so both are passed on.
 func openCodeErrorMessage(ev openCodeEvent) string {
 	if ev.Error == nil {
 		return ""
 	}
-	if msg := strings.TrimSpace(ev.Error.Data.Message); msg != "" {
-		return msg
+	msg := strings.TrimSpace(ev.Error.Data.Message)
+	if msg == "" {
+		msg = strings.TrimSpace(ev.Error.Name)
 	}
-	return ev.Error.Name
+	ref := strings.TrimSpace(ev.Error.Data.Ref)
+	switch {
+	case ref == "":
+		return msg
+	case msg == "":
+		// A ref with no sentence in front of it is not a reason, and this
+		// returns non-empty, so harnessFailure will not supply one. Borrow its
+		// sentence rather than inventing a second copy of it.
+		return failureWithoutReason + " (ref: " + ref + ")"
+	default:
+		return msg + " (ref: " + ref + ")"
+	}
 }
 
 // parseOpenCodeModels reads `opencode models`, which prints one id per line.
