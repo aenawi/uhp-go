@@ -1,0 +1,658 @@
+package store
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/internal/service"
+)
+
+// The interface is declared at its consumer, so this is the only place that
+// checks both engines still satisfy it. A production file in this package
+// cannot make the assertion without importing service, which would invert the
+// dependency the declaration site exists to establish.
+var (
+	_ service.Store = (*MemoryStore)(nil)
+	_ service.Store = (*SQLiteStore)(nil)
+)
+
+// engines is every service.Store this package ships.
+//
+// One suite, run twice. A contract asserted against a single implementation is
+// only a description of that implementation; the reason a second engine was
+// worth building is that it turns the description into something both have to
+// obey.
+var engines = []struct {
+	name string
+	open func(t *testing.T) service.Store
+}{
+	{"memory", func(*testing.T) service.Store { return NewMemoryStore() }},
+	{"sqlite", func(t *testing.T) service.Store {
+		s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "uhp.db"))
+		if err != nil {
+			t.Fatalf("open sqlite store: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		return s
+	}},
+}
+
+func eachStore(t *testing.T, fn func(t *testing.T, s service.Store)) {
+	t.Helper()
+	for _, e := range engines {
+		t.Run(e.name, func(t *testing.T) { fn(t, e.open(t)) })
+	}
+}
+
+var storeEpoch = time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
+
+// sampleTask fills every field a task carries, so a round-trip that drops one
+// fails here rather than in the endpoint that needed it.
+//
+// Metadata and IncompleteDetails hold only values JSON produces on the way in:
+// a client's metadata reaches this server through a JSON decoder, so string,
+// bool, float64, []any and map[string]any is the whole of what a store can be
+// handed. An engine that serialises is entitled to hand back a float64 for a
+// number, and pinning a Go `int` here would assert something no caller can
+// actually observe.
+func sampleTask(id, sessionID string, created time.Time) *domain.Task {
+	return &domain.Task{
+		ID:     id,
+		Object: "response",
+		Status: domain.StatusCompleted,
+		Model:  "claude-sonnet-5",
+		Output: []domain.OutputItem{
+			{
+				ID: "msg_" + id, Type: "message", Status: "completed", Role: "assistant",
+				Content: []domain.ContentPart{{
+					Type: "output_text", Text: "hello",
+					Annotations: []domain.Annotation{{
+						Type:        domain.AnnotationTypeFileCitation,
+						ContainerID: "cntr_1", FileID: "file_1", Filename: "out/report.md",
+						DownloadURL: "/v1/containers/cntr_1/files/file_1/content",
+					}},
+				}},
+			},
+			{Type: "function_call", CallID: "call_1", Name: "bash", Args: `{"cmd":"ls"}`},
+			{Type: "reasoning", Summary: []any{"thought"}},
+		},
+		Usage:              &domain.Usage{InputTokens: 11, OutputTokens: 22, TotalTokens: 33, CacheReadTokens: 4},
+		Error:              &domain.TaskError{Type: "harness_error", Code: "harness_failed", Message: "boom", Retryable: true},
+		IncompleteDetails:  map[string]any{"reason": "max_steps"},
+		PreviousResponseID: "resp_prev",
+		Store:              true,
+		Metadata:           map[string]any{"tenant": "acme", "attempt": 2.0, "tags": []any{"a", "b"}},
+		CreatedAt:          created,
+		UpdatedAt:          created.Add(time.Second),
+		HarnessID:          "claude-code",
+		SessionID:          sessionID,
+		Input:              "do the thing",
+		RequestedModel:     "claude-opus-5",
+		Artifacts: []domain.Artifact{{
+			ID: "file_1", ContainerID: "cntr_1", Path: "out/report.md",
+			MimeType: "text/markdown", SizeBytes: 42, CreatedAt: created,
+		}},
+		NativeSessionID: "native-abc",
+	}
+}
+
+func sampleSession(id, harnessID string, created time.Time) *domain.Session {
+	return &domain.Session{
+		ID: id, HarnessID: harnessID, Title: "a session", Status: domain.StatusInProgress,
+		CreatedAt: created, UpdatedAt: created.Add(time.Minute),
+		NativeSessionID: "native-" + id, LastResponseID: "resp_last",
+	}
+}
+
+func TestStoreTaskRoundTrip(t *testing.T) {
+	eachStore(t, func(t *testing.T, s service.Store) {
+		ctx := context.Background()
+		want := sampleTask("resp_a", "sess_a", storeEpoch)
+		if err := s.CreateTask(ctx, want); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		got, err := s.GetTask(ctx, "resp_a")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		assertTaskEqual(t, want, got)
+	})
+}
+
+// A store that serialises has to be told what a time is; one that keeps
+// pointers gets it for free. Both are asked for the same instant back.
+func assertTaskEqual(t *testing.T, want, got *domain.Task) {
+	t.Helper()
+	if got.ID != want.ID || got.Object != want.Object || got.Status != want.Status {
+		t.Fatalf("identity fields differ: got %+v", got)
+	}
+	if got.Model != want.Model || got.RequestedModel != want.RequestedModel {
+		t.Fatalf("model fields differ: got model=%q requested=%q", got.Model, got.RequestedModel)
+	}
+	if got.HarnessID != want.HarnessID || got.SessionID != want.SessionID ||
+		got.NativeSessionID != want.NativeSessionID || got.Input != want.Input ||
+		got.PreviousResponseID != want.PreviousResponseID || got.Store != want.Store {
+		t.Fatalf("bookkeeping fields differ: got %+v", got)
+	}
+	if !got.CreatedAt.Equal(want.CreatedAt) || !got.UpdatedAt.Equal(want.UpdatedAt) {
+		t.Fatalf("timestamps differ: got created=%v updated=%v", got.CreatedAt, got.UpdatedAt)
+	}
+	if got.Usage == nil || *got.Usage != *want.Usage {
+		t.Fatalf("usage differs: got %+v", got.Usage)
+	}
+	if got.Error == nil || *got.Error != *want.Error {
+		t.Fatalf("error differs: got %+v", got.Error)
+	}
+	if got.IncompleteDetails["reason"] != want.IncompleteDetails["reason"] {
+		t.Fatalf("incomplete_details differ: got %+v", got.IncompleteDetails)
+	}
+	if got.Metadata["tenant"] != want.Metadata["tenant"] || got.Metadata["attempt"] != want.Metadata["attempt"] {
+		t.Fatalf("metadata differs: got %+v", got.Metadata)
+	}
+	if tags, ok := got.Metadata["tags"].([]any); !ok || len(tags) != 2 || tags[0] != "a" {
+		t.Fatalf("nested metadata differs: got %#v", got.Metadata["tags"])
+	}
+	if len(got.Output) != len(want.Output) {
+		t.Fatalf("output length differs: got %d want %d", len(got.Output), len(want.Output))
+	}
+	if got.Text() != want.Text() {
+		t.Fatalf("assistant text differs: got %q want %q", got.Text(), want.Text())
+	}
+	ann := got.Output[0].Content[0].Annotations
+	if len(ann) != 1 || ann[0].FileID != "file_1" || ann[0].Type != domain.AnnotationTypeFileCitation {
+		t.Fatalf("annotations differ: got %+v", ann)
+	}
+	if got.Output[1].CallID != "call_1" || got.Output[1].Args != `{"cmd":"ls"}` {
+		t.Fatalf("function_call item differs: got %+v", got.Output[1])
+	}
+	if len(got.Output[2].Summary) != 1 || got.Output[2].Summary[0] != "thought" {
+		t.Fatalf("reasoning summary differs: got %+v", got.Output[2].Summary)
+	}
+	if len(got.Artifacts) != len(want.Artifacts) {
+		t.Fatalf("artifact count differs: got %d", len(got.Artifacts))
+	}
+	a, w := got.Artifacts[0], want.Artifacts[0]
+	if a.ID != w.ID || a.ContainerID != w.ContainerID || a.Path != w.Path ||
+		a.MimeType != w.MimeType || a.SizeBytes != w.SizeBytes || !a.CreatedAt.Equal(w.CreatedAt) {
+		t.Fatalf("artifact differs: got %+v want %+v", a, w)
+	}
+}
+
+func TestStoreTaskNotFound(t *testing.T) {
+	eachStore(t, func(t *testing.T, s service.Store) {
+		ctx := context.Background()
+		if _, err := s.GetTask(ctx, "resp_missing"); err == nil {
+			t.Fatal("GetTask on an unknown id must fail")
+		}
+		if err := s.UpdateTask(ctx, sampleTask("resp_missing", "sess_a", storeEpoch)); err == nil {
+			t.Fatal("UpdateTask must not create a task that was never created")
+		}
+		if err := s.AppendArtifact(ctx, "resp_missing", domain.Artifact{ID: "file_x"}); err == nil {
+			t.Fatal("AppendArtifact on an unknown task must fail")
+		}
+	})
+}
+
+func TestStoreUpdateTask(t *testing.T) {
+	eachStore(t, func(t *testing.T, s service.Store) {
+		ctx := context.Background()
+		task := sampleTask("resp_a", "sess_a", storeEpoch)
+		task.Status = domain.StatusInProgress
+		if err := s.CreateTask(ctx, task); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		// An update that changes nothing still has to succeed. A run reaches
+		// the same task with the same payload whenever a delta adds no text,
+		// and an engine that reports "not found" for a row it declined to
+		// rewrite would fail the run over a no-op.
+		if err := s.UpdateTask(ctx, task); err != nil {
+			t.Fatalf("no-op update: %v", err)
+		}
+
+		task.Status = domain.StatusCompleted
+		task.Output[0].Content[0].Text = "hello world"
+		task.UpdatedAt = storeEpoch.Add(time.Hour)
+		if err := s.UpdateTask(ctx, task); err != nil {
+			t.Fatalf("update: %v", err)
+		}
+
+		got, err := s.GetTask(ctx, "resp_a")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if got.Status != domain.StatusCompleted || got.Text() != "hello world" {
+			t.Fatalf("update did not land: status=%v text=%q", got.Status, got.Text())
+		}
+		if !got.UpdatedAt.Equal(storeEpoch.Add(time.Hour)) {
+			t.Fatalf("updated_at did not land: %v", got.UpdatedAt)
+		}
+	})
+}
+
+// Callers may mutate what they hand over and what they are handed back.
+//
+// This is the contract MemoryStore's copyTask exists to keep and a serialising
+// engine gets for free, which is exactly why it belongs in the shared suite:
+// the two engines arrive at it by opposite routes, so only a test both run can
+// say they arrive.
+func TestStoreTaskIsolatedFromCaller(t *testing.T) {
+	eachStore(t, func(t *testing.T, s service.Store) {
+		ctx := context.Background()
+		task := sampleTask("resp_a", "sess_a", storeEpoch)
+		if err := s.CreateTask(ctx, task); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		// Mutate everything reachable through the value that was handed over.
+		task.Output[0].Content[0].Text = "tampered"
+		task.Output[0].Content[0].Annotations[0].FileID = "file_tampered"
+		task.Metadata["tenant"] = "tampered"
+		task.Metadata["tags"].([]any)[0] = "tampered"
+		task.IncompleteDetails["reason"] = "tampered"
+		task.Artifacts[0].Path = "tampered"
+		task.Usage.TotalTokens = 999
+		task.Error.Code = "tampered"
+
+		got, err := s.GetTask(ctx, "resp_a")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if got.Text() != "hello" {
+			t.Fatalf("caller edited stored output text: %q", got.Text())
+		}
+		if got.Output[0].Content[0].Annotations[0].FileID != "file_1" {
+			t.Fatalf("caller edited a stored annotation: %+v", got.Output[0].Content[0].Annotations[0])
+		}
+		if got.Metadata["tenant"] != "acme" {
+			t.Fatalf("caller edited stored metadata: %+v", got.Metadata)
+		}
+		// Nested too. An engine that isolates the top level and shares the
+		// array under it has left one door open, and only on itself.
+		if tags := got.Metadata["tags"].([]any); tags[0] != "a" {
+			t.Fatalf("caller edited nested stored metadata: %#v", tags)
+		}
+		if got.IncompleteDetails["reason"] != "max_steps" {
+			t.Fatalf("caller edited stored incomplete_details: %+v", got.IncompleteDetails)
+		}
+		if got.Artifacts[0].Path != "out/report.md" {
+			t.Fatalf("caller edited a stored artifact: %+v", got.Artifacts[0])
+		}
+		if got.Usage.TotalTokens != 33 {
+			t.Fatalf("caller edited stored usage: %+v", got.Usage)
+		}
+		if got.Error.Code != "harness_failed" {
+			t.Fatalf("caller edited stored error: %+v", got.Error)
+		}
+
+		// And now the other direction: what a reader was handed is its own.
+		got.Metadata["tenant"] = "tampered"
+		got.Output[0].Content[0].Text = "tampered"
+		got.Artifacts[0].Path = "tampered"
+		again, err := s.GetTask(ctx, "resp_a")
+		if err != nil {
+			t.Fatalf("get again: %v", err)
+		}
+		if again.Metadata["tenant"] != "acme" || again.Text() != "hello" || again.Artifacts[0].Path != "out/report.md" {
+			t.Fatalf("a reader's edits reached storage: %+v", again)
+		}
+	})
+}
+
+// An empty slice is not a missing one, and a store must not turn either into
+// the other.
+//
+// This is not pedantry about Go types: ContentPart.Annotations is rendered
+// without `omitempty` on purpose, so nil reaches a client as `null` and empty
+// reaches it as `[]`, and the specification wants "no annotations"
+// distinguishable from "this server predates the field". Task.AppendText mints
+// an empty one on the first delta of every run, so the case is on the hot path
+// rather than hypothetical.
+//
+// The two engines can only fail this in opposite directions — a copying store
+// by collapsing empty to nil, a serialising one by an `omitempty` tag — which
+// is why it is asserted here rather than against either.
+func TestStoreNilAndEmptyStayDistinct(t *testing.T) {
+	eachStore(t, func(t *testing.T, s service.Store) {
+		ctx := context.Background()
+
+		empty := sampleTask("resp_empty", "sess_a", storeEpoch)
+		empty.Output = []domain.OutputItem{{
+			ID: "msg_resp_empty", Type: "message", Role: "assistant",
+			Content: []domain.ContentPart{{
+				Type: "output_text", Text: "hello",
+				Annotations: []domain.Annotation{},
+			}},
+		}}
+		empty.Artifacts = []domain.Artifact{}
+		empty.Metadata = map[string]any{}
+		empty.IncompleteDetails = map[string]any{}
+		if err := s.CreateTask(ctx, empty); err != nil {
+			t.Fatalf("create empty: %v", err)
+		}
+
+		got, err := s.GetTask(ctx, "resp_empty")
+		if err != nil {
+			t.Fatalf("get empty: %v", err)
+		}
+		if got.Output[0].Content[0].Annotations == nil {
+			t.Fatal("an empty annotation list came back nil, which a client reads as null")
+		}
+		if got.Artifacts == nil {
+			t.Fatal("an empty artifact list came back nil")
+		}
+		if got.Metadata == nil {
+			t.Fatal("empty metadata came back nil")
+		}
+		if got.IncompleteDetails == nil {
+			t.Fatal("empty incomplete_details came back nil")
+		}
+
+		// And the other direction: nothing invents a list where there was none.
+		absent := sampleTask("resp_nil", "sess_a", storeEpoch)
+		absent.Output = nil
+		absent.Artifacts = nil
+		absent.Metadata = nil
+		absent.IncompleteDetails = nil
+		if err := s.CreateTask(ctx, absent); err != nil {
+			t.Fatalf("create nil: %v", err)
+		}
+		got, err = s.GetTask(ctx, "resp_nil")
+		if err != nil {
+			t.Fatalf("get nil: %v", err)
+		}
+		if got.Output != nil || got.Artifacts != nil || got.Metadata != nil || got.IncompleteDetails != nil {
+			t.Fatalf("a store invented a value that was never set: %+v", got)
+		}
+	})
+}
+
+func TestStoreAppendArtifact(t *testing.T) {
+	eachStore(t, func(t *testing.T, s service.Store) {
+		ctx := context.Background()
+		task := sampleTask("resp_a", "sess_a", storeEpoch)
+		task.Artifacts = nil
+		if err := s.CreateTask(ctx, task); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		for _, id := range []string{"file_1", "file_2", "file_3"} {
+			a := domain.Artifact{
+				ID: id, ContainerID: "cntr_a", Path: "out/" + id + ".md",
+				MimeType: "text/markdown", SizeBytes: 7, CreatedAt: storeEpoch,
+			}
+			if err := s.AppendArtifact(ctx, "resp_a", a); err != nil {
+				t.Fatalf("append %s: %v", id, err)
+			}
+		}
+
+		got, err := s.GetTask(ctx, "resp_a")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if len(got.Artifacts) != 3 {
+			t.Fatalf("want 3 artifacts, got %d", len(got.Artifacts))
+		}
+		// Order is the order they were produced, which is what a client sees
+		// when it lists a container's files.
+		for i, id := range []string{"file_1", "file_2", "file_3"} {
+			if got.Artifacts[i].ID != id {
+				t.Fatalf("artifact %d is %s, want %s", i, got.Artifacts[i].ID, id)
+			}
+		}
+	})
+}
+
+// A run produces files while it is still streaming, so two appends can land at
+// once. An engine that reads the list, appends and writes it back without
+// holding anything loses one of the two files.
+func TestStoreAppendArtifactConcurrently(t *testing.T) {
+	eachStore(t, func(t *testing.T, s service.Store) {
+		ctx := context.Background()
+		task := sampleTask("resp_a", "sess_a", storeEpoch)
+		task.Artifacts = nil
+		if err := s.CreateTask(ctx, task); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		const n = 16
+		errs := make(chan error, n)
+		var start sync.WaitGroup
+		start.Add(1)
+		for i := 0; i < n; i++ {
+			go func(i int) {
+				start.Wait()
+				errs <- s.AppendArtifact(ctx, "resp_a", domain.Artifact{
+					ID:          fmt.Sprintf("file_%02d", i),
+					ContainerID: "cntr_a",
+					Path:        fmt.Sprintf("out/%02d.md", i),
+					CreatedAt:   storeEpoch,
+				})
+			}(i)
+		}
+		start.Done()
+		for i := 0; i < n; i++ {
+			if err := <-errs; err != nil {
+				t.Fatalf("concurrent append: %v", err)
+			}
+		}
+
+		got, err := s.GetTask(ctx, "resp_a")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if len(got.Artifacts) != n {
+			t.Fatalf("want %d artifacts, got %d — an append was lost", n, len(got.Artifacts))
+		}
+		seen := make(map[string]bool, n)
+		for _, a := range got.Artifacts {
+			seen[a.ID] = true
+		}
+		if len(seen) != n {
+			t.Fatalf("want %d distinct artifacts, got %d", n, len(seen))
+		}
+	})
+}
+
+func TestStoreSessionRoundTrip(t *testing.T) {
+	eachStore(t, func(t *testing.T, s service.Store) {
+		ctx := context.Background()
+		want := sampleSession("sess_a", "claude-code", storeEpoch)
+		if err := s.CreateSession(ctx, want); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		got, err := s.GetSession(ctx, "sess_a")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if got.ID != want.ID || got.HarnessID != want.HarnessID || got.Title != want.Title ||
+			got.Status != want.Status || got.NativeSessionID != want.NativeSessionID ||
+			got.LastResponseID != want.LastResponseID {
+			t.Fatalf("session round-trip lost fields: %+v", got)
+		}
+		if !got.CreatedAt.Equal(want.CreatedAt) || !got.UpdatedAt.Equal(want.UpdatedAt) {
+			t.Fatalf("session timestamps differ: %v / %v", got.CreatedAt, got.UpdatedAt)
+		}
+
+		if _, err := s.GetSession(ctx, "sess_missing"); err == nil {
+			t.Fatal("GetSession on an unknown id must fail")
+		}
+		if err := s.UpdateSession(ctx, sampleSession("sess_missing", "claude-code", storeEpoch)); err == nil {
+			t.Fatal("UpdateSession must not create a session that was never created")
+		}
+
+		want.Title = "renamed"
+		want.Status = domain.StatusCompleted
+		want.LastResponseID = "resp_z"
+		if err := s.UpdateSession(ctx, want); err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		got, err = s.GetSession(ctx, "sess_a")
+		if err != nil {
+			t.Fatalf("get after update: %v", err)
+		}
+		if got.Title != "renamed" || got.Status != domain.StatusCompleted || got.LastResponseID != "resp_z" {
+			t.Fatalf("session update did not land: %+v", got)
+		}
+	})
+}
+
+// The order is newest first and total: ties on CreatedAt break on id. Cursor
+// paging over anything less silently skips and repeats rows.
+func TestStoreListSessionsOrder(t *testing.T) {
+	eachStore(t, func(t *testing.T, s service.Store) {
+		ctx := context.Background()
+		// Two sessions share an instant, so the tie-break is exercised rather
+		// than assumed.
+		seed(t, s, sampleSession("sess_c", "claude-code", storeEpoch.Add(2*time.Minute)))
+		seed(t, s, sampleSession("sess_b", "codex", storeEpoch.Add(time.Minute)))
+		seed(t, s, sampleSession("sess_a", "claude-code", storeEpoch.Add(time.Minute)))
+
+		page, err := s.ListSessions(ctx, domain.SessionFilter{})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if ids := sessionIDs(page); ids != "sess_c,sess_a,sess_b" {
+			t.Fatalf("order is %s, want sess_c,sess_a,sess_b", ids)
+		}
+		if page.NextCursor != "" {
+			t.Fatalf("a complete listing must not offer a next cursor, got %q", page.NextCursor)
+		}
+	})
+}
+
+func TestStoreListSessionsFilterAndPaging(t *testing.T) {
+	eachStore(t, func(t *testing.T, s service.Store) {
+		ctx := context.Background()
+		for i, id := range []string{"sess_a", "sess_b", "sess_c", "sess_d"} {
+			harness := "claude-code"
+			if i%2 == 1 {
+				harness = "codex"
+			}
+			seed(t, s, sampleSession(id, harness, storeEpoch.Add(time.Duration(i)*time.Minute)))
+		}
+
+		filtered, err := s.ListSessions(ctx, domain.SessionFilter{HarnessID: "codex"})
+		if err != nil {
+			t.Fatalf("filtered list: %v", err)
+		}
+		if ids := sessionIDs(filtered); ids != "sess_d,sess_b" {
+			t.Fatalf("harness filter returned %s, want sess_d,sess_b", ids)
+		}
+
+		first, err := s.ListSessions(ctx, domain.SessionFilter{Limit: 2})
+		if err != nil {
+			t.Fatalf("page one: %v", err)
+		}
+		if ids := sessionIDs(first); ids != "sess_d,sess_c" {
+			t.Fatalf("page one is %s, want sess_d,sess_c", ids)
+		}
+		// A full page that happens to be the last one still has to say so,
+		// which is the whole reason NextCursor exists.
+		if first.NextCursor != "sess_c" {
+			t.Fatalf("page one cursor is %q, want sess_c", first.NextCursor)
+		}
+
+		second, err := s.ListSessions(ctx, domain.SessionFilter{Limit: 2, Cursor: first.NextCursor})
+		if err != nil {
+			t.Fatalf("page two: %v", err)
+		}
+		if ids := sessionIDs(second); ids != "sess_b,sess_a" {
+			t.Fatalf("page two is %s, want sess_b,sess_a", ids)
+		}
+		if second.NextCursor != "" {
+			t.Fatalf("the last page must not offer a cursor, got %q", second.NextCursor)
+		}
+
+		// A limit outside the accepted band falls back to the default rather
+		// than letting a client ask for the whole table.
+		big, err := s.ListSessions(ctx, domain.SessionFilter{Limit: 5000})
+		if err != nil {
+			t.Fatalf("oversized limit: %v", err)
+		}
+		if len(big.Sessions) != 4 {
+			t.Fatalf("oversized limit returned %d sessions", len(big.Sessions))
+		}
+
+		// A cursor naming a session this filter cannot see is not a page
+		// boundary, so the listing starts at the beginning rather than
+		// guessing where the client meant.
+		stray, err := s.ListSessions(ctx, domain.SessionFilter{HarnessID: "codex", Cursor: "sess_c"})
+		if err != nil {
+			t.Fatalf("stray cursor: %v", err)
+		}
+		if ids := sessionIDs(stray); ids != "sess_d,sess_b" {
+			t.Fatalf("stray cursor returned %s, want sess_d,sess_b", ids)
+		}
+	})
+}
+
+func TestStoreListSessionTasks(t *testing.T) {
+	eachStore(t, func(t *testing.T, s service.Store) {
+		ctx := context.Background()
+		// Two of a session's tasks share an instant, and one belongs to
+		// another session entirely.
+		mustCreate(t, s, sampleTask("resp_c", "sess_a", storeEpoch.Add(2*time.Minute)))
+		mustCreate(t, s, sampleTask("resp_b", "sess_a", storeEpoch))
+		mustCreate(t, s, sampleTask("resp_a", "sess_a", storeEpoch))
+		mustCreate(t, s, sampleTask("resp_other", "sess_b", storeEpoch.Add(time.Minute)))
+
+		tasks, err := s.ListSessionTasks(ctx, "sess_a")
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		var ids string
+		for i, task := range tasks {
+			if i > 0 {
+				ids += ","
+			}
+			ids += task.ID
+		}
+		// Oldest first: this is a transcript, not a feed.
+		if ids != "resp_a,resp_b,resp_c" {
+			t.Fatalf("order is %s, want resp_a,resp_b,resp_c", ids)
+		}
+
+		// A session with no tasks is an empty list, not an error: a session
+		// exists before its first task finishes.
+		empty, err := s.ListSessionTasks(ctx, "sess_empty")
+		if err != nil {
+			t.Fatalf("empty list: %v", err)
+		}
+		if len(empty) != 0 {
+			t.Fatalf("want no tasks, got %d", len(empty))
+		}
+	})
+}
+
+func seed(t *testing.T, s service.Store, sess *domain.Session) {
+	t.Helper()
+	if err := s.CreateSession(context.Background(), sess); err != nil {
+		t.Fatalf("create session %s: %v", sess.ID, err)
+	}
+}
+
+func mustCreate(t *testing.T, s service.Store, task *domain.Task) {
+	t.Helper()
+	if err := s.CreateTask(context.Background(), task); err != nil {
+		t.Fatalf("create task %s: %v", task.ID, err)
+	}
+}
+
+func sessionIDs(p domain.SessionPage) string {
+	var out string
+	for i, sess := range p.Sessions {
+		if i > 0 {
+			out += ","
+		}
+		out += sess.ID
+	}
+	return out
+}

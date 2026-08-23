@@ -111,9 +111,13 @@ func (f *firstStart) answered() bool {
 // different answer from the one the first request got, which is precisely what
 // §6 forbids.
 //
-// Keys live in memory and do not survive a restart — neither do tasks, in this
-// server's default store, so a durable key index would be pointing at responses
-// that are themselves gone. Both become durable together, behind issue #15.
+// Keys live in memory and do not survive a restart, so a retry that arrives
+// after one runs the work again. That used to be moot, because the responses
+// a durable key index would point at were in memory too; with a database
+// configured they are not, and this is now the weaker half. Moving the index
+// into store.Store is its own change — it needs a retention sweep that runs
+// against SQL rather than a map, and a decision about what a key means to a
+// second process reading the same file.
 type idempotencyKeys struct {
 	mu    sync.Mutex
 	byKey map[string]*firstStart

@@ -26,6 +26,12 @@ type Config struct {
 	// capability is only offered when there is somewhere to keep one.
 	HarnessStore string
 
+	// Database is the SQLite file that holds tasks and sessions. Empty means
+	// they are kept in memory and are gone on the next restart, which uhpd
+	// warns about on startup. See store.SQLiteStore for why that is a warning
+	// and not a silent default.
+	Database string
+
 	// PublicBaseURL is the origin clients reach this server on. It is used to
 	// make artifact download URLs absolute; unset means they are emitted
 	// relative, which is correct whenever the client shares the API's origin.
@@ -49,6 +55,7 @@ func Load() Config {
 		APIKeys:      splitCSV(os.Getenv("UHP_API_KEYS")),
 		Workspace:    workspace,
 		HarnessStore: harnessStorePath(os.Getenv("UHP_HARNESS_STORE"), workspace),
+		Database:     databasePath(os.Getenv("UHP_DB"), workspace),
 		MaxBodyBytes: getEnvInt("UHP_MAX_BODY_BYTES", 8<<20),
 		// Zero is passed straight through to the service, which substitutes its
 		// own default. Config does not carry a second copy of that number.
@@ -132,4 +139,24 @@ func harnessStorePath(explicit, workspace string) string {
 		return ""
 	}
 	return filepath.Join(workspace, "harnesses.json")
+}
+
+// databasePath resolves where tasks and sessions are kept, on the same rule
+// harnessStorePath uses and for the same reason: an explicit UHP_DB wins, and
+// otherwise a configured workspace implies one, because a deployment that has
+// given this server a durable directory has already answered the only question
+// that matters.
+//
+// With neither, the path is empty and the store is in memory. That differs
+// from harness management, which is switched off rather than made volatile:
+// there is no such thing as running without somewhere to put a task, so the
+// choice here is between a volatile store and no server at all.
+func databasePath(explicit, workspace string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if workspace == "" {
+		return ""
+	}
+	return filepath.Join(workspace, "uhp.db")
 }

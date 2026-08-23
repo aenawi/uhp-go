@@ -1,7 +1,11 @@
-// Package store holds the persistence engines. MemoryStore is the default,
-// dependency-free backend and satisfies service.Store directly — no adapter,
-// no wrapper. A disk-backed engine is additive: implement the same interface
-// and change one line in cmd/uhpd/main.go.
+// Package store holds the persistence engines. MemoryStore and SQLiteStore
+// both satisfy service.Store directly — no adapter, no wrapper — and
+// cmd/uhpd/main.go picks between them on one line.
+//
+// MemoryStore is what a server with nowhere to write gets. It is not the
+// preferred engine: a task it holds is gone on the next restart, and a client
+// that stored the response id gets a 404 for work this server did. See
+// SQLiteStore, and store_contract_test.go for the suite both have to pass.
 package store
 
 import (
@@ -95,24 +99,113 @@ func (s *MemoryStore) UpdateSession(_ context.Context, sess *domain.Session) err
 }
 
 // copyTask deep-copies the reference-typed fields as well as the struct.
-// A shallow `cp := *t` leaves Metadata and Artifacts aliasing the caller's
-// memory, so a caller could mutate stored state after handing it over.
+// A shallow `cp := *t` leaves Metadata, Output and Artifacts aliasing the
+// caller's memory, so a caller could mutate stored state after handing it over.
+//
+// Output is the one that bites hardest and was the one missed: the service
+// holds a task across a whole run and calls Task.AppendText on every delta,
+// which assigns to Output[i].Content[0].Text — a field in the backing array
+// this store would otherwise share. Storage would then track a live run
+// whether or not UpdateTask was ever called, and a failed update would leave
+// the "unwritten" text in place anyway.
 func copyTask(t *domain.Task) *domain.Task {
 	cp := *t
-	if t.Metadata != nil {
-		cp.Metadata = make(map[string]any, len(t.Metadata))
-		for k, v := range t.Metadata {
-			cp.Metadata[k] = v
+	cp.Metadata = copyAnyMap(t.Metadata)
+	cp.IncompleteDetails = copyAnyMap(t.IncompleteDetails)
+	if t.Output != nil {
+		cp.Output = make([]domain.OutputItem, len(t.Output))
+		for i, item := range t.Output {
+			cp.Output[i] = copyOutputItem(item)
 		}
 	}
-	if t.Artifacts != nil {
-		cp.Artifacts = append([]domain.Artifact(nil), t.Artifacts...)
-	}
+	cp.Artifacts = copySlice(t.Artifacts)
 	if t.Error != nil {
 		e := *t.Error
 		cp.Error = &e
 	}
+	if t.Usage != nil {
+		u := *t.Usage
+		cp.Usage = &u
+	}
 	return &cp
+}
+
+// copyOutputItem copies an item and the slices hanging off it. Content parts
+// carry their own annotation slice, so a one-level copy is not enough.
+func copyOutputItem(item domain.OutputItem) domain.OutputItem {
+	if item.Content != nil {
+		content := make([]domain.ContentPart, len(item.Content))
+		for i, part := range item.Content {
+			part.Annotations = copySlice(part.Annotations)
+			content[i] = part
+		}
+		item.Content = content
+	}
+	item.Summary = copyAnySlice(item.Summary)
+	return item
+}
+
+// copySlice copies a slice, preserving its length as well as whether it was
+// nil at all.
+//
+// `append([]T(nil), s...)` is the shorter form and is wrong here: it returns
+// nil for an empty input, silently turning an empty slice into a missing one.
+// ContentPart.Annotations is exactly that case and it reaches the wire —
+// domain renders it without `omitempty` on purpose, so nil becomes `null` and
+// empty becomes `[]`, and a client is meant to be able to tell "no
+// annotations" from "this server predates the field". Task.AppendText mints
+// an empty one on every first delta.
+func copySlice[T any](s []T) []T {
+	if s == nil {
+		return nil
+	}
+	return append(make([]T, 0, len(s)), s...)
+}
+
+// copyAnyMap and copyAnySlice copy a decoded-JSON tree, preserving the
+// difference between nil and empty: a caller that sent no metadata and one
+// that sent `{}` are not the same thing to the transport that renders it.
+//
+// They recurse because a serialising engine has no choice but to, and the two
+// engines are held to one contract. A store that isolates the top level and
+// shares a nested array would let a caller edit stored state through the one
+// door it left open, and only on the engine that happens to be configured.
+//
+// Everything below is a JSON value — string, float64, bool, nil, []any or
+// map[string]any — because that is what a decoder produces and metadata only
+// ever arrives through one. The two composite cases are therefore the whole
+// of the recursion.
+func copyAnyMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = copyAnyValue(v)
+	}
+	return out
+}
+
+func copyAnySlice(s []any) []any {
+	if s == nil {
+		return nil
+	}
+	out := make([]any, len(s))
+	for i, v := range s {
+		out[i] = copyAnyValue(v)
+	}
+	return out
+}
+
+func copyAnyValue(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		return copyAnyMap(v)
+	case []any:
+		return copyAnySlice(v)
+	default:
+		return v
+	}
 }
 
 // ListSessions returns one page of sessions, newest first.

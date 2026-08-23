@@ -23,8 +23,9 @@ import (
 // every discovery call. It loads once into memory, so reads never touch the
 // disk, and every mutation is written through atomically — a temporary file
 // and a rename — so an interrupted write leaves the previous document rather
-// than a truncated one. The richer engine tracked in issue #15 replaces this
-// by implementing the same interface.
+// than a truncated one. Moving this set into the SQLite database that now
+// holds tasks and sessions is its own change: HarnessStore is a separate
+// interface precisely so it can move on its own, or not at all.
 type FileHarnesses struct {
 	mu   sync.RWMutex
 	path string

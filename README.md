@@ -19,7 +19,14 @@ or add harnesses without touching client code.
 `uhpd` never calls home. It opens no outbound network connections of its own:
 no telemetry, no licence check, no account, no hosted dependency. The only
 processes it talks to are the harness CLIs you have installed locally, over
-stdin/stdout. The single non-stdlib dependency is `github.com/google/uuid`.
+stdin/stdout.
+
+There is no database to run either, and no service to point it at: the two
+non-stdlib dependencies are `github.com/google/uuid` and `modernc.org/sqlite`,
+and the second is a pure-Go SQLite compiled into the binary rather than a
+client for something you have to host. See
+[docs/adr/0001](docs/adr/0001-sqlite-for-tasks-and-sessions.md) for what that
+dependency costs.
 
 This is a property of the protocol, not just of this implementation — the UHP
 specification states that "nothing in the wire format requires a hosted
@@ -93,7 +100,7 @@ internal/harness/          the adapter contract, the shared subprocess runner, t
 internal/service/          application core: TaskService; declares the Registry and Store
                            interfaces it consumes (deps.go), holds all business rules
 internal/store/            service.Store and service.HarnessStore implementations — tasks and
-                           sessions in memory, created harnesses in one JSON file on disk
+                           sessions in SQLite or in memory, created harnesses in one JSON file
 internal/transport/http/   UHP wire format: discovery, tasks, streaming (SSE), cancellation,
                            input items, artifact listing and download
 internal/config/           environment-variable configuration loader
@@ -106,7 +113,8 @@ internal/config/           environment-variable configuration loader
 - Everything that must never be forgotten when adding a harness — process-group
   isolation, prompt delivery that cannot be re-parsed as options, model validation,
   scanner limits — lives once in the shared runner.
-- In-memory store by default, behind an interface — no database required to run or test.
+- Two stores behind one interface: SQLite when a path is configured, in memory when not.
+  The SQLite driver is pure Go, so the binary still needs nothing installed to run or test.
 - Plain `net/http` with Go 1.22 method/path routing. No framework.
 
 ## UHP surface implemented
@@ -323,8 +331,8 @@ created harnesses in memory and says so on startup:
 That warning is the whole of the notice a client gets, because nothing in the discovery
 document can express "this works until the next deploy". A harness a client created,
 stored the id of, and came back to after a restart is not configuration if it is gone —
-so set the path anywhere you intend the ids to keep resolving. Issue #15's durable engine
-implements the same interface and removes the caveat.
+so set the path anywhere you intend the ids to keep resolving. `UHP_WORKSPACE` sets this and
+`UHP_DB` together, which is the reason to reach for it rather than for either alone.
 
 ```bash
 curl -s http://localhost:8080/v1/harnesses   -H "Authorization: Bearer devkey" -H "Content-Type: application/json"   -d '{"name":"Research agent","base":"claude-code","default_model":"claude-sonnet-5"}'
@@ -426,6 +434,60 @@ curl -N http://localhost:8080/v1/responses \
   -d '{"input":"...","model":"gpt-5.6-sol","metadata":{"harness_id":"codex"},"stream":true}'
 ```
 
+## Storage
+
+**Set `UHP_DB`,** or a `UHP_WORKSPACE` that implies it. Tasks and sessions then live in one
+SQLite file and survive a restart; with neither, they are kept in memory and `uhpd` says so
+on startup:
+
+```
+{"level":"WARN","msg":"database not configured; tasks and sessions will not survive a restart"}
+```
+
+That matters more than it sounds. A client holds a response id and comes back for the
+result — that is the whole shape of an asynchronous API — and an in-memory server answers
+`404` for work it actually did. The same goes for a session: a conversation whose history is
+gone is a fresh conversation wearing an old id.
+
+The specification is silent on all of this. It mandates no engine, no durability guarantee
+and no retention rules, so this is a product decision rather than a conformance one, and the
+decision is that state belongs on a volume the operator owns.
+
+A configured path that will not open is fatal rather than a quiet fall back to memory. The
+operator asked for durability, and a server that silently serves less than it was configured
+for is the hardest misconfiguration to notice.
+
+Some notes on what is in the file:
+
+- **The driver is pure Go** (`modernc.org/sqlite`). The image builds with `CGO_ENABLED=0`,
+  so a cgo-linked SQLite would not be in the binary this repository ships. Nothing has to be
+  installed to run or test.
+- **The schema is two tables**, each with the columns that get searched or ordered and one
+  JSON document for the rest. No query selects on a task's usage or its error code, so
+  splitting a task across nineteen columns would buy nothing and would turn every new field
+  into a migration.
+- **`PRAGMA user_version` is checked on open.** A file written by a newer `uhpd` is refused
+  rather than written to, because the columns this build would ignore are the ones the other
+  binary needs.
+- **WAL, `synchronous=NORMAL`.** The service writes a task on every streamed delta, so
+  `FULL` would put an `fsync` between a harness and each fragment of its answer. What
+  `NORMAL` gives up is the last few commits if the machine loses power; a crash of this
+  process loses nothing.
+- **A fresh database is created `0600`.** It holds every prompt a client sent and every
+  answer a harness gave. An existing file keeps whatever mode the operator gave it.
+
+Uploaded files and idempotency keys are still in memory, and harnesses are still a JSON
+document — each is its own interface, so each moves on its own.
+
+One caveat this makes sharper rather than fixes: a failure to read the store is still
+reported to the client as `404`, because that was the only thing an error from an in-memory
+map could mean. A disk problem now answers the same way. That is
+[issue #28](https://github.com/aenawi/uhp-go/issues/28).
+
+`internal/store/store_contract_test.go` is one suite run against both engines. Ordering,
+paging and the rule that a caller may mutate whatever it hands over or is handed back are
+properties of `service.Store`, not of whichever engine a deployment configured.
+
 ## Configuration
 
 | Env var | Default | Purpose |
@@ -434,6 +496,7 @@ curl -N http://localhost:8080/v1/responses \
 | `UHP_API_KEYS` | (unset = auth disabled) | Comma-separated bearer tokens this server accepts |
 | `UHP_WORKSPACE` | (unset = router's own cwd, and no file support) | Root for per-session working directories |
 | `UHP_HARNESS_STORE` | `$UHP_WORKSPACE/harnesses.json`, or unset = no harness management | Where harnesses created over the API are kept |
+| `UHP_DB` | `$UHP_WORKSPACE/uhp.db`, or unset = tasks and sessions in memory | SQLite file holding tasks and sessions |
 | `UHP_MAX_BODY_BYTES` | `8388608` | Maximum accepted request body, and the upload limit |
 | `UHP_MAX_CONCURRENT_RUNS` | `8` | Harness processes allowed to run at once; beyond it, `503 harness_unavailable` |
 | `UHP_PUBLIC_URL` | (unset = relative URLs) | Origin used to build absolute artifact download URLs |
@@ -444,7 +507,7 @@ curl -N http://localhost:8080/v1/responses \
 | `UHP_PI_MODELS` | (unset) | Pi fallback models |
 
 These are the defaults of the `uhpd` binary. The Docker image presets `UHP_WORKSPACE`,
-which changes the `UHP_WORKSPACE` and `UHP_HARNESS_STORE` rows above — see
+which changes the `UHP_WORKSPACE`, `UHP_HARNESS_STORE` and `UHP_DB` rows above — see
 [Building the image](#building-the-image).
 
 ### Where the model list comes from
@@ -542,9 +605,10 @@ fresh key per logical request rather than per client.
 Keys are kept for 24 hours **after the run they started is terminal**, not after the request
 that sent them. An agent can work for longer than a day, and dating the key from the request
 would mean the retry that finally came to collect the result is the one that finds the key
-expired and starts the work again. Keys live in memory and do not survive a restart; neither
-do responses, in the default store, so a key that outlived one would point at something that
-is gone. Both become durable together (issue #15).
+expired and starts the work again. Keys live in memory and do not survive a restart, so a
+retry that arrives after one runs the work again. That is now the weaker half: with `UHP_DB`
+set the response the key would have pointed at is still there, and only the key is missing.
+Moving keys into the same store is its own issue.
 
 A request that never started anything — an unknown `harness_id`, a full server answering
 `503` — leaves its key free. Errors §4 tells a client to retry those *with the same key*,
@@ -634,13 +698,14 @@ Unlike the bare binary, the image presets `UHP_WORKSPACE=/workspace` — the per
 working directory has to exist and be writable before the first session, and an image
 that ships one is better than an image that fails on it. That default turns on the
 three capabilities a workspace implies: `files_input`, `files_output`, and — via the
-`harnesses.json` it puts there — `harness_management`. Override `UHP_WORKSPACE` or
-`UHP_HARNESS_STORE` if that is not the posture you want.
+`harnesses.json` it puts there — `harness_management`. It also puts `uhp.db` there, so tasks
+and sessions are durable by default in the image. Override `UHP_WORKSPACE`,
+`UHP_HARNESS_STORE` or `UHP_DB` if that is not the posture you want.
 
 `/workspace` is declared as a volume owned by the runtime user. A fresh anonymous
-volume inherits that ownership but is new on every `docker run`; to keep sessions,
-uploaded files and the harness store across restarts, mount a directory uid `10001`
-can write:
+volume inherits that ownership but is new on every `docker run`; to keep the task
+database, session working directories and the harness store across restarts, mount a
+directory uid `10001` can write:
 
 ```bash
 mkdir -p ./workspace && sudo chown 10001:10001 ./workspace

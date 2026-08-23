@@ -15,8 +15,8 @@ import (
 // unconditional. The trade is real and is not hidden: every harness created
 // against this store is gone when the process exits, so a client that stored an
 // id gets a 404 for it after a restart. `uhpd` says so on startup when it falls
-// back to this, and the README says so too — issue #15's durable engine is what
-// removes the caveat rather than papering over it.
+// back to this, and the README says so too — naming the trade is what makes it
+// a choice rather than a surprise.
 //
 // FileHarnesses is the same interface with a document behind it, and is what a
 // deployment that has anywhere to write should use.

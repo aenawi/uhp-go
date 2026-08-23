@@ -47,6 +47,33 @@ func openHarnessStore(cfg config.Config, log *slog.Logger) service.HarnessStore 
 	return harnesses
 }
 
+// openTaskStore picks where tasks and sessions live, and returns the function
+// that closes it.
+//
+// Same rule as openHarnessStore above, for the reasons given there: a path
+// configured means durable, no path means a warning rather than a surprise on
+// the next restart, and a configured path that will not open is fatal rather
+// than a quiet downgrade. What is lost without one is described on
+// store.SQLiteStore.
+func openTaskStore(cfg config.Config, log *slog.Logger) (service.Store, func()) {
+	if cfg.Database == "" {
+		log.Warn("database not configured; tasks and sessions will not survive a restart",
+			"hint", "set UHP_DB or UHP_WORKSPACE")
+		return store.NewMemoryStore(), func() {}
+	}
+	db, err := store.NewSQLiteStore(cfg.Database)
+	if err != nil {
+		log.Error("database", "error", err, "path", cfg.Database)
+		os.Exit(1)
+	}
+	log.Info("database open", "path", cfg.Database)
+	return db, func() {
+		if err := db.Close(); err != nil {
+			log.Error("close database", "error", err)
+		}
+	}
+}
+
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg := config.Load()
@@ -62,7 +89,9 @@ func main() {
 		registry.Register(h)
 	}
 
-	memStore := store.NewMemoryStore()
+	taskStore, closeTaskStore := openTaskStore(cfg, log)
+	defer closeTaskStore()
+
 	opts := []service.Option{
 		service.WithUploads(store.NewMemoryUploads()),
 		service.WithMaxConcurrentRuns(cfg.MaxConcurrentRuns),
@@ -74,7 +103,7 @@ func main() {
 	if cfg.PublicBaseURL != "" {
 		opts = append(opts, service.WithPublicBaseURL(cfg.PublicBaseURL))
 	}
-	taskService := service.NewTaskService(registry, memStore, log, opts...)
+	taskService := service.NewTaskService(registry, taskStore, log, opts...)
 
 	server := transporthttp.NewServer(taskService, log, cfg.APIKeys, cfg.MaxBodyBytes)
 
@@ -105,6 +134,9 @@ func main() {
 		if err != nil {
 			log.Error("server error", "error", err)
 			stop()
+			// os.Exit skips every deferred call, and the store is the one
+			// that owns a file handle worth giving back.
+			closeTaskStore()
 			os.Exit(1)
 		}
 	case <-ctx.Done():

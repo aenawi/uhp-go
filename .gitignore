@@ -10,6 +10,14 @@ conformance-report.json
 # ones lifted into the fixtures in cli_test.go, not the whole run.
 claude-capture.jsonl
 
+# A task database, and the two files SQLite keeps beside one. `UHP_DB=./uhp.db`
+# or a workspace pointed at the checkout puts one here, and it holds every
+# prompt a client sent and every answer a harness gave — a committed one
+# publishes conversations.
+*.db
+*.db-wal
+*.db-shm
+
 # Claude Code: share project settings, keep personal overrides local.
 .claude/settings.local.json
 .claude/*.local.json
