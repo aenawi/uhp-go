@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -45,13 +46,13 @@ func TestBuildArgs(t *testing.T) {
 			name: "claude: --verbose is mandatory with stream-json",
 			h:    NewClaude(models),
 			req:  RunRequest{Input: "hello"},
-			want: []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--bare"},
+			want: []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"},
 		},
 		{
 			name: "claude: model and resume",
 			h:    NewClaude(models),
 			req:  RunRequest{Input: "hello", Model: "m1", NativeSessionID: "s1"},
-			want: []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "m1", "--resume", "s1", "--bare"},
+			want: []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "m1", "--resume", "s1"},
 		},
 		{
 			// Issue #14. Without it stream-json emits one event per finished
@@ -434,23 +435,30 @@ func TestParseOpenCodeLine(t *testing.T) {
 }
 
 // Every claude*Event below is a line of `claude -p --output-format stream-json
-// --verbose --include-partial-messages --bare` from Claude Code 2.1.238.
+// --verbose --include-partial-messages`, abridged to the fields this parser
+// reads: a real init line is 2.6 KB of tool and slash-command inventory no
+// adapter looks at, and a real result line carries twenty keys of cost and
+// timing telemetry alongside the four usage fields.
 //
-// The init and result lines were captured from a real run on 2026-08-21 and are
-// abridged to the fields this parser reads: the real init line is 2.6 KB of
-// tool and slash-command inventory no adapter looks at. That run also settles
-// the flag itself by execution — the CLI accepted
-// `--include-partial-messages` and failed on the login, not on the option.
+// The stream_event shape below was once the weakest claim in this repository.
+// It could not be captured when it was written — no logged-in Claude Code was
+// reachable — so it was read out of the 2.1.238 binary with `strings`, which
+// carries both the envelope and a literal example of the event inside it. A
+// wrong guess there fails silently: no line matches, the run completes, the
+// client is handed "". That is issue #32.
 //
-// The three stream_event lines could not be captured, because the CLI on that
-// machine is not logged in and fails before it reaches the API. They are read
-// instead out of the binary that emits them: `strings` on the 2.1.238
-// executable carries both the envelope this adapter unwraps
-// (`type:"stream_event",event:e.event,session_id:…,parent_tool_use_id:null,uuid:…`)
-// and a literal example of the event inside it
-// (`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}`).
-// That is weaker evidence than a captured line and is marked as such here and
-// in claude.go.
+// It has now been captured. `make capture-claude` against Claude Code 2.1.240
+// on 2026-08-23 produced, verbatim:
+//
+//	{"type":"stream_event","event":{"type":"content_block_delta","index":0,
+//	 "delta":{"type":"text_delta","text":"1"}},"session_id":"4fcaf1d8-…",
+//	 "parent_tool_use_id":null,"uuid":"9a8b3324-…"}
+//
+// which is the guessed shape key for key. The guess was right, and is no longer
+// a guess. The literals below keep their original session id and "Hello" text
+// rather than being restamped with the capture's: what was unverified was the
+// shape, the shape is what the capture settles, and rewriting the values would
+// churn every assertion in this file to prove nothing further.
 const (
 	claudeInitEvent = `{"type":"system","subtype":"init","cwd":"/w","session_id":"45b84817-020e-4a0b-9c94-93a0106c5814","tools":["Bash","Edit","Read"],"mcp_servers":[],"model":"claude-opus-5","permissionMode":"default"}`
 
@@ -561,6 +569,69 @@ func TestParseClaudeLine(t *testing.T) {
 			}
 		}
 	})
+}
+
+// The delta shape above cannot be verified by `go test`: it needs a logged-in
+// Claude Code, which a test process does not have. scripts/capture-claude-
+// stream.py is that verification, run by hand on a maintainer's machine
+// (`make capture-claude`).
+//
+// This is the one part of it a test *can* hold: that the probe runs the argv
+// uhpd ships. A probe measuring a different invocation would report a healthy
+// stream for a command nothing sends, which is a more confident version of the
+// gap #32 is about — so the two are pinned together here rather than by a
+// comment asking someone to remember.
+func TestClaudeProbeRunsTheShippedInvocation(t *testing.T) {
+	const probe = "../../scripts/capture-claude-stream.py"
+
+	src, err := os.ReadFile(probe)
+	if err != nil {
+		t.Fatalf("the claude stream probe is missing: %v", err)
+	}
+	got := pythonStringList(t, string(src), "HARNESS_ARGV")
+
+	args, err := NewClaude([]string{"m1"}).BuildArgs(RunRequest{Input: "hello"})
+	if err != nil {
+		t.Fatalf("BuildArgs: %v", err)
+	}
+	want := append([]string{"claude"}, args...)
+
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("%s measures an invocation uhpd does not send:\n  probe: %v\n  uhpd:  %v",
+			probe, got, want)
+	}
+}
+
+// pythonStringList reads a module-level list of string literals out of a Python
+// source file. Deliberately dumb: it handles the one literal form the probe
+// uses and fails loudly on anything else, rather than quietly matching less.
+func pythonStringList(t *testing.T, src, name string) []string {
+	t.Helper()
+
+	start := strings.Index(src, name+" = [")
+	if start < 0 {
+		t.Fatalf("no %s list found", name)
+	}
+	body := src[start+len(name+" = ["):]
+	end := strings.Index(body, "]")
+	if end < 0 {
+		t.Fatalf("%s list is not terminated", name)
+	}
+
+	var out []string
+	for _, field := range strings.Split(body[:end], ",") {
+		field = strings.TrimSpace(field)
+		// Comment or trailing-comma blank; the probe has neither inside the
+		// list, so anything here is a form this parser was not built for.
+		if field == "" {
+			continue
+		}
+		if len(field) < 2 || field[0] != '"' || field[len(field)-1] != '"' {
+			t.Fatalf("%s holds something this parser cannot read: %q", name, field)
+		}
+		out = append(out, field[1:len(field)-1])
+	}
+	return out
 }
 
 // Every pi*Event below is shaped from pi 0.83.0's own event definitions and

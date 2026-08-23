@@ -6,6 +6,10 @@ bin/
 # record: docs/conformance.md is where a score is written down.
 conformance-report.json
 
+# Output of `make capture-claude`. Same reason: the lines worth keeping are the
+# ones lifted into the fixtures in cli_test.go, not the whole run.
+claude-capture.jsonl
+
 # Claude Code: share project settings, keep personal overrides local.
 .claude/settings.local.json
 .claude/*.local.json
