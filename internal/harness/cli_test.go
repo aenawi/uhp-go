@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -113,7 +114,28 @@ func TestBuildArgs(t *testing.T) {
 			name: "grok: attached -p= form, not a bare -p value",
 			h:    NewGrok(models),
 			req:  RunRequest{Input: "hello"},
-			want: []string{"-p=hello"},
+			want: []string{"-p=hello", "--output-format", "streaming-messages-json", "--include-partial-messages"},
+		},
+		{
+			name: "grok: model and resume",
+			h:    NewGrok(models),
+			req:  RunRequest{Input: "hello", Model: "m1", NativeSessionID: "s1"},
+			want: []string{"-p=hello", "--output-format", "streaming-messages-json", "--include-partial-messages", "--model", "m1", "--resume", "s1"},
+		},
+		{
+			// Issue #34, and the same defect as claude's #14 and pi's: without
+			// this flag `streaming-messages-json` emits one whole `assistant`
+			// message when the run is already over. Verified by execution on
+			// grok 1.0.5 — the same prompt without it produced exactly three
+			// lines, `system`, `assistant`, `result`, and no delta at all.
+			name: "grok: partial messages are what makes the stream progressive",
+			h:    NewGrok(models),
+			req:  RunRequest{Input: "hello"},
+			checkFn: func(t *testing.T, args []string) {
+				if !argvContains(args, "--include-partial-messages") {
+					t.Fatalf("grok advertises streaming but asks for whole messages: %v", args)
+				}
+			},
 		},
 		{
 			name: "grok: a hyphen-leading prompt stays inside the -p= value",
@@ -464,6 +486,398 @@ func TestParseOpenCodeLine(t *testing.T) {
 			}
 		}
 	})
+}
+
+// Every codex*Event below is a verbatim line of `codex exec --json
+// --skip-git-repo-check` stdout, captured 2026-08-23 from codex-cli 0.149.0 by
+// `make probe-codex`. Codex's lines are short enough to keep whole, unlike
+// claude's and grok's, so none of these is abridged.
+//
+// Issue #34 is why they exist at all. codex.go's claims were carried as
+// "verified by execution" with no version beside them and no fixture in the
+// tests, which is the state #13 showed has a shelf life: opencode's two
+// execution-verified claims were true when written and false one minor version
+// later, and nothing noticed. These are the answers 0.149.0 gave.
+const (
+	codexThreadStartedEvent = `{"type":"thread.started","thread_id":"01a02d69-3740-7d02-8285-5c771191dbb6"}`
+	codexTurnStartedEvent   = `{"type":"turn.started"}`
+	codexAgentMessageEvent  = `{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ALPHA BRAVO CHARLIE"}}`
+	codexTurnCompletedEvent = `{"type":"turn.completed","usage":{"input_tokens":18095,"cached_input_tokens":11008,"cache_write_input_tokens":0,"output_tokens":12,"reasoning_output_tokens":0}}`
+
+	// The two agent messages of one run that said "Alpha.", ran a shell
+	// command, then said "Gamma.". Neither carries a separator of its own.
+	codexAgentMessageAlpha = `{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Alpha."}}`
+	codexAgentMessageGamma = `{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Gamma."}}`
+
+	// The shell call between them. It is an `item.completed` like the answer
+	// is, and its output lives in `aggregated_output` rather than `text`, which
+	// is the whole reason reading `item.text` does not publish tool output as
+	// the answer.
+	codexCommandStartedEvent   = `{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'echo HELLO_PROBE'","aggregated_output":"","exit_code":null,"status":"in_progress"}}`
+	codexCommandCompletedEvent = `{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'echo HELLO_PROBE'","aggregated_output":"HELLO_PROBE\n","exit_code":0,"status":"completed"}}`
+
+	// The three lines a failed run prints, from `--model bogus-model-xyz`, in
+	// the order codex printed them. Only the last is read as a failure:
+	//
+	//   - codexErrorItemEvent is an `item.completed` whose item type is `error`
+	//     and which carries `message` rather than `text`. It is a warning —
+	//     codex attempted the run after printing it.
+	//   - codexErrorEvent is the top-level one, carrying the reason verbatim.
+	//   - codexTurnFailedEvent repeats that same sentence, and says in its own
+	//     name that the turn is over.
+	//
+	// codex exits 1 as well, so the run fails either way — but an exit code has
+	// no words in it, and 400s from the API are the failures a client most
+	// needs the words for.
+	codexErrorItemEvent  = `{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for ` + "`bogus-model-xyz`" + ` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}`
+	codexErrorEvent      = `{"type":"error","message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'bogus-model-xyz' model is not supported when using Codex with a ChatGPT account.\"}}"}`
+	codexTurnFailedEvent = `{"type":"turn.failed","error":{"message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'bogus-model-xyz' model is not supported when using Codex with a ChatGPT account.\"}}"}}`
+)
+
+func TestParseCodexLine(t *testing.T) {
+	t.Run("thread.started yields the native session id", func(t *testing.T) {
+		got := parseCodexLine(codexThreadStartedEvent)
+		if len(got) != 1 || got[0].Type != UpdateSessionID {
+			t.Fatalf("got %+v, want one %s update", got, UpdateSessionID)
+		}
+		if got[0].SessionID != "01a02d69-3740-7d02-8285-5c771191dbb6" {
+			t.Errorf("session id = %q", got[0].SessionID)
+		}
+	})
+
+	t.Run("an agent message is the answer", func(t *testing.T) {
+		got := parseCodexLine(codexAgentMessageEvent)
+		if len(got) != 1 || got[0].Type != UpdateDelta {
+			t.Fatalf("got %+v, want one %s update", got, UpdateDelta)
+		}
+		if got[0].Delta != "ALPHA BRAVO CHARLIE\n" {
+			t.Errorf("delta = %q", got[0].Delta)
+		}
+	})
+
+	// The same defect TestParseOpenCodeLine names, in the other adapter that
+	// emits whole messages: a run that puts a tool call between two sentences
+	// sends two `agent_message` items, neither ending in anything, and deltas
+	// are concatenated into one output_text. Verified by execution on 0.149.0 —
+	// "Alpha." and "Gamma." around one shell call — where the unseparated
+	// reading answers "Alpha.Gamma.".
+	t.Run("consecutive agent messages do not run together", func(t *testing.T) {
+		var answer string
+		for _, line := range []string{codexAgentMessageAlpha, codexAgentMessageGamma} {
+			for _, upd := range parseCodexLine(line) {
+				answer += upd.Delta
+			}
+		}
+		if answer != "Alpha.\nGamma.\n" {
+			t.Errorf("answer = %q, want %q", answer, "Alpha.\nGamma.\n")
+		}
+	})
+
+	t.Run("turn.completed yields the run's usage", func(t *testing.T) {
+		got := parseCodexLine(codexTurnCompletedEvent)
+		if len(got) != 1 || got[0].Type != UpdateUsage {
+			t.Fatalf("got %+v, want one %s update", got, UpdateUsage)
+		}
+		u := got[0].Usage
+		if u.InputTokens != 18095 || u.OutputTokens != 12 || u.TotalTokens != 18107 {
+			t.Errorf("usage = %+v", u)
+		}
+		if u.CacheReadTokens != 11008 || u.CacheWriteTokens != 0 {
+			t.Errorf("cache accounting = %+v", u)
+		}
+	})
+
+	// Issue #34. On 0.149.0 a run that cannot proceed prints its reason and
+	// codex exits 1. Before this the line was not read: the client was told
+	// "exit status 1" and the sentence naming the actual 400 was dropped on the
+	// floor. Same argument as claude's and opencode's, which is why it goes
+	// through the same harnessFailure.
+	t.Run("a failed turn carries the CLI's own words", func(t *testing.T) {
+		got := parseCodexLine(codexTurnFailedEvent)
+		if len(got) != 1 || got[0].Type != UpdateFailed {
+			t.Fatalf("got %+v, want one %s update", got, UpdateFailed)
+		}
+		if got[0].Err == nil {
+			t.Fatal("failure carries no error")
+		}
+		if !strings.Contains(got[0].Err.Error(), "is not supported when using Codex with a ChatGPT account") {
+			t.Errorf("error drops the CLI's message: %v", got[0].Err)
+		}
+	})
+
+	// `item.completed` is the answer's event type and also a tool call's and a
+	// warning's, so the item type is what separates them. A parser that read
+	// every completed item would publish `aggregated_output` — the shell's own
+	// stdout — as the model's answer.
+	//
+	// The last two are the events that look like failures and are not treated
+	// as ones. UpdateFailed is terminal — task_service fails the task on it,
+	// ahead of the exit code — so a line read as fatal that is not kills a run
+	// that would have succeeded. codexErrorItemEvent is the proof that codex
+	// has a non-fatal error channel: it is a warning about a run codex went on
+	// to attempt. codexErrorEvent carried the same sentence `turn.failed` did,
+	// immediately before it, so dropping it costs no words. See parseCodexLine.
+	t.Run("nothing is invented from events that carry no answer", func(t *testing.T) {
+		for _, line := range []string{
+			codexTurnStartedEvent,
+			codexCommandStartedEvent,
+			codexCommandCompletedEvent,
+			codexErrorItemEvent,
+			codexErrorEvent,
+		} {
+			if got := parseCodexLine(line); len(got) != 0 {
+				t.Errorf("line produced %+v, want nothing:\n  %s", got, line)
+			}
+		}
+	})
+
+	t.Run("a non-JSON line is not answer text", func(t *testing.T) {
+		for _, line := range []string{"", "not json", "Reading prompt from stdin..."} {
+			if got := parseCodexLine(line); len(got) != 0 {
+				t.Errorf("%q produced %+v, want nothing", line, got)
+			}
+		}
+	})
+}
+
+// Every grok*Event below is a line of `grok -p=<prompt> --output-format
+// streaming-messages-json --include-partial-messages`, captured 2026-08-23 from
+// grok 1.0.5 by `make probe-grok`. The init and result lines are abridged to
+// the fields this parser reads — a real init line is 6 KB of slash-command and
+// skill inventory, all of it a property of the machine rather than of grok —
+// and every other line is verbatim.
+//
+// Issue #34. None of this format existed in the harness before: grok was run in
+// its default `plain` mode and its stdout passed through line by line, so there
+// was nothing to capture and nothing to pin.
+const (
+	grokInitEvent = `{"type":"system","subtype":"init","session_id":"01a02d66-1268-7ea3-af50-e5a1e1ccc760","apiKeySource":"oauth","model":"grok-4.6","cwd":"/w","permissionMode":"bypassPermissions","tools":["run_terminal_command","read_file"],"mcp_servers":[],"uuid":"71934571-c88c-40b9-a2dd-a96cf7738e2b"}`
+
+	grokTextDeltaEvent = `{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"ALPHA"}},"parent_tool_use_id":null,"session_id":"01a02d66-1268-7ea3-af50-e5a1e1ccc760","uuid":"10d25a3a-ee81-475e-b974-e86f5527f285"}`
+
+	// Reasoning, not answer. grok streams a great deal of it — thirty deltas
+	// against six of answer in the captured run — so a parser that read every
+	// delta would publish mostly the model's private working.
+	grokThinkingDeltaEvent = `{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"The"}},"parent_tool_use_id":null,"session_id":"01a02d66-1268-7ea3-af50-e5a1e1ccc760","uuid":"9aa5f6c3-d21e-4aa4-b270-827568bac400"}`
+
+	// A tool call's arguments. Publishing these as output_text would tell the
+	// client the shell command was part of the answer.
+	grokToolInputDeltaEvent = `{"type":"stream_event","event":{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"echo HELLO_PROBE\",\"description\":\"Print HELLO_PROBE to stdout\"}"}},"parent_tool_use_id":null,"session_id":"01a02d79-beef-7d40-8d24-beadd71589f2","uuid":"a8f23acf-cc0d-49cc-ac06-aa91c536d16c"}`
+
+	grokMessageStopEvent = `{"type":"stream_event","event":{"type":"message_stop"},"parent_tool_use_id":null,"session_id":"01a02d66-1268-7ea3-af50-e5a1e1ccc760","uuid":"b6d03f0d-b5e3-40b0-a884-7519ab023e38"}`
+
+	// The whole assistant message, repeated after its deltas have all arrived.
+	grokAssistantEvent = `{"type":"assistant","message":{"id":"msg_0","type":"message","role":"assistant","model":"grok-4.6","content":[{"type":"text","text":"ALPHA BRAVO CHARLIE"}],"stop_reason":"end_turn"},"parent_tool_use_id":null,"session_id":"01a02d66-1268-7ea3-af50-e5a1e1ccc760","uuid":"5f2eae82-ad59-4d47-9151-960d6fb296ef"}`
+
+	// The single-message run's own totals, abridged: the real line also carries
+	// `duration_api_ms`, `total_cost_usd` and a `modelUsage` breakdown, none of
+	// which this parser reads.
+	grokResultEvent = `{"type":"result","subtype":"success","is_error":false,"duration_ms":6071,"num_turns":1,"result":"ALPHA BRAVO CHARLIE","stop_reason":"end_turn","usage":{"input_tokens":19664,"output_tokens":43,"cache_read_input_tokens":5760,"cache_creation_input_tokens":0},"session_id":"01a02d66-1268-7ea3-af50-e5a1e1ccc760"}`
+
+	// A failed run, from `--model bogus-model-xyz`. `result` is absent
+	// entirely — where claude puts the reason in that field, grok has a
+	// separate `errors` array — and the subtype stops being "success", which
+	// claude's never does.
+	grokErrorResultEvent = `{"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":0,"num_turns":0,"stop_reason":null,"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"errors":["Couldn't set model 'bogus-model-xyz': Invalid params: \"unknown model id\". Run 'grok models' to see available models."],"session_id":"01a02d67-5c3b-7e63-9355-dfbfbd487de5"}`
+)
+
+// The three usage-bearing lines of one two-message run — session
+// 01a02d79-beef-7d40-8d24-beadd71589f2, the `echo HELLO_PROBE` run whose text
+// deltas grokToolInputDeltaEvent also comes from. They are grouped here, and
+// all from the same session, because the point they make is an arithmetic one
+// and it is only checkable if the numbers belong to the same run:
+//
+//	19672 + 166 = 19838   input
+//	   64 +  33 =    97   output
+//	 5760 + 25344 = 31104 cache read
+//
+// The two `message_delta` lines are per message; only the `result` is the
+// run's. All three carry the same four field names, which is what makes
+// reading the wrong one easy and silent — and the second message's 166 is what
+// a client would be told the whole task cost. Both message_deltas are verbatim;
+// the result is abridged the same way grokResultEvent is.
+const (
+	grokMessageDeltaEvent       = `{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"input_tokens":19672,"output_tokens":64,"cache_read_input_tokens":5760,"cache_creation_input_tokens":0}},"parent_tool_use_id":null,"session_id":"01a02d79-beef-7d40-8d24-beadd71589f2","uuid":"6fc6d7bf-888b-4be7-a08d-d662e40c6791"}`
+	grokMessageDeltaSecondEvent = `{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":166,"output_tokens":33,"cache_read_input_tokens":25344,"cache_creation_input_tokens":0}},"parent_tool_use_id":null,"session_id":"01a02d79-beef-7d40-8d24-beadd71589f2","uuid":"10e6b332-97a8-466b-9451-6f451a0557dd"}`
+	grokToolRunResultEvent      = `{"type":"result","subtype":"success","is_error":false,"duration_ms":12023,"num_turns":2,"result":"It printed:\n\n` + "`HELLO_PROBE`" + `","stop_reason":"end_turn","usage":{"input_tokens":19838,"output_tokens":97,"cache_read_input_tokens":31104,"cache_creation_input_tokens":0},"session_id":"01a02d79-beef-7d40-8d24-beadd71589f2"}`
+)
+
+func TestParseGrokLine(t *testing.T) {
+	t.Run("init yields the native session id", func(t *testing.T) {
+		got := parseGrokLine(grokInitEvent)
+		if len(got) != 1 || got[0].Type != UpdateSessionID {
+			t.Fatalf("got %+v, want one %s update", got, UpdateSessionID)
+		}
+		if got[0].SessionID != "01a02d66-1268-7ea3-af50-e5a1e1ccc760" {
+			t.Errorf("session id = %q", got[0].SessionID)
+		}
+	})
+
+	t.Run("a text delta is the answer, a fragment at a time", func(t *testing.T) {
+		got := parseGrokLine(grokTextDeltaEvent)
+		if len(got) != 1 || got[0].Type != UpdateDelta {
+			t.Fatalf("got %+v, want one %s update", got, UpdateDelta)
+		}
+		if got[0].Delta != "ALPHA" {
+			t.Errorf("delta = %q, want %q — a token-level delta is passed through unpadded", got[0].Delta, "ALPHA")
+		}
+	})
+
+	// grok is the third adapter to hit this, and the first where the separator
+	// cannot hang on the text event: its deltas are token-level, so a newline
+	// per delta would break every word apart. `message_stop` is the one
+	// boundary a stateless parser can see. Verified by execution on 1.0.5 — a
+	// run that called one tool said "I'll run that command and tell you what it
+	// printed." and then "It printed:\n\n`HELLO_PROBE`", which concatenate to
+	// "…printed.It printed:…" without this.
+	t.Run("consecutive messages do not run together", func(t *testing.T) {
+		var answer string
+		lines := []string{
+			`{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Alpha."}}}`,
+			grokMessageStopEvent,
+			`{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Gamma."}}}`,
+			grokMessageStopEvent,
+		}
+		for _, line := range lines {
+			for _, upd := range parseGrokLine(line) {
+				answer += upd.Delta
+			}
+		}
+		if answer != "Alpha.\nGamma.\n" {
+			t.Errorf("answer = %q, want %q", answer, "Alpha.\nGamma.\n")
+		}
+	})
+
+	// The result event's totals, not `message_delta`'s. Both carry the same
+	// four field names, which is what makes reading the wrong one easy and
+	// silent: usage is applied last-write-wins, so a two-message run would
+	// publish its *second* message's 166 input tokens as the whole task's.
+	//
+	// All three lines are from the one run, so the arithmetic is checkable
+	// rather than asserted: the per-message numbers really do sum to the total
+	// the parser is required to publish instead of them.
+	t.Run("usage comes from the run's totals, not a message's", func(t *testing.T) {
+		usage := onlyUsage(t, parseGrokLine(grokToolRunResultEvent))
+		if usage.InputTokens != 19838 || usage.OutputTokens != 97 || usage.TotalTokens != 19935 {
+			t.Errorf("usage = %+v", usage)
+		}
+		if usage.CacheReadTokens != 31104 || usage.CacheWriteTokens != 0 {
+			t.Errorf("cache accounting = %+v", usage)
+		}
+
+		// The fixtures' own claim, checked rather than trusted: if these ever
+		// stop summing, one of them was edited by hand and the comment above
+		// them is fiction.
+		for _, line := range []string{grokMessageDeltaEvent, grokMessageDeltaSecondEvent} {
+			if got := parseGrokLine(line); len(got) != 0 {
+				t.Errorf("a message's own usage was published as the run's: %+v", got)
+			}
+		}
+		first, second := messageDeltaUsage(t, grokMessageDeltaEvent), messageDeltaUsage(t, grokMessageDeltaSecondEvent)
+		if first.InputTokens+second.InputTokens != usage.InputTokens {
+			t.Errorf("the two messages' input tokens (%d + %d) do not sum to the run's %d",
+				first.InputTokens, second.InputTokens, usage.InputTokens)
+		}
+		if first.OutputTokens+second.OutputTokens != usage.OutputTokens {
+			t.Errorf("the two messages' output tokens (%d + %d) do not sum to the run's %d",
+				first.OutputTokens, second.OutputTokens, usage.OutputTokens)
+		}
+
+		// The single-message run, for the plain case.
+		single := onlyUsage(t, parseGrokLine(grokResultEvent))
+		if single.InputTokens != 19664 || single.OutputTokens != 43 || single.TotalTokens != 19707 {
+			t.Errorf("single-message usage = %+v", single)
+		}
+	})
+
+	// grok exits 1 on a failed run, so the shared runner fails the task either
+	// way. What it cannot do is say why, and grok's `errors` array is the only
+	// place the reason appears on stdout. Read after the usage, so a failed run
+	// still reports what it spent.
+	t.Run("a failed result carries the CLI's own words", func(t *testing.T) {
+		got := parseGrokLine(grokErrorResultEvent)
+		var failure *RunUpdate
+		for i := range got {
+			if got[i].Type == UpdateFailed {
+				failure = &got[i]
+			}
+		}
+		if failure == nil {
+			t.Fatalf("got %+v, want a %s update", got, UpdateFailed)
+		}
+		if !strings.Contains(failure.Err.Error(), "unknown model id") {
+			t.Errorf("error drops the CLI's message: %v", failure.Err)
+		}
+	})
+
+	// `--include-partial-messages` adds the deltas; it does not replace the
+	// finished message. Reading both would publish every answer twice, and the
+	// deltas are the half that makes the stream progressive.
+	t.Run("nothing is invented from events that carry no answer", func(t *testing.T) {
+		for _, line := range []string{
+			grokThinkingDeltaEvent,
+			grokToolInputDeltaEvent,
+			grokAssistantEvent,
+			grokMessageDeltaEvent,
+		} {
+			for _, upd := range parseGrokLine(line) {
+				if upd.Type == UpdateDelta {
+					t.Errorf("line produced answer text %q, want none:\n  %s", upd.Delta, line)
+				}
+			}
+		}
+	})
+
+	t.Run("a non-JSON line is not answer text", func(t *testing.T) {
+		for _, line := range []string{"", "not json", "Error: Failed to restore session from remote"} {
+			if got := parseGrokLine(line); len(got) != 0 {
+				t.Errorf("%q produced %+v, want nothing", line, got)
+			}
+		}
+	})
+}
+
+// onlyUsage returns the single usage update in a parse result, failing if
+// there is not exactly one. A parser that emitted two would be publishing one
+// of them as the run's total by accident.
+func onlyUsage(t *testing.T, updates []RunUpdate) *domain.Usage {
+	t.Helper()
+	var found *domain.Usage
+	for _, upd := range updates {
+		if upd.Type != UpdateUsage {
+			continue
+		}
+		if found != nil {
+			t.Fatalf("two %s updates from one line: %+v", UpdateUsage, updates)
+		}
+		found = upd.Usage
+	}
+	if found == nil {
+		t.Fatalf("got %+v, want a %s update", updates, UpdateUsage)
+	}
+	return found
+}
+
+// messageDeltaUsage reads a `message_delta` line's own usage, which parseGrokLine
+// deliberately does not. It exists so the fixtures' arithmetic can be checked
+// against the numbers grok actually printed rather than against a comment.
+func messageDeltaUsage(t *testing.T, line string) domain.Usage {
+	t.Helper()
+	var ev struct {
+		Event struct {
+			Usage struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		} `json:"event"`
+	}
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		t.Fatalf("fixture is not JSON: %v", err)
+	}
+	return domain.Usage{
+		InputTokens:  ev.Event.Usage.InputTokens,
+		OutputTokens: ev.Event.Usage.OutputTokens,
+	}
 }
 
 // Every claude*Event below is a line of `claude -p --output-format stream-json
@@ -988,7 +1402,57 @@ func TestPiProbeRunsTheShippedInvocation(t *testing.T) {
 	}
 }
 
-// Three adapters now report a failure their CLI printed rather than exited
+// Issue #34's two probes, pinned the same way and for the same reason: a probe
+// that reports a healthy CLI while measuring an argv uhpd does not send is
+// worse than no probe, because it is evidence for a claim nobody checked.
+//
+// Both forms each, because the resume flag lives inside BuildArgs rather than
+// behind a hook of its own, so a fresh argv alone would not pin it. `<model>`
+// and `<session>` are what each probe substitutes at run time — and `<prompt>`
+// as well for grok, which is the one harness whose prompt is in argv at all.
+func TestCodexAndGrokProbesRunTheShippedInvocation(t *testing.T) {
+	for _, h := range []struct {
+		probe  string
+		binary string
+		build  func() *CLIHarness
+		// prompt is what the harness's Input becomes in the pinned lists.
+		// Codex sends its prompt over stdin, so nothing of it reaches argv and
+		// any value does; grok's lands in `-p=<prompt>` and must match.
+		prompt string
+	}{
+		{"../../scripts/probe-codex-session.py", "codex", func() *CLIHarness { return NewCodex([]string{"<model>"}) }, "hello"},
+		{"../../scripts/probe-grok-session.py", "grok", func() *CLIHarness { return NewGrok([]string{"<model>"}) }, "<prompt>"},
+	} {
+		t.Run(h.binary, func(t *testing.T) {
+			src, err := os.ReadFile(h.probe)
+			if err != nil {
+				t.Fatalf("the %s probe is missing: %v", h.binary, err)
+			}
+			harness := h.build()
+
+			for _, tc := range []struct {
+				list string
+				req  RunRequest
+			}{
+				{"HARNESS_ARGV", RunRequest{Input: h.prompt}},
+				{"RESUME_ARGV", RunRequest{Input: h.prompt, Model: "<model>", NativeSessionID: "<session>"}},
+			} {
+				args, err := harness.BuildArgs(tc.req)
+				if err != nil {
+					t.Fatalf("BuildArgs(%s): %v", tc.list, err)
+				}
+				want := append([]string{h.binary}, args...)
+				got := pythonStringList(t, string(src), tc.list)
+				if strings.Join(got, " ") != strings.Join(want, " ") {
+					t.Errorf("%s: %s measures an invocation uhpd does not send:\n  probe: %v\n  uhpd:  %v",
+						tc.list, h.probe, got, want)
+				}
+			}
+		})
+	}
+}
+
+// Five adapters now report a failure their CLI printed rather than exited
 // with, so the shape lives in one place. What it must never produce is an
 // error with nothing in it: "harness: pi: " reads to a client as a bug in this
 // server rather than as something the harness said.

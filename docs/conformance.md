@@ -56,10 +56,9 @@ Three things to know before reading a result:
 - **Pick a harness that advertises what the checks exercise.** The `capabilities` list on a
   harness object is now enforced rather than reported: a `previous_response_id` sent to a
   harness without `sessions` is refused `422`, as is a cancel sent to one without
-  `cancellation`. Of the five bases here `claude-code`, `codex`, `opencode` and `pi`
-  advertise `sessions` (`pi` since issue #33), so a run pointed at `grok-cli` fails the
-  session and continuation checks by design — the refusal is the honest answer, but it is
-  not a conformance measurement of this server's session support.
+  `cancellation`. All five bases here now advertise `sessions` — `pi` since issue #33 and
+  `grok-cli` since issue #34 — so the session and continuation checks are exercisable
+  against any of them. Before #34 a run pointed at `grok-cli` failed them by design.
 
 - **The suite runs real agent tasks** — about six of them, costing real tokens and a few
   minutes. That is deliberate: a stream that never flushes, a cancellation that never
@@ -99,9 +98,11 @@ the honest thing is to say so here rather than let this file imply a machine is 
 **It measures `claude-code`, and that is a decision rather than a default** (issue #14).
 Three constraints pick it between them:
 
-- *It has to advertise what the core checks exercise.* `capabilities` is enforced, so a run
-  against `grok-cli` fails `C-01` and `C-02` by design and the gate would be red from the
-  day it was written. `pi` was in that group until issue #33 verified its resume.
+- *It has to advertise what the core checks exercise.* `capabilities` is enforced, so a
+  harness without `sessions` fails `C-01` and `C-02` by design and the gate would be red
+  from the day it was written. `pi` was in that group until issue #33 verified its resume,
+  and `grok-cli` until issue #34 verified its own; on the day this was written both were
+  out, which is what settled the choice.
 - *It has to actually stream.* A gate for `S-09` driven by a harness that buffers measures
   nothing about streaming. `claude-code` streams token-level content blocks, but only with
   `--include-partial-messages`, which is why the invocation grew that flag.
@@ -204,6 +205,14 @@ timed by hand at the socket rather than by the suite, shows what those numbers a
 was silent for ninety per cent of the run — the state Streaming §1 calls indistinguishable
 from a hang. The suite is not wrong to measure what it measures; it is measuring the only
 thing a single connection can see without knowing when the harness had something to say.
+
+That trace is a record of an invocation this server no longer sends. Issue #34 moved
+`grok-cli` onto `--output-format streaming-messages-json --include-partial-messages`, where
+the answer arrives as token-level deltas during the run rather than as one block at the end,
+so the same task streamed today would not look like the above. **It is kept because the
+point survives the fix**: `S-09` passed that stream, and would pass the next harness that
+buffers. The check's blindness is a property of what a single connection can see, not of
+which CLI happened to demonstrate it.
 
 So the gate defends the *score*, and this repository's own test defends *progressive
 delivery*: `TestADeltaReachesTheClientBeforeTheRunEnds` in
