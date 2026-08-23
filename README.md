@@ -181,7 +181,8 @@ list it already holds. Cancelling an already-terminal task or an idle session st
 succeeds whatever the harness advertises (Sessions §4): there is no work to stop, so
 nothing is being promised that cannot be delivered.
 
-Of the five bases shipped here, `claude-code`, `codex` and `opencode` advertise `sessions`.
+Of the five bases shipped here, `claude-code`, `codex`, `opencode` and `pi` advertise
+`sessions`; only `grok-cli` does not.
 That is the only entry in the list a declaration decides. Three of the six capabilities are
 not the CLI's to claim and no declaration names them:
 
@@ -679,6 +680,13 @@ started a new conversation, and issue #13 restored the two halves together — `
 so the CLI prints its `sessionID`, `parseOpenCodeLine` to read it, then the capability.
 Check both halves by hand before you claim `sessions`.
 
+`pi` is the other direction of the same mistake, and the more tempting one: it withheld
+`sessions` it could deliver. The id was on the wire but never read, because nobody had run
+`--session-id` against the binary — so the capability was declined on the strength of not
+having checked. Issue #33 checked, with `scripts/probe-pi-session.py`, and it resumes.
+**Withholding a capability is not the safe default it looks like.** It is a wrong answer in
+the other direction, and unlike an over-claim nothing fails to make it visible.
+
 **`streaming` has the same two halves, and the second one is easy to miss.** Several of
 these CLIs default to an output mode that prints nothing until the run is over, so an
 invocation can be perfectly correct and still buffer: `pi -p` writes the finished answer
@@ -732,6 +740,23 @@ second checks enforcement: that a blocked tool is really gone, that a configured
 is really reached as the configured principal, and that nothing else is. It starts its own
 MCP endpoints on loopback and needs no network. Both spend a few tokens; neither is in the
 pre-push hook.
+
+A third probe covers `pi`, and this one costs nothing at all — run it after every pi
+upgrade:
+
+```bash
+make probe-pi                # streaming, --session-id resume, exit-0 on failure (#33)
+```
+
+`pi` reads a `models.json` that can declare a provider outright, base URL included, so the
+probe answers from a loopback server of its own: no credentials, no network, no tokens, and
+it finishes in seconds. It checks the same silent failure `capture-claude` does — that the
+answer really arrives as `message_update`/`text_delta` — and then the half a capture cannot
+reach, that `--session-id` really resumes, by reading the conversation history off the
+request the resumed turn sent. Everything it touches lives in a temporary
+`PI_CODING_AGENT_DIR`, so the machine's own pi sessions and credentials are untouched.
+Being free of credentials, it is the one probe here that could reasonably move into CI
+alongside a `pi` install.
 
 ## Building the image
 

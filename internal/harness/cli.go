@@ -433,9 +433,11 @@ const failureWithoutReason = "the run failed without reporting a reason"
 // harnessFailure is the terminal update for a run whose CLI reported a problem
 // in its own output rather than by its exit code.
 //
-// Three of the five need one. pi exits 0 after printing an error; claude exits
-// 1 but writes the reason to stdout and leaves stderr empty; opencode exited 0
-// on 1.14.41 and exits 1 on 1.18.21 (issue #13, verified by execution on both).
+// Three of the five need one. pi exits 0 after printing an error, on 0.83.0 and
+// again on 0.84.2 (issue #33, re-run because #13 found opencode's equivalent
+// claim flipped across a version bump — pi's did not); claude exits 1 but writes
+// the reason to stdout and leaves stderr empty; opencode exited 0 on 1.14.41 and
+// exits 1 on 1.18.21 (issue #13, verified by execution on both).
 // That last one is why this does not hang on the exit code: an exit code says a
 // run failed and cannot say why, so the reason is worth lifting out of the
 // CLI's own output whether or not the code agrees. Both updates are sent and

@@ -1,4 +1,4 @@
-.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude probe-claude-delivery
+.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude probe-claude-delivery probe-pi
 
 build:
 	go build -o bin/uhpd ./cmd/uhpd
@@ -116,3 +116,18 @@ capture-claude:
 # Run it after every Claude Code upgrade, alongside `capture-claude`.
 probe-claude-delivery:
 	@python3 scripts/probe-claude-delivery.py
+
+# The pi probe (#33), and the one that costs nothing to run: pi's models.json
+# can declare a provider outright, base URL included, so this answers from a
+# loopback server of its own and needs no credentials, no network and no
+# logged-in CLI — only `pi` on PATH.
+#
+# It checks the two things pi.go used to declare rather than observe — that the
+# answer arrives as streamed `message_update`/`text_delta` events, and that
+# `--session-id` really resumes — plus the exit-0-on-failure claim
+# harnessFailure rests on. Run it after every pi upgrade.
+#
+# Nothing it does touches the machine's own pi: PI_CODING_AGENT_DIR points at a
+# temporary directory for the run.
+probe-pi:
+	@python3 scripts/probe-pi-session.py
