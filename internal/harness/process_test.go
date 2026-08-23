@@ -250,6 +250,28 @@ func TestOversizedLineIsReportedAsFailureNotSuccess(t *testing.T) {
 	}
 }
 
+// The mirror of the test above, for stderr. A diagnostic too long to scan must
+// not fail the run — stderr is not the answer — but neither may it be quoted
+// into the failure as though it were everything the CLI said. The truncation is
+// read at the one moment someone is trying to find out why a run failed, so it
+// has to be visible in the message rather than inferred from its absence.
+func TestOversizedStderrLineIsMarkedTruncatedInTheFailure(t *testing.T) {
+	// One stderr line of 9 MiB, past the 8 MiB limit, then a non-zero exit so
+	// the buffer is actually reported.
+	h := shHarness(t, "head -c 9437184 < /dev/zero | tr '\\0' 'a' >&2; exit 3", PromptArgs)
+	ch, err := h.Run(context.Background(), RunRequest{TaskID: "t7"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	l := last(t, drain(t, ch))
+	if l.Type != UpdateFailed {
+		t.Fatalf("last update = %q, want %q", l.Type, UpdateFailed)
+	}
+	if l.Err == nil || !strings.Contains(l.Err.Error(), "stderr truncated") {
+		t.Fatalf("a truncated stderr is quoted as if whole: %v", l.Err)
+	}
+}
+
 // Cancelling an unknown task is an error, not a silent success.
 func TestCancelUnknownTask(t *testing.T) {
 	h := shHarness(t, "true", PromptArgs)
