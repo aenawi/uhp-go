@@ -16,13 +16,21 @@ import (
 // -- "--help"` still prints help — so stdin is the only safe delivery.
 func NewPi(models []string) *CLIHarness {
 	return (&CLIHarness{
-		ID:           NewID("pi"),
-		Base:         "pi",
-		Name:         "Pi",
-		Vendor:       "community",
-		Binary:       "pi",
-		Models:       models,
-		Capabilities: []domain.Capability{domain.CapStreaming, domain.CapTools},
+		ID:     NewID("pi"),
+		Base:   "pi",
+		Name:   "Pi",
+		Vendor: "community",
+		Binary: "pi",
+		Models: models,
+		// Issue #33: `sessions` is claimed now, and only because both halves
+		// exist. parsePiLine discovers the id from pi's own `session` event and
+		// BuildArgs passes it back as `--session-id`. #13 is the precedent for
+		// why they land together: opencode shipped the flag alone, the branch
+		// was unreachable, and every continuation quietly started a new
+		// conversation.
+		Capabilities: []domain.Capability{
+			domain.CapStreaming, domain.CapSessions, domain.CapTools,
+		},
 		// `pi --list-models` prints the models pi will route to, filtered by
 		// which providers have credentials — the same "computed, not asserted"
 		// answer §3.1 asks for. Verified by execution; it is what caught
@@ -43,16 +51,32 @@ func NewPi(models []string) *CLIHarness {
 			// event as it fires, which includes a `message_update` per chunk
 			// of generated text.
 			//
-			// Read from pi 0.83.0's shipped package rather than from a
-			// captured run — `dist/modes/print-mode.js` for what each mode
-			// writes and when — because no provider reachable from this
-			// machine would answer without hitting a rate limit first. That is
-			// weaker evidence than the rest of this file's, and the fixture
-			// comment above TestParsePiLine says exactly which line came from
-			// where. What a run did settle is the failure path below.
+			// This used to be read from pi 0.83.0's shipped package rather than
+			// from a captured run, because no provider reachable from this
+			// machine would answer without hitting a rate limit first. Issue
+			// #33 closed that: scripts/probe-pi-session.py answers from a
+			// loopback OpenAI-compatible provider, so a real 0.84.2 run streams
+			// without needing credentials, and `message_update` →
+			// `text_delta` is now observed rather than declared.
 			args := []string{"-p", "--mode", "json"}
 			if req.Model != "" {
 				args = append(args, "--model", req.Model)
+			}
+			if req.NativeSessionID != "" {
+				// `--session-id`, not `--session`. pi has both: `--session`
+				// resolves a session file path or a *partial* UUID, while
+				// `--session-id` takes the exact id — which is the one this
+				// server holds, having read it off the `session` event.
+				//
+				// pi looks the id up within the project it was launched in, so
+				// a resumed run must start in the directory the first one did.
+				// It does: service.TaskService derives the working directory
+				// from the session id (workspace.sessionDir), so every turn of
+				// a session runs in the same place. When it does not match, pi
+				// says so on stderr — "No project session found with id …;
+				// creating a new session with that id" — rather than resuming
+				// something else.
+				args = append(args, "--session-id", req.NativeSessionID)
 			}
 			return args, nil
 		},
@@ -85,12 +109,20 @@ func NewPi(models []string) *CLIHarness {
 // twice, so only the fragments are read — they are the half that makes the
 // stream progressive, which is the whole point of the mode.
 //
-// The lifecycle events here were captured from a real run; `message_update`
-// and its inner `text_delta` are declared in pi 0.83.0's own
-// `pi-agent-core/dist/types.d.ts` and have not been seen on the wire from this
-// machine. See the fixture comment above TestParsePiLine.
+// Every event read here has been seen on the wire from pi 0.84.2. Issue #33:
+// `message_update` and its inner `text_delta` used to be the exception, taken
+// from pi 0.83.0's `pi-agent-core/dist/types.d.ts` because no reachable
+// provider would answer. They are captured now — see
+// scripts/probe-pi-session.py and the fixture comment above TestParsePiLine.
+// The declaration was right about these two fields and wrong about the rest:
+// a 0.84.2 `message_update` carries no `message` at all.
 type piEvent struct {
-	Type    string `json:"type"`
+	Type string `json:"type"`
+
+	// ID is the session id, and it appears only on the `session` event — the
+	// first line of every run. It is what `--session-id` takes back.
+	ID string `json:"id"`
+
 	Message *struct {
 		Role string `json:"role"`
 
@@ -117,6 +149,17 @@ func parsePiLine(line string) []RunUpdate {
 	}
 
 	switch {
+	case ev.Type == "session" && ev.ID != "":
+		// The native session id, which is what makes `--session-id` actually
+		// resume. pi announces it once, on the first line of the run, and
+		// echoes the same id back on a resumed turn.
+		//
+		// The `!= ""` is not defensive padding: an empty SessionID published
+		// here would overwrite a good id on the task with nothing, and the
+		// next continuation would start a new conversation with no sign that
+		// anything had gone wrong.
+		return []RunUpdate{{Type: UpdateSessionID, SessionID: ev.ID}}
+
 	case ev.Type == "message_update" && ev.AssistantMessageEvent != nil &&
 		ev.AssistantMessageEvent.Type == "text_delta" && ev.AssistantMessageEvent.Delta != "":
 		// The answer, a fragment at a time. No separator is added: unlike
@@ -130,9 +173,13 @@ func parsePiLine(line string) []RunUpdate {
 		// pi exits 0 after printing this. Only its *text* mode turns a failed
 		// run into a non-zero exit; in json mode the error is data on the
 		// stream and nothing else, so a harness that ignored it would report a
-		// run that never happened as completed with empty output. Verified by
-		// execution: a run over a provider's per-minute token limit printed
-		// this and exited 0.
+		// run that never happened as completed with empty output.
+		//
+		// Verified by execution on 0.83.0 — a run over a provider's per-minute
+		// token limit printed this and exited 0 — and re-run on 0.84.2 for
+		// issue #33, because #13 found opencode's equivalent claim had flipped
+		// across a version bump. pi's had not. `make probe-pi` is what re-runs
+		// it, and it fails rather than notes if the exit code moves.
 		//
 		// `aborted` is deliberately not treated the same way. That is what pi
 		// reports when the run was cancelled, and the shared runner already
@@ -146,12 +193,10 @@ func parsePiLine(line string) []RunUpdate {
 	// repeat the failed message verbatim: reporting from all three would tell
 	// the client about one failure three times.
 	//
-	// `session` is dropped too. It carries pi's own session id, and passing it
-	// on would be the beginning of session support rather than the whole of
-	// it: pi does not advertise `sessions` above, because whether
-	// `--session-id` resumes a conversation has not been run against the real
-	// binary. Discovering an id this server then refuses to accept back would
-	// claim nothing and cost a store write per run.
+	// `text_end` is dropped for the same reason `message_end` is, one nesting
+	// level down: it closes the run of deltas by repeating the whole text in
+	// `content`, so reading it as well would publish every answer twice.
+	// `text_start` and the thinking pair carry no answer text at all.
 	//
 	// Usage is dropped for the reason opencode's is: pi reports it per
 	// message, task_service applies it last-write-wins, and a multi-step run

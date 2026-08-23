@@ -152,6 +152,30 @@ func TestBuildArgs(t *testing.T) {
 			want: []string{"-p", "--mode", "json", "--model", "m2"},
 		},
 		{
+			// Issue #33. `--session-id <id>` and not `--session <id>`: pi has
+			// both, and only the first takes the exact id the `session` event
+			// announced. `--session` matches a partial UUID or a file path,
+			// which is a lookup this server has no reason to ask for when it
+			// holds the whole id.
+			//
+			// Verified by execution on 0.84.2 by scripts/probe-pi-session.py:
+			// the resumed turn arrived at the provider carrying the first
+			// turn's user message and assistant reply, and the same turn run
+			// without the flag arrived carrying neither.
+			name: "pi: --session-id resumes, after the model",
+			h:    NewPi(models),
+			req:  RunRequest{Input: "hello", Model: "m1", NativeSessionID: "s1"},
+			want: []string{"-p", "--mode", "json", "--model", "m1", "--session-id", "s1"},
+			checkFn: func(t *testing.T, args []string) {
+				// `--session` would be read as a different flag entirely, and
+				// pi accepts it, so a typo here fails at the model rather than
+				// at the CLI.
+				if argvContains(args, "--session") {
+					t.Fatalf("--session takes a partial id or a path, not the exact id: %v", args)
+				}
+			},
+		},
+		{
 			name: "opencode: --format json, and --print-logs is not passed",
 			h:    NewOpenCode(models),
 			req:  RunRequest{Input: "hello"},
@@ -731,48 +755,83 @@ func pythonStringList(t *testing.T, src, name string) []string {
 	return out
 }
 
-// Every pi*Event below is shaped from pi 0.83.0's own event definitions and
-// from a captured `pi -p --mode json` run on 2026-08-21.
+// Every pi*Event below was taken off the wire from pi 0.84.2 on 2026-08-23, and
+// each says below it which run produced it. None is declared. Some are
+// abridged, and only ever by deleting a field this parser never reads —
+// `usage`, `cost`, `cacheRead`/`cacheWrite`, `cwd`. Nothing the parser looks at
+// has been edited, `errorMessage` included: it is here with the provider's own
+// JSON body still embedded in it, because that is what pi passes through and
+// what a client would be shown.
 //
-// The lifecycle lines — session, agent_start, message_start, message_end,
-// turn_end — are verbatim from that run, abridged to the fields this parser
-// reads. The run itself failed at the provider (a groq per-minute token limit),
-// which is why it is also the source of the error fixture and why no
-// message_update line could be captured from it: pi emits those only once the
-// model starts producing text.
+// Most come from `make probe-pi` — scripts/probe-pi-session.py, which needs no
+// credentials — so a reader can reproduce them. The two groq lines cannot be
+// reproduced that way and say so.
 //
-// message_update is therefore read from the shipped package instead.
-// `dist/modes/print-mode.js` writes one JSON line per session event as it
-// fires, and `pi-agent-core/dist/types.d.ts` declares that event as
-// `{type:"message_update", message, assistantMessageEvent}` where the inner
-// event is `{type:"text_delta", contentIndex, delta, partial}`.
-//
-// The same two files are what settle the mode change: in text mode
-// `runPrintMode` writes nothing until `await session.prompt()` has returned and
-// then prints the last assistant message, so `pi -p` alone cannot stream
-// whatever the harness advertises.
+// Issue #33: the message_update fixtures used to be the exception. They were
+// read out of pi 0.83.0's `pi-agent-core/dist/types.d.ts` rather than off the
+// wire, and a declared shape that no line matches is the silent failure — every
+// delta is dropped, the run completes, and the client is handed an empty answer.
+// The declaration turned out to be right about the two fields the parser reads
+// and wrong about the rest: on 0.84.2 a message_update carries no `message` and
+// no `partial`, only `usage` and `assistantMessageEvent`. Nothing depended on
+// the wrong half, which is luck rather than evidence, and is why these are now
+// captured.
 const (
-	piSessionEvent   = `{"type":"session","version":3,"id":"01a024aa-0d2e-7755-82ec-18e89a44e099","timestamp":"2026-08-21T14:11:59.406Z","cwd":"/w"}`
+	// The id `--session-id` takes back. Verified round-trip, not inferred from
+	// the field name: the probe reads it off this event, hands it back, and
+	// watches the resumed turn reach the provider carrying the first turn.
+	// `cwd` shortened; the parser reads only `id`.
+	piSessionEvent = `{"type":"session","version":3,"id":"01a02d39-dbd8-70b0-b19d-d785a81fa64f","timestamp":"2026-08-23T06:06:01.688Z","cwd":"/w"}`
+
 	piAgentStart     = `{"type":"agent_start"}`
 	piTurnStart      = `{"type":"turn_start"}`
-	piUserMessageEnd = `{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Count from 1 to 30."}],"timestamp":1787321519450}}`
+	piUserMessageEnd = `{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Say exactly: Alpha Bravo Charlie"}],"timestamp":1787465161758}}`
 
-	piTextDeltaEvent = `{"type":"message_update","message":{"role":"assistant","content":[{"type":"text","text":"Al"}]},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Al","partial":{"role":"assistant","content":[{"type":"text","text":"Al"}]}}}`
+	// The first of the run's three text deltas. `contentIndex` is 1 rather than
+	// 0 because the thinking below took index 0 — the probe asks for both in
+	// one run, so these are the same run's lines and not a composite.
+	piTextDeltaEvent = `{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"Alpha"}}`
 
-	piThinkingDeltaEvent = `{"type":"message_update","message":{"role":"assistant","content":[]},"assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"weighing it up","partial":{"role":"assistant","content":[]}}}`
+	// text_start and text_end bracket the deltas. text_end repeats the whole
+	// text in `content`, so a parser that read it would answer twice over —
+	// the same trap message_end sets, one nesting level down.
+	piTextStartEvent = `{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_start","contentIndex":1}}`
+	piTextEndEvent   = `{"type":"message_update","usage":{"input":11,"output":3,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":14,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_end","contentIndex":1,"content":"Alpha Bravo Charlie"}}`
+
+	// The model's private working, from the same run: the probe's provider
+	// sends `reasoning_content` ahead of the answer so this event exists to be
+	// captured rather than assumed.
+	piThinkingDeltaEvent = `{"type":"message_update","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"weighing it up"}}`
 
 	// The finished assistant message, carrying the whole answer its deltas
-	// already delivered.
-	piAssistantMessageEnd = `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Alpha"}],"provider":"groq","model":"openai/gpt-oss-20b","stopReason":"stop","timestamp":1787321519971}}`
+	// already delivered — and the thinking as well, which is the second reason
+	// not to read it.
+	piAssistantMessageEnd = `{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"weighing it up","thinkingSignature":"reasoning_content"},{"type":"text","text":"Alpha Bravo Charlie"}],"api":"openai-completions","provider":"probe","model":"probe-model","stopReason":"stop","timestamp":1787465161802,"responseId":"probe-1","rawStopReason":"stop"}}`
 
-	// Verbatim from the failed run. pi exits 0 after printing this in json
-	// mode — only its text mode turns an error into a non-zero exit — so a
-	// harness that ignored it would report a run that never happened as
-	// completed with empty output.
-	piErrorMessageEnd = `{"type":"message_end","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"groq","model":"openai/gpt-oss-20b","stopReason":"error","timestamp":1787321519971,"errorMessage":"413: Request too large for model ` + "`openai/gpt-oss-20b`" + ` on tokens per minute (TPM): Limit 8000, Requested 66050"}}`
+	// A refused run, from the probe's fourth check. pi exits 0 after printing
+	// this in json mode — only its text mode turns an error into a non-zero
+	// exit — so a harness that ignored it would report a run that never
+	// happened as completed with empty output.
+	piErrorMessageEnd = `{"type":"message_end","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"probe","model":"probe-model","stopReason":"error","timestamp":1787465179874,"errorMessage":"400: {\"message\":\"probe: the provider refused this run\",\"type\":\"invalid_request_error\"}"}}`
 
-	// The same failure, repeated on the events that follow it.
-	piErrorTurnEnd = `{"type":"turn_end","message":{"role":"assistant","content":[],"provider":"groq","model":"openai/gpt-oss-20b","stopReason":"error","timestamp":1787321519971,"errorMessage":"413: Request too large"},"toolResults":[]}`
+	// The same failure, repeated on the event that follows it.
+	piErrorTurnEnd = `{"type":"turn_end","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"probe","model":"probe-model","stopReason":"error","timestamp":1787465179874,"errorMessage":"400: {\"message\":\"probe: the provider refused this run\",\"type\":\"invalid_request_error\"}"},"toolResults":[]}`
+
+	// And on the event *before* it. A failed run's message_start already
+	// carries `stopReason: "error"` and the whole errorMessage, so a parser
+	// that matched on the stop reason alone rather than on message_end would
+	// report the failure twice before turn_end even arrived.
+	piErrorMessageStart = `{"type":"message_start","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"probe","model":"probe-model","stopReason":"error","timestamp":1787465179874,"errorMessage":"400: {\"message\":\"probe: the provider refused this run\",\"type\":\"invalid_request_error\"}"}}`
+
+	// The one failure a loopback provider cannot stage: a real provider's own
+	// refusal, in its own words. Captured on 0.84.2 from `pi -p --mode json
+	// --model groq/openai/gpt-oss-20b`, which 413s because groq counts a
+	// model's max output tokens against its per-minute limit — 65.5K against a
+	// ceiling of 8K, so every catalogued model on that account exceeds it. It
+	// is here because it is the case the client is actually told about, and
+	// because `make probe-pi` cannot produce it: reproducing this one needs
+	// credentials.
+	piProviderErrorMessageEnd = `{"type":"message_end","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"groq","model":"openai/gpt-oss-20b","stopReason":"error","timestamp":1787463832537,"errorMessage":"413: Request too large for model ` + "`openai/gpt-oss-20b`" + ` on tokens per minute (TPM): Limit 8000, Requested 66068"}}`
 )
 
 func TestParsePiLine(t *testing.T) {
@@ -781,23 +840,54 @@ func TestParsePiLine(t *testing.T) {
 		if len(got) != 1 || got[0].Type != UpdateDelta {
 			t.Fatalf("got %+v, want one %s update", got, UpdateDelta)
 		}
-		if got[0].Delta != "Al" {
-			t.Errorf("delta = %q, want %q", got[0].Delta, "Al")
+		if got[0].Delta != "Alpha" {
+			t.Errorf("delta = %q, want %q", got[0].Delta, "Alpha")
 		}
 	})
 
-	// pi announces each assistant message twice over: as a stream of deltas
-	// and again, whole, at message_end. Reading both doubles every answer.
-	t.Run("the finished assistant message is not answer text as well", func(t *testing.T) {
+	// Issue #33. pi announces its session id once, on the first line of the
+	// run, and `--session-id` takes that same id back — verified round-trip by
+	// scripts/probe-pi-session.py, which reads the id off this event and then
+	// watches the resumed turn arrive at the provider carrying the first turn's
+	// messages. Without this the `--session-id` branch in BuildArgs is
+	// unreachable and every continuation quietly starts a new conversation,
+	// which is the half of #13 opencode shipped alone and had to fix.
+	t.Run("the session id is discovered, so a continuation can resume", func(t *testing.T) {
+		got := parsePiLine(piSessionEvent)
+		if len(got) != 1 || got[0].Type != UpdateSessionID {
+			t.Fatalf("got %+v, want one %s update", got, UpdateSessionID)
+		}
+		if got[0].SessionID != "01a02d39-dbd8-70b0-b19d-d785a81fa64f" {
+			t.Errorf("session id = %q, want the id pi announced", got[0].SessionID)
+		}
+	})
+
+	// A session event with no id in it is not a session id. Publishing "" would
+	// overwrite a good id on the task with nothing, and the next continuation
+	// would start a new conversation with no sign anything went wrong.
+	t.Run("an id-less session event is not a session id", func(t *testing.T) {
+		if got := parsePiLine(`{"type":"session","version":3,"cwd":"/w"}`); len(got) != 0 {
+			t.Errorf("got %+v, want nothing", got)
+		}
+	})
+
+	// pi announces each assistant message three times over: as a stream of
+	// deltas, whole in text_end's `content`, and whole again at message_end.
+	// Reading any of the other two triples the answer, so the whole run is
+	// replayed here rather than the deltas alone.
+	t.Run("the answer is read once, not from every event carrying it", func(t *testing.T) {
 		var answer string
-		for _, line := range []string{piTextDeltaEvent, piTextDeltaEvent, piAssistantMessageEnd} {
+		for _, line := range []string{
+			piTextStartEvent, piTextDeltaEvent, piTextDeltaEvent, piTextEndEvent,
+			piAssistantMessageEnd,
+		} {
 			for _, upd := range parsePiLine(line) {
 				answer += upd.Delta
 			}
 		}
-		if answer != "AlAl" {
-			t.Errorf("answer = %q, want %q — the finished message is being read on top of its own deltas",
-				answer, "AlAl")
+		if answer != "AlphaAlpha" {
+			t.Errorf("answer = %q, want %q — something other than the deltas is being read as answer text",
+				answer, "AlphaAlpha")
 		}
 	})
 
@@ -808,25 +898,38 @@ func TestParsePiLine(t *testing.T) {
 	})
 
 	t.Run("an errored message fails the run, carrying pi's own words", func(t *testing.T) {
-		got := parsePiLine(piErrorMessageEnd)
-		if len(got) != 1 || got[0].Type != UpdateFailed {
-			t.Fatalf("got %+v, want one %s update", got, UpdateFailed)
-		}
-		if got[0].Err == nil || !strings.Contains(got[0].Err.Error(), "Limit 8000") {
-			t.Errorf("error drops pi's message: %v", got[0].Err)
+		for _, tc := range []struct{ line, want string }{
+			{piErrorMessageEnd, "the provider refused this run"},
+			// The real-provider failure, which is the one a client actually
+			// meets. Its reason is a sentence worth forwarding whole — an
+			// adapter that reported only "the run failed" would drop the only
+			// part that tells the operator what to change.
+			{piProviderErrorMessageEnd, "Limit 8000"},
+		} {
+			got := parsePiLine(tc.line)
+			if len(got) != 1 || got[0].Type != UpdateFailed {
+				t.Fatalf("got %+v, want one %s update", got, UpdateFailed)
+			}
+			if got[0].Err == nil || !strings.Contains(got[0].Err.Error(), tc.want) {
+				t.Errorf("error drops pi's message %q: %v", tc.want, got[0].Err)
+			}
 		}
 	})
 
-	// The same failure is repeated on turn_end and agent_end. Only one update
-	// is emitted for it, from message_end, so a client is not told three times.
-	t.Run("the failure is reported once, not on every event repeating it", func(t *testing.T) {
-		if got := parsePiLine(piErrorTurnEnd); len(got) != 0 {
-			t.Errorf("turn_end produced %+v, want nothing — message_end already reported it", got)
+	// The same failure is carried by message_start before it and repeated by
+	// turn_end and agent_end after. Only one update is emitted for it, from
+	// message_end, so a client is not told four times.
+	t.Run("the failure is reported once, not on every event carrying it", func(t *testing.T) {
+		for _, line := range []string{piErrorMessageStart, piErrorTurnEnd} {
+			if got := parsePiLine(line); len(got) != 0 {
+				t.Errorf("produced %+v, want nothing — message_end already reported it:\n  %s",
+					got, line)
+			}
 		}
 	})
 
 	t.Run("nothing is invented from lifecycle events", func(t *testing.T) {
-		for _, line := range []string{piSessionEvent, piAgentStart, piTurnStart, piUserMessageEnd} {
+		for _, line := range []string{piAgentStart, piTurnStart, piUserMessageEnd} {
 			if got := parsePiLine(line); len(got) != 0 {
 				t.Errorf("line produced %+v, want nothing:\n  %s", got, line)
 			}
@@ -840,6 +943,49 @@ func TestParsePiLine(t *testing.T) {
 			}
 		}
 	})
+}
+
+// The two things TestParsePiLine cannot verify are that pi still emits these
+// events and that `--session-id` still resumes. scripts/probe-pi-session.py is
+// that verification (`make probe-pi`), and unlike the claude probes it needs no
+// credentials: pi's models.json can declare a provider outright, so the probe
+// answers from a loopback server of its own.
+//
+// This is the part a test can hold: that the probe runs the argv uhpd ships.
+// Issue #33 is what happens without it — a shape declared from the binary that
+// nothing on the wire matches — and a probe measuring a different invocation
+// would be a more confident version of the same mistake.
+//
+// Both forms, because the resume flag is inside BuildArgs rather than behind a
+// hook of its own, so the fresh argv alone would not pin it. `<model>` and
+// `<session>` are what the probe substitutes at run time.
+func TestPiProbeRunsTheShippedInvocation(t *testing.T) {
+	const probe = "../../scripts/probe-pi-session.py"
+
+	src, err := os.ReadFile(probe)
+	if err != nil {
+		t.Fatalf("the pi session probe is missing: %v", err)
+	}
+	h := NewPi([]string{"<model>"})
+
+	for _, tc := range []struct {
+		list string
+		req  RunRequest
+	}{
+		{"HARNESS_ARGV", RunRequest{Input: "hello"}},
+		{"RESUME_ARGV", RunRequest{Input: "hello", Model: "<model>", NativeSessionID: "<session>"}},
+	} {
+		args, err := h.BuildArgs(tc.req)
+		if err != nil {
+			t.Fatalf("BuildArgs(%s): %v", tc.list, err)
+		}
+		want := append([]string{"pi"}, args...)
+		got := pythonStringList(t, string(src), tc.list)
+		if strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Errorf("%s: %s measures an invocation uhpd does not send:\n  probe: %v\n  uhpd:  %v",
+				tc.list, probe, got, want)
+		}
+	}
 }
 
 // Three adapters now report a failure their CLI printed rather than exited

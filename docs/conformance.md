@@ -56,10 +56,10 @@ Three things to know before reading a result:
 - **Pick a harness that advertises what the checks exercise.** The `capabilities` list on a
   harness object is now enforced rather than reported: a `previous_response_id` sent to a
   harness without `sessions` is refused `422`, as is a cancel sent to one without
-  `cancellation`. Of the five bases here only `claude-code`, `codex` and `opencode`
-  advertise `sessions`, so a run pointed at `grok-cli` or `pi` fails the session and
-  continuation checks by design — the refusal is the honest answer, but it is not a
-  conformance measurement of this server's session support.
+  `cancellation`. Of the five bases here `claude-code`, `codex`, `opencode` and `pi`
+  advertise `sessions` (`pi` since issue #33), so a run pointed at `grok-cli` fails the
+  session and continuation checks by design — the refusal is the honest answer, but it is
+  not a conformance measurement of this server's session support.
 
 - **The suite runs real agent tasks** — about six of them, costing real tokens and a few
   minutes. That is deliberate: a stream that never flushes, a cancellation that never
@@ -100,8 +100,8 @@ the honest thing is to say so here rather than let this file imply a machine is 
 Three constraints pick it between them:
 
 - *It has to advertise what the core checks exercise.* `capabilities` is enforced, so a run
-  against `grok-cli` or `pi` fails `C-01` and `C-02` by design and the gate would be red
-  from the day it was written.
+  against `grok-cli` fails `C-01` and `C-02` by design and the gate would be red from the
+  day it was written. `pi` was in that group until issue #33 verified its resume.
 - *It has to actually stream.* A gate for `S-09` driven by a harness that buffers measures
   nothing about streaming. `claude-code` streams token-level content blocks, but only with
   `--include-partial-messages`, which is why the invocation grew that flag.
