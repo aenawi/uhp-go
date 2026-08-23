@@ -88,11 +88,17 @@ practice — `supervise` runs the whole task on `context.WithoutCancel`, so only
 the request's own path are affected, and abandoning a write for a client that has gone is
 the better answer anyway.
 
-**A store error is still reported as a 404.** `TaskService.GetTask` maps every error from
-the store to `ErrResponseNotFound`, which was harmless when the only possible error was "not
-in the map" and is not any more: a disk failure now answers `404`. That is
-[#28](https://github.com/aenawi/uhp-go/issues/28), which this change makes sharper without
-addressing.
+**A store error was reported as a 404, and the fix changed the interface.** `TaskService.GetTask`
+mapped every error from the store to `ErrResponseNotFound`, which was harmless when the only
+possible error was "not in the map" and stopped being harmless the moment a real disk was
+underneath: a failed read answered `404`, telling a client polling a running task that the
+task no longer existed. Resolved in [#28](https://github.com/aenawi/uhp-go/issues/28) by
+giving `Store.GetTask` and `Store.GetSession` a `found bool`, the way `HarnessStore.GetHarness`
+always had, so an absent row and an unreadable store arrive as different values rather than
+as one error the caller has to guess about. A sentinel error would have separated them too,
+but only by convention; two return values cannot be merged by an engine that forgets to wrap
+something. The contract suite asserts `found == false` **with no error**, which is the half
+that keeps a third engine honest.
 
 **Uploads, idempotency keys and created harnesses did not move.** `Uploads`, `HarnessStore`
 and the key index are separate interfaces, each with a different lifetime, and each can move

@@ -65,15 +65,13 @@ func TestGetTaskNotFound(t *testing.T) {
 // stops, while the supervisor carries on running it.
 //
 // What this pins is the half the transport owns — the handler routes its error
-// instead of choosing a status itself. It does not yet mean a real client sees
-// the 500: TaskService.GetTask flattens every store error into
-// ErrResponseNotFound before the transport is ever shown one, so end to end the
-// 404 survives until that flattening goes too. Hence the stand-in, which is the
-// only thing that can hand this handler an ErrStorage today.
+// instead of choosing a status itself, which is why it can use a stand-in and
+// stay a unit test. The rule across every endpoint is
+// TestStorageFailureIsAlways500, and the whole stack answering it for real is
+// TestStorageFailureReaches500ThroughTheRealService.
 //
-// The general rule lives in TestStorageFailureIsAlways500; this stays here so
-// it is read next to TestGetTaskNotFound above, which is the answer it has to
-// be kept apart from.
+// It stays here so it is read next to TestGetTaskNotFound above, which is the
+// answer it has to be kept apart from.
 func TestGetTaskReportsAStorageFailureAs500(t *testing.T) {
 	srv := newFakeServer(&fakeService{
 		getTask: func(context.Context, string) (*domain.Task, error) { return nil, errStorage() },

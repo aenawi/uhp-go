@@ -26,15 +26,18 @@ func errStorage() error { return fmt.Errorf("disk gone: %w", service.ErrStorage)
 // goes near the store. A case that drifts is a handler that stopped routing its
 // error through it.
 //
-// Only a stand-in can produce this at all, and that is worth being precise
-// about, because it means the table pins routing rather than the answer a real
-// client gets. The in-memory store the rest of the package tests against never
-// fails, which is why these paths were unreachable before the transport
-// depended on an interface (issue #10); and on the two response rows and the
-// session rows the service layer flattens store errors into
-// ErrResponseNotFound and ErrSessionNotFound before the transport is shown one,
-// so those endpoints still answer 404 end to end. Each row asserts that its
-// handler will be right the moment it is handed the truth.
+// Only a stand-in can produce this, and being precise about what that buys is
+// the point: the table pins routing — that each handler hands its error to
+// writeServiceError rather than ruling on it — and routing alone is not the
+// answer a real client gets. Trusting it for the whole answer is the mistake
+// that let this bug live, because the service layer underneath was flattening
+// every store error into a not-found and both layers passed their own tests.
+// TestStorageFailureReaches500ThroughTheRealService asks the end-to-end
+// question; this one says which handler to look at when that one goes red.
+//
+// The in-memory store the rest of the package tests against never fails, which
+// is why these paths were unreachable before the transport depended on an
+// interface (issue #10).
 func TestStorageFailureIsAlways500(t *testing.T) {
 	failing := func() *fakeService {
 		return &fakeService{

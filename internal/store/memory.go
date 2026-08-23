@@ -47,14 +47,17 @@ func (s *MemoryStore) UpdateTask(_ context.Context, t *domain.Task) error {
 	return nil
 }
 
-func (s *MemoryStore) GetTask(_ context.Context, id string) (*domain.Task, error) {
+// GetTask answers with found=false for an id it does not hold. A map lookup
+// cannot fail any other way, so the error is always nil here — it exists for
+// the engines that read something that can.
+func (s *MemoryStore) GetTask(_ context.Context, id string) (*domain.Task, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	t, ok := s.tasks[id]
 	if !ok {
-		return nil, fmt.Errorf("store: task %s not found", id)
+		return nil, false, nil
 	}
-	return copyTask(t), nil
+	return copyTask(t), true, nil
 }
 
 func (s *MemoryStore) AppendArtifact(_ context.Context, taskID string, a domain.Artifact) error {
@@ -76,15 +79,17 @@ func (s *MemoryStore) CreateSession(_ context.Context, sess *domain.Session) err
 	return nil
 }
 
-func (s *MemoryStore) GetSession(_ context.Context, id string) (*domain.Session, error) {
+// GetSession answers with found=false for an id it does not hold, for the
+// reason GetTask gives.
+func (s *MemoryStore) GetSession(_ context.Context, id string) (*domain.Session, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	sess, ok := s.sessions[id]
 	if !ok {
-		return nil, fmt.Errorf("store: session %s not found", id)
+		return nil, false, nil
 	}
 	cp := *sess
-	return &cp, nil
+	return &cp, true, nil
 }
 
 func (s *MemoryStore) UpdateSession(_ context.Context, sess *domain.Session) error {

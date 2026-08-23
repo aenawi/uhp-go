@@ -130,7 +130,13 @@ func (s *Server) handleSessionArchive(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDownloadArtifact(w http.ResponseWriter, r *http.Request) {
 	a, f, err := s.tasks.OpenArtifact(r.Context(), r.PathValue("container_id"), r.PathValue("file_id"))
 	if err != nil {
-		writeFileNotFound(w)
+		// Through writeServiceError rather than straight to writeFileNotFound.
+		// ErrArtifactNotFound still lands on exactly that answer, so the single
+		// reply for "no such container", "no such file" and "not yours" is
+		// untouched — but a store that could not be read is none of those three,
+		// and calling it a missing file tells a client never to ask again for
+		// the one condition where asking again is what works.
+		writeServiceError(w, err)
 		return
 	}
 	defer func() { _ = f.Close() }()
@@ -161,7 +167,7 @@ func (s *Server) handleDownloadArtifact(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handlePreviewArtifact(w http.ResponseWriter, r *http.Request) {
 	_, f, err := s.tasks.OpenArtifact(r.Context(), r.PathValue("container_id"), r.PathValue("file_id"))
 	if err != nil {
-		writeFileNotFound(w)
+		writeServiceError(w, err)
 		return
 	}
 	_ = f.Close()

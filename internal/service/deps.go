@@ -27,14 +27,31 @@ type Registry interface {
 // both halves wanted to be called Create/Get/Update. There is one storage
 // engine and the methods are named for what they store, so the collision —
 // and the wrapper — cease to exist.
+//
+// The two single-row reads answer with a found flag rather than folding "no
+// such row" into the error, the way HarnessStore.GetHarness below already does.
+//
+// The flag is the whole point and it is not a style preference. These two
+// results are what the transport turns into a status class, and an absent row
+// and an unreadable store have to become different ones — 404, which tells a
+// client its id is wrong and retrying never helps, against 500, which tells it
+// the server failed and retrying is worth something. When both arrive as an
+// error, the caller has nothing to tell them apart by and picks one; this
+// service picked 404, so a disk that stopped answering was reported to a client
+// polling a running task as a task that no longer existed.
+//
+// A sentinel error would separate them too, but only by convention: an engine
+// that forgot to wrap it, or a caller that forgot to check, fails silently and
+// in the direction that loses. Two return values cannot be conflated by
+// forgetting something, and the compiler makes a new engine answer the question.
 type Store interface {
 	CreateTask(ctx context.Context, t *domain.Task) error
 	UpdateTask(ctx context.Context, t *domain.Task) error
-	GetTask(ctx context.Context, id string) (*domain.Task, error)
+	GetTask(ctx context.Context, id string) (t *domain.Task, found bool, err error)
 	AppendArtifact(ctx context.Context, taskID string, a domain.Artifact) error
 
 	CreateSession(ctx context.Context, s *domain.Session) error
-	GetSession(ctx context.Context, id string) (*domain.Session, error)
+	GetSession(ctx context.Context, id string) (sess *domain.Session, found bool, err error)
 	UpdateSession(ctx context.Context, s *domain.Session) error
 	ListSessions(ctx context.Context, f domain.SessionFilter) (domain.SessionPage, error)
 

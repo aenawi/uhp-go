@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -272,10 +273,7 @@ func (s *TaskService) citeArtifacts(task *domain.Task) {
 // deduplicated by id, so a file a later task rewrote appears once, with its
 // most recent size.
 func (s *TaskService) SessionFiles(ctx context.Context, sessionID string) ([]domain.Artifact, error) {
-	if _, err := s.store.GetSession(ctx, sessionID); err != nil {
-		return nil, fmt.Errorf("%w: %q", ErrSessionNotFound, sessionID)
-	}
-	tasks, err := s.store.ListSessionTasks(ctx, sessionID)
+	tasks, err := s.sessionTasks(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -320,6 +318,15 @@ func (s *TaskService) OpenArtifact(ctx context.Context, containerID, fileID stri
 	}
 	files, err := s.SessionFiles(ctx, sessionID)
 	if err != nil {
+		if errors.Is(err, ErrStorage) {
+			// A store that could not be read is not a container that is not
+			// there, and this is the one arm where saying so matters: every
+			// other return below is a genuine "no such file". Answering
+			// file_not_found for a failed read tells a client its id was wrong
+			// and never to ask again, for the one condition where asking again
+			// is exactly what works.
+			return domain.Artifact{}, nil, err
+		}
 		// A container whose session is gone is indistinguishable from one that
 		// never existed, which is what Files §5 asks for: deleting a session
 		// MUST make its artifacts unreachable.
