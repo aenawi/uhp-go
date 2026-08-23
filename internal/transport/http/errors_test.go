@@ -16,19 +16,25 @@ import (
 func errStorage() error { return fmt.Errorf("disk gone: %w", service.ErrStorage) }
 
 // A store that cannot be read is the server's failure, not the client's.
-// Errors §4 makes the class the retry signal, so every read endpoint must
+// Errors §4 makes the class the retry signal, so every endpoint that reads must
 // answer 500 rather than dress the failure up as a 404 or an empty result — a
 // client told "there are no harnesses" stops asking, and one told "not found"
 // never retries.
 //
 // It is one table rather than one test per endpoint because the rule is one
-// rule: writeServiceError's ErrStorage arm, reached from five different
-// handlers. A case that drifts is a handler that stopped routing its error
-// through it.
+// rule: writeServiceError's ErrStorage arm, reached from every handler that
+// goes near the store. A case that drifts is a handler that stopped routing its
+// error through it.
 //
-// Only a stand-in can produce this at all. The in-memory store the rest of the
-// package tests against never fails, which is why these paths were unreachable
-// before the transport depended on an interface (issue #10).
+// Only a stand-in can produce this at all, and that is worth being precise
+// about, because it means the table pins routing rather than the answer a real
+// client gets. The in-memory store the rest of the package tests against never
+// fails, which is why these paths were unreachable before the transport
+// depended on an interface (issue #10); and on the two response rows and the
+// session rows the service layer flattens store errors into
+// ErrResponseNotFound and ErrSessionNotFound before the transport is shown one,
+// so those endpoints still answer 404 end to end. Each row asserts that its
+// handler will be right the moment it is handed the truth.
 func TestStorageFailureIsAlways500(t *testing.T) {
 	failing := func() *fakeService {
 		return &fakeService{
@@ -47,23 +53,34 @@ func TestStorageFailureIsAlways500(t *testing.T) {
 			sessionTurns: func(context.Context, string) ([]domain.Turn, error) {
 				return nil, errStorage()
 			},
+			getTask: func(context.Context, string) (*domain.Task, error) {
+				return nil, errStorage()
+			},
+			// The odd one out, and deliberately not a failure: the cancel
+			// signal lands, and it is the read-back that follows it which this
+			// table is asking about. A cancel that failed on its own would
+			// never reach that read.
+			cancelTask: func(context.Context, string) error { return nil },
 		}
 	}
 
 	for _, tc := range []struct {
-		name string
-		path string
+		name   string
+		method string
+		path   string
 	}{
-		{"list harnesses", "/v1/harnesses"},
-		{"get harness", "/v1/harnesses/echo"},
-		{"harness models", "/v1/harnesses/echo/models"},
-		{"list models", "/v1/models"},
-		{"list sessions", "/v1/sessions"},
-		{"get session", "/v1/sessions/sess_1"},
-		{"session turns", "/v1/sessions/sess_1/turns"},
+		{name: "list harnesses", method: "GET", path: "/v1/harnesses"},
+		{name: "get harness", method: "GET", path: "/v1/harnesses/echo"},
+		{name: "harness models", method: "GET", path: "/v1/harnesses/echo/models"},
+		{name: "list models", method: "GET", path: "/v1/models"},
+		{name: "list sessions", method: "GET", path: "/v1/sessions"},
+		{name: "get session", method: "GET", path: "/v1/sessions/sess_1"},
+		{name: "session turns", method: "GET", path: "/v1/sessions/sess_1/turns"},
+		{name: "get task", method: "GET", path: "/v1/responses/resp_1"},
+		{name: "cancel task read-back", method: "POST", path: "/v1/responses/resp_1/cancel"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			status, body := callJSON(t, newFakeServer(failing()), "GET", tc.path, "")
+			status, body := callJSON(t, newFakeServer(failing()), tc.method, tc.path, "")
 			if status != 500 {
 				t.Fatalf("%s: expected 500, got %d: %v", tc.path, status, body)
 			}

@@ -8,7 +8,7 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	task, err := s.tasks.GetTask(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, typeInvalidRequest, "response_not_found", "no response with id "+id)
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, task)
@@ -22,7 +22,7 @@ func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 	task, err := s.tasks.GetTask(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, typeInvalidRequest, "response_not_found", "no response with id "+id)
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, task)
