@@ -52,8 +52,24 @@ func NewClaude(models []string) *CLIHarness {
 			if req.NativeSessionID != "" {
 				args = append(args, "--resume", req.NativeSessionID)
 			}
-			// Minimal mode: skip hooks, LSP and plugins, which a router never wants.
-			return append(args, "--bare"), nil
+			// No `--bare`. It was here for the half of its description a router
+			// does want — skip hooks, LSP and plugins — and shipped the other
+			// half unread: under `--bare` "Anthropic auth is strictly
+			// ANTHROPIC_API_KEY or apiKeyHelper via --settings (OAuth and
+			// keychain are never read)". A Pro or Max subscription is OAuth, so
+			// every subscription user got `{"is_error":true,"result":"Not logged
+			// in · Please run /login"}` and, because no line of that carries a
+			// text_delta, an empty answer with a success — the same silent path
+			// as #32, reached through the argv instead of the parser.
+			//
+			// Verified by execution 2026-08-23 against Claude Code 2.1.240, one
+			// shell, one minute apart: with the flag, is_error=true and "Not
+			// logged in"; without it, is_error=false, "OK", two text deltas.
+			//
+			// If the isolation is wanted back it has to be built from parts that
+			// leave auth alone — `--settings` and `--strict-mcp-config` — not
+			// from the flag that bundles auth in.
+			return args, nil
 		},
 		ParseLine: parseClaudeLine,
 
@@ -64,8 +80,9 @@ func NewClaude(models []string) *CLIHarness {
 		// direction for an unverified claim: a harness that appeared to run
 		// with its tools un-blocked would be worse.
 		//
-		// They are no longer the only unverified claims here. Issue #14 added
-		// a second, of a worse kind — see parseClaudeLine.
+		// They are now the only unverified claims here: the delta shape, which
+		// was the worse kind because it failed silently, is checked off the
+		// wire by `make capture-claude`. These two are tracked in #19.
 		MCPArgs: func(configPath string) []string {
 			return []string{"--mcp-config", configPath}
 		},
@@ -136,22 +153,21 @@ func parseClaudeLine(line string) []RunUpdate {
 	// arrived, otherwise the message" is not available to it — and of the two,
 	// the deltas are the half that makes the stream progressive.
 	//
-	// UNVERIFIED, and of a worse kind than the flags above, so it is worth
-	// being exact about. This replaced a path that had been captured from a
-	// live run with one that has not: no logged-in Claude Code was reachable
-	// when issue #14 was implemented, so the envelope and the event inside it
-	// were read out of the 2.1.238 binary instead (`strings` carries both,
-	// including the literal example quoted in cli_test.go). The flag itself
-	// *was* run — the CLI accepted it and objected only to the login.
+	// VERIFIED against Claude Code 2.1.240 on 2026-08-23, and worth saying how,
+	// because for two issues it was not. This shape was read out of the 2.1.238
+	// binary with `strings` rather than captured, no logged-in CLI being
+	// reachable at the time, and the CI conformance gate that was supposed to
+	// catch a wrong reading never ran once (#32, 60135aa). If the shape were
+	// wrong the failure would be silent — no deltas match, the run completes,
+	// the client is handed "" — which is the one direction an unverified claim
+	// must never fail in.
 	//
-	// If the shape is wrong the failure is silent: no deltas match, the run
-	// completes, and the client is handed an empty answer. That is the
-	// direction an unverified claim should never fail in, and the reason it is
-	// tolerated here is that the CI conformance gate measures this harness on
-	// every build — an empty answer fails T-02 and S-01 loudly. The first
-	// green gate run is what turns this comment into a verified one; until
-	// then the tests below only prove the parser matches the fixture, and the
-	// fixture came from the same reading.
+	// `make capture-claude` now runs the shipped invocation against a logged-in
+	// CLI and checks this shape off the wire, alongside the four other things
+	// the adapter assumes. The reading was correct: the captured envelope
+	// matches key for key. It stays a standing obligation rather than a settled
+	// fact, though — `go test` still cannot reach a logged-in CLI, so the probe
+	// is a maintainer's command, to be run after every Claude Code upgrade.
 	if ev.Type == "stream_event" &&
 		ev.Event.Type == "content_block_delta" &&
 		ev.Event.Delta.Type == "text_delta" &&

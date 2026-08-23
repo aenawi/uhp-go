@@ -1,4 +1,4 @@
-.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate
+.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude
 
 build:
 	go build -o bin/uhpd ./cmd/uhpd
@@ -90,3 +90,18 @@ conformance-gate:
 		--harness-id "$$UHP_HARNESS_ID" \
 		--json $(CONFORMANCE_REPORT) --plain
 	@python3 scripts/check-conformance.py $(CONFORMANCE_REPORT) $(CONFORMANCE_FLOOR)
+
+# Probe for a maintainer's machine: run the Claude Code invocation uhpd ships
+# against a logged-in CLI and check the stream against what parseClaudeLine
+# assumes. `go test` cannot do this — it has no logged-in CLI — and that gap is
+# how the delta shape came to be read out of the binary instead of off the wire
+# (#32). Run it after every Claude Code upgrade.
+#
+# Needs a logged-in `claude` and nothing else — nested inside a Claude Code
+# session is fine. An earlier note here said otherwise; the "Not logged in" that
+# claim was built on came from `--bare` in the invocation discarding OAuth, not
+# from the nesting. See the comment in the probe.
+CLAUDE_CAPTURE ?= claude-capture.jsonl
+
+capture-claude:
+	@python3 scripts/capture-claude-stream.py --out $(CLAUDE_CAPTURE)
