@@ -97,8 +97,11 @@ func (s *Server) routes() {
 }
 
 // Handler returns the routed handler, wrapped so that a path containing a dot
-// segment never reaches routing.
-func (s *Server) Handler() http.Handler { return refuseDotSegments(s.mux) }
+// segment never reaches routing, and so the router's own 404 and 405 carry the
+// error envelope every non-2xx owes a client.
+func (s *Server) Handler() http.Handler {
+	return refuseDotSegments(withRoutingErrors(s.mux))
+}
 
 // refuseDotSegments answers 404 to any request whose path contains a "." or
 // ".." segment, or an empty one.
@@ -112,8 +115,11 @@ func (s *Server) Handler() http.Handler { return refuseDotSegments(s.mux) }
 //
 // Empty interior segments are refused for the same reason: "....//...." cleans
 // to "../.." and would otherwise be answered with the same misleading redirect.
-// A trailing slash is left alone, because it is not a traversal and net/http's
-// redirect for it is the behaviour clients already have.
+// A trailing slash is left alone, because it is not a traversal: net/http
+// matches it against the routing table like any other path, and since no
+// pattern here is registered with one, it is answered as the unrouted path it
+// is. (An earlier note here said net/http redirects for it. That is true only
+// of a table that registers the trailing-slash form, which this one does not.)
 func refuseDotSegments(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		segments := strings.Split(r.URL.EscapedPath(), "/")

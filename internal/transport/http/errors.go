@@ -162,6 +162,10 @@ func writeHarnessManagementUnsupported(w http.ResponseWriter) {
 // with no SKILL.md parses fine and has every field's type right — it is
 // semantically wrong — and answering `invalid_input` would send a client
 // looking for a type error it will never find.
+//
+// The two routing codes miss for their own reason: `harness_not_found` is
+// about a harness this server does not have, where these are about a path no
+// route claims and a method no route accepts, on any route at all.
 const (
 	vendorCodeCapabilityUnsupported        = "uhpgo_capability_unsupported"
 	vendorCodeHarnessManagementUnsupported = "uhpgo_harness_management_unsupported"
@@ -170,6 +174,8 @@ const (
 	vendorCodeInvalidSkill                 = "uhpgo_invalid_skill"
 	vendorCodeInvalidMcpServer             = "uhpgo_invalid_mcp_server"
 	vendorCodeMcpUndeliverable             = "uhpgo_mcp_undeliverable"
+	vendorCodeMethodNotAllowed             = "uhpgo_method_not_allowed"
+	vendorCodeRouteNotFound                = "uhpgo_route_not_found"
 	vendorCodeSkillNotFound                = "uhpgo_skill_not_found"
 	vendorCodeStorageFailure               = "uhpgo_storage_failure"
 )
