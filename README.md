@@ -181,8 +181,10 @@ list it already holds. Cancelling an already-terminal task or an idle session st
 succeeds whatever the harness advertises (Sessions §4): there is no work to stop, so
 nothing is being promised that cannot be delivered.
 
-Of the five bases shipped here, `claude-code`, `codex`, `opencode` and `pi` advertise
-`sessions`; only `grok-cli` does not.
+All five bases shipped here advertise `sessions`. `grok-cli` was the last holdout and
+stopped being one in issue #34: grok 1.0.5 puts a `session_id` on every line of
+`--output-format streaming-messages-json` and resumes it with `--resume`, so both halves
+of the capability now exist where before neither did.
 That is the only entry in the list a declaration decides. Three of the six capabilities are
 not the CLI's to claim and no declaration names them:
 
@@ -420,9 +422,15 @@ overstate it:
 | `codex`, `opencode` | standing instruction | standing instruction | none — refused at config time |
 
 "Verified" means the flag was read from that CLI's own `--help` on a machine where it is
-installed. "Executed" is the stronger claim and the only one that settles issue #19: the
-flag was not read but run, and the run was watched from the far end. `make
-probe-claude-delivery` does that, and a flag the CLI accepts and ignores fails it:
+installed — re-read for `grok-cli` on 1.0.5 (2026-08-23, issue #34), where it is still
+spelled `--disallowed-tools`. The nearby `--deny <RULE>` now carries `--disallowedTools`
+as a compat alias, which is a different flag with a different grammar rather than a rename
+of this one, so reading only the alias list would have moved the harness onto the wrong
+one.
+
+"Executed" is the stronger claim and the only one that settles issue #19: the flag was not
+read but run, and the run was watched from the far end. `make probe-claude-delivery` does
+that, and a flag the CLI accepts and ignores fails it:
 
 - `--disallowedTools Bash` removes `Bash` from the session's tool list, so the model is
   never offered it. The same run without the flag used `Bash` and returned its output.
@@ -690,12 +698,37 @@ the other direction, and unlike an over-claim nothing fails to make it visible.
 **`streaming` has the same two halves, and the second one is easy to miss.** Several of
 these CLIs default to an output mode that prints nothing until the run is over, so an
 invocation can be perfectly correct and still buffer: `pi -p` writes the finished answer
-after its own `session.prompt()` resolves, and `claude -p --output-format stream-json`
-emits one event per *completed* assistant message. Both needed a flag — `--mode json` and
-`--include-partial-messages` — before the capability they already advertised was true.
-Read the CLI's own streaming mode, not just its exit code, and note that whichever text the
-incremental mode gives you is usually repeated whole at the end, so `ParseLine` must read
-one or the other and never both.
+after its own `session.prompt()` resolves, `claude -p --output-format stream-json` emits
+one event per *completed* assistant message, and `grok --output-format
+streaming-messages-json` does the same until `--include-partial-messages` is added — the
+same prompt without it produced three lines and no delta at all. All three needed a flag
+before the capability they already advertised was true. Read the CLI's own streaming mode,
+not just its exit code, and note that whichever text the incremental mode gives you is
+usually repeated whole at the end, so `ParseLine` must read one or the other and never
+both.
+
+**Two messages in one run need a separator, and no CLI supplies one.** A run that
+interleaves prose with tool calls answers in several pieces — opencode as text parts, codex
+as `agent_message` items, grok as messages between `message_stop` events — and every delta
+is appended into a single `output_text`, so passing the pieces through unchanged runs
+"Alpha" and "Gamma" together as "AlphaGamma". Three adapters add a newline at their own
+boundary: `opencode` and `codex` on the text, because their pieces are whole messages, and
+`grok-cli` on `message_stop`, because its deltas are token-level and a newline per delta
+would break every word apart.
+
+`claude-code` and `pi` are the outstanding cases, and this is the honest state rather than
+a claim they are fine. Both stream token-level deltas with no separator at any boundary, so
+both will run two messages together the same way — `pi` says so where it declines one, and
+`claude-code` does not. Neither was probed for it in issue #34, whose scope was codex and
+grok, and neither should be assumed correct because it is not listed above.
+
+**Usage is a run total, and several CLIs also publish a per-message one under the same
+field names.** opencode's `step_finish`, grok's `message_delta` and codex's `turn.completed`
+all carry `input_tokens`; only the last is the whole run's. Usage is applied
+last-write-wins, so reading the per-message event publishes the final message's accounting
+as the task's — grok's captured tool run reported 166 input tokens on its second message
+against a real total of 19,838. UHP permits usage to be null; it does not permit it to be
+wrong.
 
 ## Testing
 
@@ -757,6 +790,29 @@ request the resumed turn sent. Everything it touches lives in a temporary
 `PI_CODING_AGENT_DIR`, so the machine's own pi sessions and credentials are untouched.
 Being free of credentials, it is the one probe here that could reasonably move into CI
 alongside a `pi` install.
+
+Two more cover `codex` and `grok` (#34), and these are back to costing real tokens: neither
+CLI takes a per-run base URL, so neither can be pointed at a loopback provider the way `pi`
+can.
+
+```bash
+make probe-codex             # stdin delivery, argv injectability, `--`, resume (#34)
+make probe-grok              # argv delivery, `--`, resume, the streaming format (#34)
+make probes                  # every probe above, in one command
+```
+
+Nothing in `codex.go` or `grok.go` was ever marked UNVERIFIED — every claim in both said
+"verified by execution", and none of them said against what. Issue #13 is why that is not
+the same thing: two of opencode's execution-verified claims were true when written and
+false by 1.18.21, and nothing in the tests noticed. **Verification has a shelf life.** Run
+both probes after every `codex` or `grok` upgrade; each prints the version it ran against.
+
+`probe-grok` is also the worked example of a control that passes for the wrong reason. The
+obvious test of resume — ask a second turn without `--resume` and expect it not to know the
+word — reported success while proving nothing: grok has a shell and a file reader, and the
+control found the word by reading the probe's own captures off disk. The evidence is now
+`grok export <id>`, the session's own transcript, and every capture is written outside the
+directory the CLI is given.
 
 ## Building the image
 

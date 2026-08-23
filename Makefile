@@ -1,4 +1,4 @@
-.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude probe-claude-delivery probe-pi
+.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probes
 
 build:
 	go build -o bin/uhpd ./cmd/uhpd
@@ -131,3 +131,37 @@ probe-claude-delivery:
 # temporary directory for the run.
 probe-pi:
 	@python3 scripts/probe-pi-session.py
+
+# The codex and grok probes (#34), and the two that cost real money: neither
+# CLI takes a per-run base URL, so unlike `probe-pi` they cannot answer from a
+# loopback provider and must be run against the maintainer's logged-in account.
+# The prompts are one sentence each for that reason.
+#
+# They are the renewal for claims that never expired on paper. Nothing in
+# codex.go or grok.go was ever marked UNVERIFIED — every claim said "verified by
+# execution" and none said against what — and #13 is why that is not the same
+# thing: two of opencode's execution-verified claims were true when written and
+# false one minor version later, with nothing in the tests to notice.
+#
+# `probe-codex` runs seven checks against codex-cli: the four the issue asks for
+# (stdin delivery, argv injectability, what `--` does, session discovery and
+# resume) plus the two that turned out to matter more — two agent messages per
+# run with no separator, and a failure whose reason is on stdout — and the
+# `--skip-git-repo-check` claim the router cannot do without.
+#
+# `probe-grok` runs six against grok: the same four, plus the streaming format
+# and the failure envelope, neither of which the adapter had before 1.0.5. Its
+# resume evidence is `grok export <id>` rather than the model's answer, because
+# a control run in the same directory as the probe's own captures will find the
+# answer by reading them off disk.
+#
+# Run both after every codex or grok upgrade.
+probe-codex:
+	@python3 scripts/probe-codex-session.py
+
+probe-grok:
+	@python3 scripts/probe-grok-session.py
+
+# Every probe that needs a logged-in CLI, in one command. Not part of `test`:
+# `go test` has no logged-in CLI, which is the whole gap these fill.
+probes: capture-claude probe-claude-delivery probe-pi probe-codex probe-grok

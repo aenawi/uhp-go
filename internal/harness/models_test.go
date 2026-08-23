@@ -19,7 +19,10 @@ import (
 // list, asserting that the parser yields nothing rather than a plausible-
 // looking id. Anything stricter would be a fixture written from memory.
 
-// grokModelsOutput is `grok models`, captured 2026-08-21.
+// grokModelsOutput is `grok models`, captured 2026-08-21 and re-captured
+// 2026-08-23 from grok 1.0.5 (issue #34), byte for byte the same both times —
+// same banner, same default, same two ids. It gets one fixture rather than
+// opencode's two because there is nothing to keep a second copy of.
 const grokModelsOutput = "You are logged in with grok.com.\n" +
 	"\n" +
 	"Default model: grok-4.6\n" +
@@ -68,6 +71,10 @@ const piModelsOutput = "" +
 // every entry embeds its own system prompt, and none of that is under test.
 // The order is deliberately not priority order, because the real document's
 // order is not a promise and the default model is whichever has priority 1.
+//
+// It keeps `gpt-reserve`, which codex-cli 0.149.0 no longer returns, because it
+// was there on 2026-08-21 and because it is the second hidden entry — one
+// hidden entry would let a visibility filter pass on a single case.
 const codexModelsOutput = `{"models":[
   {"slug":"gpt-5.4","visibility":"list","priority":16},
   {"slug":"gpt-reserve","visibility":"hide","priority":3},
@@ -77,6 +84,33 @@ const codexModelsOutput = `{"models":[
   {"slug":"codex-auto-review","visibility":"hide","priority":43},
   {"slug":"gpt-5.6-luna","visibility":"list","priority":3},
   {"slug":"gpt-5.5","visibility":"list","priority":7}
+]}`
+
+// codexModelsOutput0_149 is the same command re-captured 2026-08-23 from
+// codex-cli 0.149.0 (issue #34), and it is here for the reason the issue gives
+// for opencode's second capture: the ids are not the CLI's to promise, so
+// recording what 0.149.0 actually returned is the only thing that makes "the
+// shape did not change" a checkable claim rather than a sentence in a comment.
+//
+// It is a narrower re-capture than opencode's, and the difference is worth
+// naming: `opencode models` prints what this install's configured providers
+// expose, so the two captures there are evidence about two machines. `codex
+// debug models` is served by the API against one account, so this is the same
+// account two days later. What it settles is the shape and the ordering, which
+// is what the parser reads.
+//
+// Every entry the 2026-08-21 capture holds came back at the same visibility and
+// the same priority. The one change is `gpt-reserve`, absent here entirely,
+// which is why the priority-3 slot is now `gpt-5.6-luna`'s alone. Both fixtures
+// therefore parse to the same six ids in the same order.
+const codexModelsOutput0_149 = `{"models":[
+  {"slug":"gpt-5.6-sol","visibility":"list","priority":1},
+  {"slug":"gpt-5.6-terra","visibility":"list","priority":2},
+  {"slug":"gpt-5.6-luna","visibility":"list","priority":3},
+  {"slug":"gpt-5.5","visibility":"list","priority":7},
+  {"slug":"gpt-5.4","visibility":"list","priority":16},
+  {"slug":"gpt-5.4-mini","visibility":"list","priority":23},
+  {"slug":"codex-auto-review","visibility":"hide","priority":43}
 ]}`
 
 func TestParseModels(t *testing.T) {
@@ -181,6 +215,19 @@ func TestParseModels(t *testing.T) {
 			name:  "codex: listed slugs in priority order, hidden ones withheld",
 			parse: parseCodexModels,
 			out:   codexModelsOutput,
+			want: []string{
+				"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+				"gpt-5.5", "gpt-5.4", "gpt-5.4-mini",
+			},
+		},
+		{
+			// Issue #34's re-probe, and the mirror of opencode's above: the
+			// catalogue lost an entry and gained nothing, the parse did not
+			// change, and both captures yield the same six ids in the same
+			// order. The `want` is deliberately identical to the case above.
+			name:  "codex 0.149.0: same shape, one hidden slug gone",
+			parse: parseCodexModels,
+			out:   codexModelsOutput0_149,
 			want: []string{
 				"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
 				"gpt-5.5", "gpt-5.4", "gpt-5.4-mini",
