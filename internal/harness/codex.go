@@ -216,6 +216,16 @@ func parseCodexLine(line string) []RunUpdate {
 		return []RunUpdate{harnessFailure("codex", ev.Error.Message)}
 	}
 
+	// No UpdateModel, and that is a gap rather than a decision (issue #43).
+	// Nothing on `codex exec --json` names the model: not thread.started, not
+	// turn.started, not turn.completed. So a task that named no model gets the
+	// router's guess — `firstModel(parseCodexModels(…))`, the lowest-priority
+	// number in codex's own catalogue, which is codex's own idea of its best
+	// listed model and therefore a good guess. It stays a guess: the CLI is
+	// invoked with no `--model` flag in that case and nothing on its output
+	// confirms what it chose. If a later codex names the model on an event,
+	// reading it here is a strictly better answer than the catalogue.
+	//
 	// Everything else — turn.started, item.started, and any event type a later
 	// codex adds — is deliberately dropped. Two of those are worth naming,
 	// because both look like failures and neither may be treated as one:
