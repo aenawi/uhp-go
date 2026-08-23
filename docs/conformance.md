@@ -6,30 +6,49 @@ what this server scores, how to reproduce it, and what the remaining gap is.
 ## Current result
 
 ```
-37/37 core · 0 failed · 0 skipped · 0 errored
-CONFORMANT — UHP 2026-08-11 (core)
+52/52 full · 0 failed · 0 skipped · 0 errored
+CONFORMANT — UHP 2026-08-11 (full)
 ```
 
-Across all three classes: **42/52**. `extended` stood at 42/45 when that run was taken;
-the three outstanding checks there were all file-related.
+Measured 2026-08-23 (issue #42) against suite `2026.8.11.post1`, pinned at
+harnessrouter revision `95b96d7ce473ab59d510e1690c73cc6660d0a73e`, with
+`--harness-id` naming the `claude-code` harness and `--model claude-sonnet-5`. The report
+reads `"highest_class_passed": "full"`.
 
-**This result predates file support and harness management.** Input items, artifact
-capture and artifact download (issue #2), harness create/replace/delete (issue #3) and
-skills, MCP and tool restrictions (issue #4) all landed afterwards and have not been
-re-measured against the published suite. They are covered by this repository's own
-tests — see `internal/transport/http/file_handlers_test.go`,
-`internal/service/artifacts_test.go`, `internal/transport/http/harness_handlers_test.go`,
-`internal/service/harnesses_test.go` and `internal/service/harness_runtime_test.go` — but
-a passing local test is not a conformance result, and the number above stays until someone
-runs the suite again.
+Per class, from three separate runs of the same server: **37/37 core**, **44/45 extended**,
+**52/52 full**.
 
-`conformance_class` still reads `core`. It is not raised on the strength of local tests:
-the class is a claim the suite exists to falsify, and raising it before a run would make
-this file the thing asserting conformance rather than the thing recording it.
-`harness_management` and `idempotency` report `true`, which are capabilities above the
-claimed class rather than contradictions of it — the class is what this server guarantees,
-not a ceiling on what it offers. Lifecycle §2 constrains the class only through
-`files_input`, `files_output` and `session_listing`.
+**That score is conditional on `--model`, and a fourth run says so.** `make
+conformance-gate` runs the same suite against the same server without naming a model, and
+scores **36/37 core** — T-03 fails, because a task that names no model comes back naming
+none either. The run is fine; the response is silent about what served it — issue #43, and
+a real defect rather than a suite artefact. **The three runs above did not find it because
+all three pinned a model**, which is the configuration that never exercises the default
+path.
+
+Both numbers are true of this server and neither replaces the other. The one to quote
+depends on the question: 52/52 is what a client that pins its models gets, and 36/37 is
+what one that does not gets. The gate defends the second, deliberately.
+
+**The previous result — 37/37 core, 42/52 overall — predated three bodies of work**, and
+this run is the first to measure them: input items, artifact capture and download (#2),
+harness create/replace/delete (#3), and skills, MCP and tool restrictions (#4). All ten
+checks they targeted now pass. The gap that file recorded is closed.
+
+**The one skip is worth more than the score.** The `extended` run skipped X-07 — *"this
+session produced no artifacts to download"* — and the `full` run passed it, 11 bytes of
+`text/plain`. Same server, same harness, same model, ninety seconds apart. X-06 and X-07
+only test something if the agent actually writes a file, and whether it does is the model's
+choice on the day, so these two checks are non-deterministic by construction. **A run that
+reports 52/52 with X-07 skipped is not a 52/52.** Read `skipped_not_verified` in the JSON
+report, not just the summary line; the suite says so itself.
+
+`conformance_class` in the discovery document still reads `core`, and raising it to `full`
+is a deliberate follow-up rather than part of recording this. The class is what the server
+*guarantees*, and one green run on one machine with one CLI installed is thinner evidence
+than a guarantee wants — particularly for the F-series, which measures the API surface on a
+box where `claude` happens to be logged in. Lifecycle §2 constrains the class only through
+`files_input`, `files_output` and `session_listing`, all of which report `true`.
 
 ## Reproducing it
 
@@ -118,7 +137,7 @@ reproduce.
 
 ```bash
 git clone --filter=blob:none https://github.com/HarnessRouter/harnessrouter suite
-git -C suite checkout --quiet cacac15816ec104e9a4e0734a0f92e6d421c40f3
+git -C suite checkout --quiet 95b96d7ce473ab59d510e1690c73cc6660d0a73e
 pip install -e suite/protocol/conformance
 ```
 
@@ -232,12 +251,21 @@ cannot reach.
 | Contract fixes | **38/52, core 37/37** | see below |
 | Session listing, inspection and turns | **42/52** | X-01, X-02, X-03, X-04 |
 | Idempotency keys | no change expected | no check sends one — see below |
-| Files: input items, artifact capture, download | not yet measured | targets X-05, X-06, X-07, and makes X-08 real |
-| Harness management: create, replace, delete | not yet measured | targets F-01, F-02, F-05, F-07 |
-| Skills as folders, MCP config, tool restrictions | not yet measured | targets F-03, F-04, F-06 |
+| Files: input items, artifact capture, download | measured at last | X-05, X-06, X-07, and X-08 made real |
+| Harness management: create, replace, delete | measured at last | F-01, F-02, F-05, F-07 |
+| Skills as folders, MCP config, tool restrictions | measured at last | F-03, F-04, F-06 |
 | Stream keep-alives | no change expected | no check watches a silent stream — see below |
 | Harness event feed and `Last-Event-ID` resumption | no change expected | no check reconnects a stream — see below |
 | Progressive streaming for `claude-code` and `pi`, CI gate | no change expected | S-09 cannot fail this server either way — see above |
+| Re-measure after three unmeasured landings (#42) | **52/52, full 52/52** | the ten checks above, all at once |
+| Same run, no `--model` (the gate's configuration) | 36/37 core | T-03 regressed into view — see #43 |
+
+The last row is the largest single jump in this table, and none of it was new work. Ten
+checks moved because the code that satisfies them had been sitting there unmeasured since
+issues #2, #3 and #4 — three steps that each ended with "not yet measured" in this table
+and stayed that way. The lesson is the one #34 arrived at from the other direction: an
+unverified claim and an unmeasured implementation fail the same way, silently, and the only
+difference is which of them you find out about first.
 
 The 33 skips in the baseline were not 33 separate defects. They cascaded from one line:
 `GET /v1/harnesses` returned `{"data": […]}` where the suite reads `harnesses`, so it could
@@ -246,15 +274,16 @@ Fixing that one envelope is what made three steps of prior work measurable.
 
 ## The remaining gap
 
-| Checks | Needs | Issue |
-|---|---|---|
-| X-05…X-07 | file input, artifact capture and download | #2 — implemented, unmeasured |
-| F-01, F-02, F-05, F-07 | harness create/replace/delete | #3 — implemented, unmeasured |
-| F-03, F-04, F-06 | skills as folders, MCP config, disabled tools | #4 — implemented, unmeasured |
+No check in the suite is now unmeasured or failing. The table that stood here listed
+X-05…X-07, F-01…F-07 as "implemented, unmeasured" against issues #2, #3 and #4; the
+2026-08-23 run measured all ten and all ten pass. What follows is what a green suite still
+does not tell you, which is the part worth reading.
 
-Every F check now has an implementation behind it, and each was walked through its exact
-HTTP sequence against a running server by hand. That is not the same as a suite run and is
-not counted as one.
+**X-06 and X-07 are conditional on the agent's behaviour, not the server's.** They test
+something only if the harness writes a file, which the suite arranges by asking it to and
+the model is free to decline. The same server scored a skip on X-07 in one run and a pass
+ninety seconds later. Neither run says anything different about this server; the JSON
+report's `skipped_not_verified` is where that distinction lives, not the summary line.
 
 **What is genuinely weaker than the checks can see** is how much of a harness's
 configuration each runtime *enforces*, as opposed to being asked to honour. The suite

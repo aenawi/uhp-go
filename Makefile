@@ -62,6 +62,28 @@ conformance:
 # The recorded core score (docs/conformance.md), and the report the gate reads.
 # Raise the floor when a run raises the score; it is the number the gate
 # defends, so leaving it behind lets the score fall back to it unnoticed.
+#
+# The floor and UHP_CLASS move together, and this is the one place that says so.
+# The gate below defaults to `core`, where 2026-08-23 re-measured 37/37 — so 37
+# is still the right number and #42 did not change it. What #42 did change is
+# the classes above: 44/45 extended (one skip, see below) and 52/52 full. Point
+# UHP_CLASS at either without raising this and the gate keeps defending 37 while
+# reporting on 52, which is a gate that cannot fail.
+#
+#   UHP_CLASS=full  →  CONFORMANCE_FLOOR=52
+#
+# Do not set a floor of 45 for `extended`. X-06 and X-07 only test something if
+# the agent writes a file, and whether it does is the model's choice on the day:
+# the 2026-08-23 extended run skipped X-07 and the full run passed it, same
+# server, ninety seconds apart. check-conformance.py refuses skips outright,
+# which is the right answer — but it means `extended` is not a class to gate on.
+#
+# THIS GATE IS CURRENTLY RED, AND THE FLOOR IS NOT THE THING TO CHANGE. It
+# scores 36/37: T-03 fails because a task naming no model gets a response naming
+# none either (issue #43). The gate is the only thing in this repository that
+# runs the suite without `--model`, which is why it found a defect three pinned
+# runs walked straight past. Lowering this to 36 would retire the finding
+# instead of the bug — the number is a floor, not a description. Fix #43.
 CONFORMANCE_FLOOR ?= 37
 CONFORMANCE_REPORT ?= conformance-report.json
 

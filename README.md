@@ -60,19 +60,35 @@ pip install -e protocol/conformance
 uhp-conformance --base-url http://localhost:8080 --api-key "$UHP_API_KEY" --class full
 ```
 
-**Last measured score: `core` 37/37 — CONFORMANT (UHP 2026-08-11, class core).**
-Details, reproduction steps and the remaining gap: [docs/conformance.md](docs/conformance.md).
-Across all three classes, that run measured **42/52** (`extended` 42/45).
+**Last measured score: `full` 52/52 — CONFORMANT (UHP 2026-08-11, class full).**
+Details, reproduction steps and what a green suite still cannot see:
+[docs/conformance.md](docs/conformance.md).
+Measured 2026-08-23 against a pinned suite revision: **37/37 core**, **44/45 extended**,
+**52/52 full**, 0 failed.
 
 File support (issue #2) and harness management with skills, MCP and tool restrictions
-(issues #3 and #4) both landed after that run and have **not been re-measured**. The
-checks they target — `X-05`…`X-08` and `F-01`…`F-07` — are covered by this repository's
-own tests, but a passing local test is not a conformance result, so the score above is
-still the honest one to quote.
+(issues #3 and #4) had all landed after the previous run and were carried as "implemented,
+unmeasured" until issue #42. The ten checks they target — `X-05`…`X-08` and
+`F-01`…`F-07` — now pass against the suite rather than against this repository's own tests
+alone.
 
-This server does not yet claim `extended` or `full` in its discovery document, because
-that claim is the suite's to confirm, not this file's. Capabilities it does not implement
-are reported as `false` rather than omitted.
+The `extended` run's 44/45 is a *skip*, not a failure: `X-07` downloads an artifact, so it
+only tests anything if the agent chose to write a file, and the `full` run passed the same
+check ninety seconds later on the same server. Read `skipped_not_verified` in the JSON
+report rather than the summary line.
+
+**All three of those runs pinned a model, and that is doing work.** `make conformance-gate`
+runs the same suite against the same server *without* `--model` and scores **36/37 core**:
+a task that names no model comes back naming none either, so a client that does not pin one
+cannot tell what served it (issue #43). Both numbers are honest and neither replaces the
+other — 52/52 is what a client that pins its models gets, 36/37 is what one that does not
+gets, and the gate defends the second on purpose.
+
+This server still reports `conformance_class: core` in its discovery document. Raising it
+to `full` is a deliberate follow-up rather than an automatic consequence of one green run:
+the class is what the server *guarantees*, and one run on one machine with one CLI logged
+in is thinner evidence than a guarantee wants. Capabilities it does not implement are
+reported as `false` rather than omitted.
 
 A skip is counted as a failure here, not as a pass.
 
