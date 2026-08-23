@@ -993,6 +993,42 @@ func TestEveryCLIHarnessAdvertisesCancellation(t *testing.T) {
 	}
 }
 
+// The other side of the same rule: a capability somebody else delivers is one
+// no declaration may claim.
+//
+// Three are in that position, for two different reasons.
+//
+// `cancellation` is the shared runner's, and Build adds it (above). A
+// declaration that lists it as well is harmless today, because Build dedupes —
+// which is exactly why it needs a test: it is the line a sixth harness copies
+// from the fifth, and it reads as though the CLI is the one that implements it.
+//
+// `files_in` and `files_out` are the router's. service.materializeAttachments
+// writes a task's attachments into the session working directory before the
+// run, and service.captureArtifacts diffs that directory afterwards; neither
+// consults an adapter, so a declaration cannot answer for either. Nor could a
+// static one answer honestly: both need a workspace, and a deployment started
+// without `UHP_WORKSPACE` delivers neither. The router computes them from the
+// same answer the discovery document reports — see
+// service.withRouterCapabilities — and this test is what stops a declaration
+// contradicting it, which is what `grok-cli` and `pi` used to do by claiming
+// they could not produce artifacts while producing them.
+//
+// It reads what the declaration asked for rather than the finished list,
+// because the finished list is where the additions land and a test that read it
+// could not tell a claim from a grant.
+func TestNoCLIHarnessDeclaresACapabilityItDoesNotDeliver(t *testing.T) {
+	notTheirs := []domain.Capability{domain.CapCancellation, domain.CapFilesIn, domain.CapFilesOut}
+	for _, h := range allCLIHarnesses() {
+		for _, c := range notTheirs {
+			if domain.HasCapability(h.declared, c) {
+				t.Errorf("%s declares %q, which it does not deliver: %s", h.Base, c,
+					"cancellation comes from the shared runner and the file capabilities from the router")
+			}
+		}
+	}
+}
+
 // Resuming needs the native session id to reach argv. A harness that advertises
 // `sessions` and builds identical arguments with and without one cannot resume,
 // and every continuation sent to it silently starts a new conversation.

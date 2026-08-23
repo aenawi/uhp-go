@@ -181,10 +181,25 @@ list it already holds. Cancelling an already-terminal task or an idle session st
 succeeds whatever the harness advertises (Sessions §4): there is no work to stop, so
 nothing is being promised that cannot be delivered.
 
-Of the five bases shipped here, `claude-code`, `codex` and `opencode` advertise `sessions`;
-all five advertise `cancellation`, because cancellation belongs to the shared runner — every
-harness runs in its own process group and is stopped by killing it — rather than to any one
-CLI.
+Of the five bases shipped here, `claude-code`, `codex` and `opencode` advertise `sessions`.
+That is the only entry in the list a declaration decides. Three of the six capabilities are
+not the CLI's to claim and no declaration names them:
+
+- `cancellation` belongs to the shared runner — every harness runs in its own process group
+  and is stopped by killing it — so all five advertise it.
+- `files_in` and `files_out` belong to the router. It writes a task's attachments into the
+  session working directory before the run and diffs that directory afterwards for
+  artifacts, and neither step asks the adapter anything. So all five advertise both,
+  wherever both are true. The declarations used to say otherwise — `pi` claimed neither and
+  `grok-cli` claimed no output, while both did both.
+
+**The per-harness list and the discovery document answer the same question.** `files_in` and
+`files_out` on a harness are computed from the same configured workspace that
+`files_input`/`files_output` are computed from in `GET /v1/uhp`, so the two cannot disagree:
+start `uhpd` without `UHP_WORKSPACE` and no harness advertises either, discovery reports both
+`false`, and a task carrying a file is refused with `501` rather than having its attachment
+silently dropped. A harness never claims a file capability the deployment it is running on
+would refuse.
 
 A stream that has gone 15 seconds with nothing to send writes an SSE comment line
 (`: keep-alive`). UHP tells clients to time a stream out on inactivity rather than on total
@@ -247,8 +262,13 @@ chapter: files in as task input, files out as session artifacts.
 
 **Set `UHP_WORKSPACE`.** Both halves need a per-session working directory: without one
 there is nowhere to put a client's file, and nothing to diff for artifacts. Discovery
-reports `files_input`/`files_output` as `false` when it is unset, and a task carrying a
-file is refused with `501` rather than having its attachment silently dropped.
+reports `files_input`/`files_output` as `false` when it is unset, no harness advertises
+`files_in` or `files_out`, and a task carrying a file is refused with `501` rather than
+having its attachment silently dropped.
+
+Both halves are the router's, not the CLI's: every harness gets the same treatment, and no
+harness declares either capability. See
+[Capabilities are enforced, not decorative](#capabilities-are-enforced-not-decorative).
 
 ### In
 

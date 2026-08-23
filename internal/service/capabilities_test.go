@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/internal/store"
 )
 
 // capsAdapter is an echo harness that advertises exactly the capabilities it is
@@ -36,6 +38,83 @@ func (a *capsSlowAdapter) Info() domain.Harness {
 	return domain.Harness{
 		ID: "chrn_slow", Base: "slow", Object: "harness", Name: "Slow",
 		Capabilities: a.caps,
+	}
+}
+
+// `files_in` and `files_out` are delivered by this router for every harness —
+// attachments are written into the session working directory and that directory
+// is diffed afterwards, without either step asking an adapter anything — so no
+// harness declares them and every harness advertises them, on the deployments
+// where they are true.
+//
+// Which is the half that used to be missing. Both need a workspace, so on a
+// server started without one the router delivers neither, discovery reports
+// `files_input: false`, and a task carrying a file is refused. A harness object
+// that went on listing `files_in` there would contradict the discovery document
+// a client read moments earlier and promise a request that is refused.
+//
+// Every path that turns an adapter or a stored configuration into a harness
+// object is checked, because the rule is only worth as much as the least
+// careful of them: a capability added on the listing but not on the fetch is a
+// client that sees a different harness depending on which endpoint it asked.
+func TestFileCapabilitiesFollowTheConfiguredWorkspace(t *testing.T) {
+	fileCaps := []domain.Capability{domain.CapFilesIn, domain.CapFilesOut}
+	for _, tc := range []struct {
+		name      string
+		workspace bool
+	}{
+		{"with a workspace, the router delivers both", true},
+		{"without one, it delivers neither", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			// Declares neither, exactly as the five shipped bases do.
+			a := &capsAdapter{id: "chrn_plain", base: "plain",
+				caps: []domain.Capability{domain.CapStreaming}}
+			hs, err := store.NewFileHarnesses(filepath.Join(t.TempDir(), "harnesses.json"))
+			if err != nil {
+				t.Fatalf("harness store: %v", err)
+			}
+			opts := []Option{WithHarnessStore(hs)}
+			if tc.workspace {
+				opts = append(opts, WithWorkspace(t.TempDir()))
+			}
+			svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger(), opts...)
+
+			if svc.FilesEnabled() != tc.workspace {
+				t.Fatalf("FilesEnabled() = %v, want %v", svc.FilesEnabled(), tc.workspace)
+			}
+
+			created, err := svc.CreateHarness(ctx, HarnessSpec{Name: "derived", Base: "plain"})
+			if err != nil {
+				t.Fatalf("create harness: %v", err)
+			}
+			listed, err := svc.ListHarnesses(ctx)
+			if err != nil {
+				t.Fatalf("list harnesses: %v", err)
+			}
+			byAlias, ok, err := svc.GetHarness(ctx, "plain")
+			if err != nil || !ok {
+				t.Fatalf("get by alias: ok=%v err=%v", ok, err)
+			}
+			byID, ok, err := svc.GetHarness(ctx, created.ID)
+			if err != nil || !ok {
+				t.Fatalf("get managed by id: ok=%v err=%v", ok, err)
+			}
+
+			seen := append(listed, byAlias, byID, created)
+			if len(seen) != 5 {
+				t.Fatalf("expected the compiled-in and the managed harness on every path, got %v", seen)
+			}
+			for _, h := range seen {
+				for _, c := range fileCaps {
+					if got := h.HasCapability(c); got != tc.workspace {
+						t.Errorf("harness %q advertises %q = %v, want %v",
+							h.ID, c, got, tc.workspace)
+					}
+				}
+			}
+		})
 	}
 }
 

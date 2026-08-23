@@ -67,8 +67,23 @@ type CLIHarness struct {
 
 	// Models is the configured model list. It is a *fallback*, consulted only
 	// when the CLI cannot be asked — see ModelsArgs and models().
-	Models       []string
+	Models []string
+
+	// Capabilities is what this runtime itself delivers. It is deliberately not
+	// the whole list a client sees: Build adds `cancellation`, which is the
+	// shared runner's, and the router adds the two file capabilities, which are
+	// its own and depend on the deployment having a workspace. See the
+	// Capability constants for the split, and Build below.
 	Capabilities []domain.Capability
+
+	// declared is what the declaration above asked for, kept as Build found it.
+	//
+	// It exists so the rule "a capability somebody else delivers is one no
+	// declaration may claim" can be tested. After Build the two lists differ by
+	// exactly what Build added, and a test reading only the finished list cannot
+	// tell a claim from a grant — which is how `cancellation` stayed in two
+	// declarations after it stopped being theirs to make.
+	declared []domain.Capability
 
 	// ModelsArgs is argv that makes this CLI print the models it can actually
 	// serve, and ParseModels turns that output into ids. Nil means this CLI
@@ -156,10 +171,18 @@ func NewID(base string) string {
 // five times is what stops a sixth harness from forgetting the line — and now
 // that the router refuses a cancel for a harness that does not advertise it,
 // forgetting it would refuse a cancel that in fact works.
+//
+// It does not add the two file capabilities, which are the router's on the same
+// argument but cannot be answered here: both need a configured workspace, and
+// this package knows nothing about one. A harness that listed them would go on
+// listing them on a deployment that refuses every attachment.
 func (h *CLIHarness) Build() *CLIHarness {
 	h.proc = newProcess(h.Binary, h.Prompt, h.argsFor, h.ParseLine)
+	h.declared = h.Capabilities
 	if !domain.HasCapability(h.Capabilities, domain.CapCancellation) {
-		h.Capabilities = append(h.Capabilities, domain.CapCancellation)
+		// A fresh slice: h.declared must keep pointing at the declaration, and
+		// appending in place could write into the array behind it.
+		h.Capabilities = append(append([]domain.Capability{}, h.Capabilities...), domain.CapCancellation)
 	}
 	return h
 }

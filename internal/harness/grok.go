@@ -23,7 +23,7 @@ func NewGrok(models []string) *CLIHarness {
 		Binary: "grok",
 		Models: models,
 		Capabilities: []domain.Capability{
-			domain.CapStreaming, domain.CapFilesIn, domain.CapTools,
+			domain.CapStreaming, domain.CapTools,
 		},
 		// `grok models` prints the models this login can actually use, so the
 		// advertised list is computed rather than guessed. Verified by

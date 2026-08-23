@@ -20,8 +20,7 @@ func NewClaude(models []string) *CLIHarness {
 		Binary: "claude",
 		Models: models,
 		Capabilities: []domain.Capability{
-			domain.CapStreaming, domain.CapFilesIn, domain.CapFilesOut,
-			domain.CapSessions, domain.CapCancellation, domain.CapTools,
+			domain.CapStreaming, domain.CapSessions, domain.CapTools,
 		},
 		// No ModelsArgs: Claude Code is the one harness here that cannot
 		// enumerate its own models. `claude --help` has no listing command and

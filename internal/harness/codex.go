@@ -26,8 +26,7 @@ func NewCodex(models []string) *CLIHarness {
 		Binary: "codex",
 		Models: models,
 		Capabilities: []domain.Capability{
-			domain.CapStreaming, domain.CapFilesIn, domain.CapFilesOut,
-			domain.CapSessions, domain.CapCancellation, domain.CapTools,
+			domain.CapStreaming, domain.CapSessions, domain.CapTools,
 		},
 		// `codex debug models` renders the raw model catalogue as JSON, which
 		// is the only place the real slugs appear — `codex --help` names none,
