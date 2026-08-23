@@ -103,6 +103,15 @@ const (
 	// `usage` to be an object or explicitly null, never a fabricated zero.
 	UpdateUsage UpdateType = "usage"
 
+	// UpdateModel carries the model the harness says it is running, read off
+	// its own output. It exists for the task that named no model: the router
+	// then invokes the CLI with no `--model` at all, the CLI picks its own
+	// default, and the router's idea of what that default is — the first entry
+	// of the list `/v1/models` advertises — is a guess rather than an
+	// observation. claude, grok and pi each name the model on the wire, so for
+	// those three the guess can be replaced with the answer. See issue #43.
+	UpdateModel UpdateType = "model"
+
 	UpdateCompleted UpdateType = "completed"
 	UpdateFailed    UpdateType = "failed"
 	UpdateCancelled UpdateType = "cancelled"
@@ -125,6 +134,7 @@ type RunUpdate struct {
 	Delta     string
 	Artifact  *domain.Artifact
 	SessionID string
+	Model     string
 	Usage     *domain.Usage
 	Err       error
 }

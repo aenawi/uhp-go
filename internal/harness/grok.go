@@ -143,6 +143,13 @@ type grokStreamEvent struct {
 	Subtype   string `json:"subtype"`
 	SessionID string `json:"session_id"`
 
+	// Model is what the `system`/`init` line says it is about to run. It is
+	// read only from that line: the `assistant` events repeat the same id one
+	// level down in `message.model`, and there is nothing to gain from
+	// republishing it per message. See UpdateModel for why this is worth
+	// reading at all.
+	Model string `json:"model"`
+
 	// IsError is the run's own verdict. grok also exits 1, so this is not what
 	// fails the task; it is what puts words on the failure.
 	IsError bool     `json:"is_error"`
@@ -180,8 +187,18 @@ func parseGrokLine(line string) []RunUpdate {
 
 	// Emitted once, from the init event, rather than from every line that
 	// happens to repeat the id — which here is every line without exception.
-	if ev.Type == "system" && ev.Subtype == "init" && ev.SessionID != "" {
-		updates = append(updates, RunUpdate{Type: UpdateSessionID, SessionID: ev.SessionID})
+	if ev.Type == "system" && ev.Subtype == "init" {
+		if ev.SessionID != "" {
+			updates = append(updates, RunUpdate{Type: UpdateSessionID, SessionID: ev.SessionID})
+		}
+		// Issue #43. A task that named no model reached grok with no `--model`
+		// flag, so which one it picked is grok's to say — and it says so here,
+		// on the same line as the session id. Without this the response can
+		// only report the router's advertised default, which is a guess that
+		// happens to be right rather than the answer.
+		if ev.Model != "" {
+			updates = append(updates, RunUpdate{Type: UpdateModel, Model: ev.Model})
+		}
 	}
 
 	if ev.Type == "stream_event" {

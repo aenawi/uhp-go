@@ -139,6 +139,11 @@ type claudeStreamEvent struct {
 	Subtype   string `json:"subtype"`
 	SessionID string `json:"session_id"`
 
+	// Model is what the `system`/`init` line says it is about to run. Read
+	// only from that line, and not because the others agree with it — they do
+	// not. See parseClaudeLine. UpdateModel is why it is read at all.
+	Model string `json:"model"`
+
 	// IsError is the run's own verdict, and it is not implied by anything
 	// else on the result event: a failed run still reports
 	// `"subtype":"success"`, and Result then holds the reason rather than an
@@ -176,8 +181,37 @@ func parseClaudeLine(line string) []RunUpdate {
 
 	// Emitted once, from the init event, rather than from every line that
 	// happens to repeat the id.
-	if ev.Type == "system" && ev.Subtype == "init" && ev.SessionID != "" {
-		updates = append(updates, RunUpdate{Type: UpdateSessionID, SessionID: ev.SessionID})
+	if ev.Type == "system" && ev.Subtype == "init" {
+		if ev.SessionID != "" {
+			updates = append(updates, RunUpdate{Type: UpdateSessionID, SessionID: ev.SessionID})
+		}
+		// Issue #43. A task that named no model reached claude with no
+		// `--model` flag, so the CLI picked its own and this line is where it
+		// says which.
+		//
+		// claude reports two model ids per run and they are not the same
+		// string. `make capture-claude` against 2.1.240 on 2026-08-23 produced
+		// `"model":"claude-opus-5[1m]"` on this init line and
+		// `"model":"claude-opus-5"` on every `assistant` and `message_start`
+		// under it — see claudeCapturedInitEvent and
+		// claudeCapturedAssistantEvent, which are that run's own two lines.
+		// The suffix is Claude Code's 1M-context variant: the init line is the
+		// CLI's resolved selection, the messages are the API model that served
+		// them, and both are true of the same run.
+		//
+		// This reads the init line. It is the CLI's own answer to "what am I
+		// running", it arrives once and first — so a task reports its model
+		// before it produces a word — and it is the id `--model` takes back.
+		// The cost is real and worth stating: `claude-opus-5[1m]` is not in
+		// the list this server advertises, so validateModel would refuse it if
+		// a client sent it back, and a client cannot round-trip what it is
+		// told here. That is also the sharpest argument for the rule in
+		// applyUpdate that this never overwrites a model the client named —
+		// against a request for `claude-opus-5` it would otherwise publish
+		// `model_fallback: true` for a run that fell back from nothing.
+		if ev.Model != "" {
+			updates = append(updates, RunUpdate{Type: UpdateModel, Model: ev.Model})
+		}
 	}
 
 	// The answer, a fragment at a time. The finished `assistant` message that

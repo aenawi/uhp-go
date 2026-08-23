@@ -704,13 +704,28 @@ const (
 
 func TestParseGrokLine(t *testing.T) {
 	t.Run("init yields the native session id", func(t *testing.T) {
-		got := parseGrokLine(grokInitEvent)
-		if len(got) != 1 || got[0].Type != UpdateSessionID {
-			t.Fatalf("got %+v, want one %s update", got, UpdateSessionID)
+		got := onlyOfType(t, parseGrokLine(grokInitEvent), UpdateSessionID)
+		if got.SessionID != "01a02d66-1268-7ea3-af50-e5a1e1ccc760" {
+			t.Errorf("session id = %q", got.SessionID)
 		}
-		if got[0].SessionID != "01a02d66-1268-7ea3-af50-e5a1e1ccc760" {
-			t.Errorf("session id = %q", got[0].SessionID)
+	})
+
+	// Issue #43. A task that names no model is run with no `--model` flag, so
+	// which model grok picked is grok's to say — and it says so on this same
+	// line. Without reading it the response can only report the router's
+	// advertised default, which is a guess that happens to be right.
+	t.Run("init also names the model that is running", func(t *testing.T) {
+		got := onlyOfType(t, parseGrokLine(grokInitEvent), UpdateModel)
+		if got.Model != "grok-4.6" {
+			t.Errorf("model = %q, want %q — the model grok said it was running", got.Model, "grok-4.6")
 		}
+	})
+
+	// The id is repeated on every `assistant` message one level down. Reading
+	// those too would rewrite the task's model once per message for no gain,
+	// and would put the parser one field rename away from doing it wrongly.
+	t.Run("the model is named once, not from every line that repeats it", func(t *testing.T) {
+		assertModelNotRepublished(t, parseGrokLine, grokAssistantEvent, grokTextDeltaEvent)
 	})
 
 	t.Run("a text delta is the answer, a fragment at a time", func(t *testing.T) {
@@ -842,20 +857,96 @@ func TestParseGrokLine(t *testing.T) {
 // of them as the run's total by accident.
 func onlyUsage(t *testing.T, updates []RunUpdate) *domain.Usage {
 	t.Helper()
-	var found *domain.Usage
-	for _, upd := range updates {
-		if upd.Type != UpdateUsage {
+	return onlyOfType(t, updates, UpdateUsage).Usage
+}
+
+// onlyOfType returns the single update of a given type in a parse result,
+// failing if there is not exactly one. It exists because one line can now
+// legitimately produce several kinds of update — an init event names both the
+// session and the model — so asserting on the length of the whole slice tests
+// the wrong thing.
+func onlyOfType(t *testing.T, updates []RunUpdate, typ UpdateType) RunUpdate {
+	t.Helper()
+	var found *RunUpdate
+	for i := range updates {
+		if updates[i].Type != typ {
 			continue
 		}
 		if found != nil {
-			t.Fatalf("two %s updates from one line: %+v", UpdateUsage, updates)
+			t.Fatalf("two %s updates from one line: %+v", typ, updates)
 		}
-		found = upd.Usage
+		found = &updates[i]
 	}
 	if found == nil {
-		t.Fatalf("got %+v, want a %s update", updates, UpdateUsage)
+		t.Fatalf("got %+v, want a %s update", updates, typ)
 	}
-	return found
+	return *found
+}
+
+// Issue #43 has two halves, and this is the one that is a claim about absence.
+// codex.go and opencode.go each say in a comment that no line the CLI prints
+// names a model, which is why those two harnesses report the router's guess
+// instead of an observation. A comment cannot be checked; the fixtures can.
+//
+// Both assertions are here on purpose. The parser check is the behaviour, and
+// the field check is the evidence under it: if a later capture of either CLI
+// does carry a model, the second half goes red and points at the comment that
+// has become false, rather than leaving a guess in place that no longer has to
+// be one.
+func TestTheAdaptersThatNameNoModelHaveNoModelToName(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		parse func(string) []RunUpdate
+		lines []string
+	}{
+		{"codex", parseCodexLine, []string{
+			codexThreadStartedEvent, codexTurnStartedEvent, codexAgentMessageEvent,
+			codexTurnCompletedEvent, codexAgentMessageAlpha, codexAgentMessageGamma,
+			codexCommandStartedEvent, codexCommandCompletedEvent, codexErrorItemEvent,
+			codexErrorEvent, codexTurnFailedEvent,
+		}},
+		{"opencode", parseOpenCodeLine, []string{
+			openCodeStepStartEvent, openCodeTextEvent, openCodeStepFinishEvent,
+			openCodeToolUseEvent, openCodeErrorEvent, openCodeRefErrorEvent,
+			openCodeTextEventAlpha, openCodeTextEventGamma,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertModelNotRepublished(t, tc.parse, tc.lines...)
+
+			for _, line := range tc.lines {
+				var any map[string]json.RawMessage
+				if err := json.Unmarshal([]byte(line), &any); err != nil {
+					t.Fatalf("fixture is not JSON: %v", err)
+				}
+				// Top level only, which is where both CLIs put everything
+				// their parsers read. `codexErrorItemEvent` proves why a
+				// substring search would not do: its `message` is the sentence
+				// "Model metadata for `bogus-model-xyz` not found", which
+				// contains the word and no model field.
+				if _, ok := any["model"]; ok {
+					t.Errorf("%s names a model after all — the comment in the adapter is now false:\n  %s",
+						tc.name, line)
+				}
+			}
+		})
+	}
+}
+
+// assertModelNotRepublished fails if any of the given lines produces a model
+// update. Every adapter that reads a model reads it from one line and has
+// others repeating something model-shaped underneath; this is what pins the
+// "one line, once" half of that for each of them.
+func assertModelNotRepublished(t *testing.T, parse func(string) []RunUpdate, lines ...string) {
+	t.Helper()
+	for _, line := range lines {
+		for _, upd := range parse(line) {
+			if upd.Type == UpdateModel {
+				t.Errorf("model %q republished from a line that is not the one it is read from:\n  %s",
+					upd.Model, line)
+			}
+		}
+	}
 }
 
 // messageDeltaUsage reads a `message_delta` line's own usage, which parseGrokLine
@@ -923,17 +1014,72 @@ const (
 	claudeResultEvent = `{"type":"result","subtype":"success","is_error":false,"session_id":"45b84817-020e-4a0b-9c94-93a0106c5814","usage":{"input_tokens":12,"cache_creation_input_tokens":7,"cache_read_input_tokens":22400,"output_tokens":5},"result":"Hello, world","duration_ms":1131,"num_turns":1}`
 
 	claudeErrorResultEvent = `{"type":"result","subtype":"success","is_error":true,"session_id":"45b84817-020e-4a0b-9c94-93a0106c5814","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0},"result":"Not logged in · Please run /login","duration_ms":113,"num_turns":1}`
+
+	// These two are one run's own lines, kept together because the pair is the
+	// point: claude does NOT report one model id, it reports two, and they are
+	// not the same string. From the `make capture-claude` run against Claude
+	// Code 2.1.240 on 2026-08-23, abridged the same way as the rest of this
+	// block — the init line's 2.6 KB of tool and slash-command inventory and
+	// the assistant line's usage and telemetry are dropped, and the answer text
+	// is cut to its first character. Every field below is verbatim.
+	//
+	// The init line says `claude-opus-5[1m]`, the CLI's own resolved selection
+	// including the 1M-context variant. Every message underneath it says
+	// `claude-opus-5`, the underlying API model. parseClaudeLine reports the
+	// first — see there for why, and for what it costs.
+	claudeCapturedInitEvent = `{"type":"system","subtype":"init","cwd":"/Users/aenawi/Workspaces/Development/side-projects/uhp-go","session_id":"e116749a-bd87-483d-acd9-6058cbdf7a6d","model":"claude-opus-5[1m]","permissionMode":"default","apiKeySource":"none","claude_code_version":"2.1.240"}`
+
+	claudeCapturedAssistantEvent = `{"type":"assistant","message":{"model":"claude-opus-5","id":"msg_011CeJxf3Es88ctHnmiKkyQw","type":"message","role":"assistant","content":[{"type":"text","text":"1"}],"stop_reason":null},"session_id":"e116749a-bd87-483d-acd9-6058cbdf7a6d"}`
 )
 
 func TestParseClaudeLine(t *testing.T) {
 	t.Run("init yields the native session id, once", func(t *testing.T) {
-		got := parseClaudeLine(claudeInitEvent)
-		if len(got) != 1 || got[0].Type != UpdateSessionID {
-			t.Fatalf("got %+v, want one %s update", got, UpdateSessionID)
+		got := onlyOfType(t, parseClaudeLine(claudeInitEvent), UpdateSessionID)
+		if got.SessionID != "45b84817-020e-4a0b-9c94-93a0106c5814" {
+			t.Errorf("session id = %q", got.SessionID)
 		}
-		if got[0].SessionID != "45b84817-020e-4a0b-9c94-93a0106c5814" {
-			t.Errorf("session id = %q", got[0].SessionID)
+	})
+
+	// Issue #43.
+	t.Run("init also names the model that is running", func(t *testing.T) {
+		got := onlyOfType(t, parseClaudeLine(claudeInitEvent), UpdateModel)
+		if got.Model != "claude-opus-5" {
+			t.Errorf("model = %q, want %q — the model claude said it was running", got.Model, "claude-opus-5")
 		}
+	})
+
+	// The two ids one run reports, from that run's own two lines. They differ,
+	// which is the whole reason parseClaudeLine has to choose rather than treat
+	// the init line as a convenient copy of what the messages say. It reports
+	// the init line's, suffix and all.
+	t.Run("the init line's model is reported, not the messages' different one", func(t *testing.T) {
+		got := onlyOfType(t, parseClaudeLine(claudeCapturedInitEvent), UpdateModel)
+		if got.Model != "claude-opus-5[1m]" {
+			t.Errorf("model = %q, want %q — the id is forwarded as claude spelled it, variant suffix and all",
+				got.Model, "claude-opus-5[1m]")
+		}
+
+		// The fixture pair's own claim, checked rather than trusted: if these
+		// two ever carry the same id, the paragraph in parseClaudeLine that
+		// weighs one against the other is describing a choice that no longer
+		// exists.
+		var messageModel struct {
+			Message struct {
+				Model string `json:"model"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(claudeCapturedAssistantEvent), &messageModel); err != nil {
+			t.Fatalf("fixture is not JSON: %v", err)
+		}
+		if messageModel.Message.Model == got.Model {
+			t.Errorf("the captured pair no longer disagrees (%q); parseClaudeLine's reasoning is stale",
+				got.Model)
+		}
+	})
+
+	t.Run("the model is named once, not from every line that repeats it", func(t *testing.T) {
+		assertModelNotRepublished(t, parseClaudeLine,
+			claudeAssistantEvent, claudeTextDeltaEvent, claudeCapturedAssistantEvent)
 	})
 
 	t.Run("a text delta is the answer arriving", func(t *testing.T) {
@@ -1320,13 +1466,34 @@ func TestParsePiLine(t *testing.T) {
 			// part that tells the operator what to change.
 			{piProviderErrorMessageEnd, "Limit 8000"},
 		} {
-			got := parsePiLine(tc.line)
-			if len(got) != 1 || got[0].Type != UpdateFailed {
-				t.Fatalf("got %+v, want one %s update", got, UpdateFailed)
+			got := onlyOfType(t, parsePiLine(tc.line), UpdateFailed)
+			if got.Err == nil || !strings.Contains(got.Err.Error(), tc.want) {
+				t.Errorf("error drops pi's message %q: %v", tc.want, got.Err)
 			}
-			if got[0].Err == nil || !strings.Contains(got[0].Err.Error(), tc.want) {
-				t.Errorf("error drops pi's message %q: %v", tc.want, got[0].Err)
-			}
+		}
+	})
+
+	// Issue #43. pi resolves `provider/model` itself when a task names none, so
+	// message_end is the only place the answer exists — the router's guess is
+	// the first row of `pi --list-models`, which is not what pi picks.
+	t.Run("the finished message names the model that produced it", func(t *testing.T) {
+		got := onlyOfType(t, parsePiLine(piAssistantMessageEnd), UpdateModel)
+		if got.Model != "probe-model" {
+			t.Errorf("model = %q, want %q", got.Model, "probe-model")
+		}
+	})
+
+	// A run the provider refused still ran on a model, and the client reading
+	// the terminal response should not be told less about a failure than about
+	// a success. The model is reported before the failure, so a terminal update
+	// cannot land first and close the task ahead of it.
+	t.Run("a failed message names its model, ahead of the failure", func(t *testing.T) {
+		got := parsePiLine(piProviderErrorMessageEnd)
+		if len(got) != 2 || got[0].Type != UpdateModel || got[1].Type != UpdateFailed {
+			t.Fatalf("got %+v, want a %s update then a %s one", got, UpdateModel, UpdateFailed)
+		}
+		if got[0].Model != "openai/gpt-oss-20b" {
+			t.Errorf("model = %q, want %q", got[0].Model, "openai/gpt-oss-20b")
 		}
 	})
 

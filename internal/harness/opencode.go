@@ -132,6 +132,15 @@ func parseOpenCodeLine(line string) []RunUpdate {
 		return []RunUpdate{harnessFailure("opencode", openCodeErrorMessage(ev))}
 	}
 
+	// No UpdateModel, and that is a gap rather than a decision (issue #43). No
+	// captured line of `opencode run --format json` names the model —
+	// step_start, text, step_finish, tool_use and error all carry `sessionID`
+	// and none carries a model id — so a task that named no model gets the
+	// router's guess: the first entry of `opencode models`. The CLI is invoked
+	// with no `--model` flag in that case, so what opencode actually resolved
+	// is not observable from here. If a later version names it on an event,
+	// reading it is a strictly better answer than the list.
+	//
 	// Everything else — step_finish, tool_use, and any event type a later
 	// opencode adds — is deliberately dropped.
 	//

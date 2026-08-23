@@ -18,17 +18,30 @@ reads `"highest_class_passed": "full"`.
 Per class, from three separate runs of the same server: **37/37 core**, **44/45 extended**,
 **52/52 full**.
 
-**That score is conditional on `--model`, and a fourth run says so.** `make
+**That score was conditional on `--model`, and a fourth run said so.** `make
 conformance-gate` runs the same suite against the same server without naming a model, and
-scores **36/37 core** — T-03 fails, because a task that names no model comes back naming
-none either. The run is fine; the response is silent about what served it — issue #43, and
-a real defect rather than a suite artefact. **The three runs above did not find it because
-all three pinned a model**, which is the configuration that never exercises the default
-path.
+scored **36/37 core** — T-03 failed, because a task that named no model came back naming
+none either. The run was fine; the response was silent about what served it — issue #43,
+and a real defect rather than a suite artefact. **The three runs above did not find it
+because all three pinned a model**, which is the configuration that never exercises the
+default path.
 
-Both numbers are true of this server and neither replaces the other. The one to quote
-depends on the question: 52/52 is what a client that pins its models gets, and 36/37 is
-what one that does not gets. The gate defends the second, deliberately.
+Both numbers were true of this server and neither replaced the other. The one to quote
+depended on the question: 52/52 is what a client that pins its models gets, and 36/37 was
+what one that did not. The gate defends the second, deliberately.
+
+**#43 is fixed in code and the model-less run has not been re-measured.** A task that names
+no model is now created carrying the harness's effective default, and three of the five
+adapters — `claude-code`, `grok-cli` and `pi` — replace that default mid-run with the model
+their own output names, so the answer is read rather than guessed wherever it can be read.
+No captured line of `codex` or `opencode` names a model, so those two keep the guess and say
+so in a comment where the parser would otherwise have read it — with a test over their
+fixtures that goes red if a later capture proves them wrong. The unit tests cover both
+halves; what they cannot cover is the suite's own verdict, which needs a running server, a
+logged-in CLI and the `uhp-conformance` package. **Until `make conformance-gate` is run
+again, the recorded model-less score stays 36/37 here.** Quoting anything better before it
+is measured is the mistake the History table below records three times over, in the rows
+that read "measured at last".
 
 **The previous result — 37/37 core, 42/52 overall — predated three bodies of work**, and
 this run is the first to measure them: input items, artifact capture and download (#2),
@@ -259,8 +272,9 @@ cannot reach.
 | Progressive streaming for `claude-code` and `pi`, CI gate | no change expected | S-09 cannot fail this server either way — see above |
 | Re-measure after three unmeasured landings (#42) | **52/52, full 52/52** | the ten checks above, all at once |
 | Same run, no `--model` (the gate's configuration) | 36/37 core | T-03 regressed into view — see #43 |
+| A model-less task reports the model that ran (#43) | not re-measured | T-03's cause is fixed; the gate has not been run since |
 
-The last row is the largest single jump in this table, and none of it was new work. Ten
+The #42 re-measure is the largest single jump in this table, and none of it was new work. Ten
 checks moved because the code that satisfies them had been sitting there unmeasured since
 issues #2, #3 and #4 — three steps that each ended with "not yet measured" in this table
 and stayed that way. The lesson is the one #34 arrived at from the other direction: an

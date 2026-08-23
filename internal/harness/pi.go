@@ -126,6 +126,11 @@ type piEvent struct {
 	Message *struct {
 		Role string `json:"role"`
 
+		// Model is the id pi resolved for this message, spelled the way
+		// `--model` takes it back. Read from `message_end` only — see
+		// parsePiLine, and UpdateModel for why it is read at all.
+		Model string `json:"model"`
+
 		// StopReason is "stop", "length", "toolUse", "aborted" or "error".
 		StopReason   string `json:"stopReason"`
 		ErrorMessage string `json:"errorMessage"`
@@ -168,8 +173,28 @@ func parsePiLine(line string) []RunUpdate {
 		// text mid-word.
 		return []RunUpdate{{Type: UpdateDelta, Delta: ev.AssistantMessageEvent.Delta}}
 
-	case ev.Type == "message_end" && ev.Message != nil &&
-		ev.Message.Role == "assistant" && ev.Message.StopReason == "error":
+	case ev.Type == "message_end" && ev.Message != nil && ev.Message.Role == "assistant":
+		var updates []RunUpdate
+
+		// Issue #43. pi resolves `provider/model` itself when a task named no
+		// model, so this is the only place the answer exists — the router's
+		// advertised default is the first row of `pi --list-models`, which is
+		// not what pi picks. Read from `message_end` rather than the
+		// `message_start` and `turn_end` that carry the same field, for the
+		// same reason the failure below is: all three repeat one message, and
+		// this is the one already established as the message's own event.
+		//
+		// A failed run reports its model too, and before its failure: the
+		// model that refused the work is still the model that ran, and a
+		// client reading the terminal response should not be told less about a
+		// failure than about a success.
+		if ev.Message.Model != "" {
+			updates = append(updates, RunUpdate{Type: UpdateModel, Model: ev.Message.Model})
+		}
+		if ev.Message.StopReason != "error" {
+			return updates
+		}
+
 		// pi exits 0 after printing this. Only its *text* mode turns a failed
 		// run into a non-zero exit; in json mode the error is data on the
 		// stream and nothing else, so a harness that ignored it would report a
@@ -186,7 +211,7 @@ func parsePiLine(line string) []RunUpdate {
 		// emits the terminal "cancelled" update for it — failing the task here
 		// as well would race the two and could publish a cancellation as a
 		// failure.
-		return []RunUpdate{harnessFailure("pi", ev.Message.ErrorMessage)}
+		return append(updates, harnessFailure("pi", ev.Message.ErrorMessage))
 	}
 
 	// Everything else is dropped, including `turn_end` and `agent_end`, which

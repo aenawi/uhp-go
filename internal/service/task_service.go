@@ -302,12 +302,52 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 		input = runtime.Instructions + "\n\n" + input
 	}
 
+	// Tasks §1.3 and issue #43: `model` reports what ran, and a request that
+	// named none still has to be answered.
+	//
+	// The harness's effective default is the answer at task-creation time, and
+	// it is a guess: for a plain CLI harness a task with no model is invoked
+	// with no `--model` flag at all, so the CLI picks its own and this is only
+	// the first entry of the list this server advertises. Adapters that can
+	// read the real answer off their own output replace it mid-run — see
+	// harness.UpdateModel and applyUpdate. What replaces it need not be a
+	// member of that advertised list: claude's init line reports the variant
+	// it resolved, suffix and all, which the list does not carry. That is the
+	// honest answer rather than an inconsistency, and it is why this is
+	// written as a starting value and not as the final word.
+	//
+	// It can still come out empty, for a harness whose list is empty — pi and
+	// opencode ship with no configured models, because neither has an id that
+	// is true on someone else's machine (see config.Load). Nothing is invented
+	// to fill that in. It is the same call CLIHarness.validateModel already
+	// makes in the other direction: nothing is advertised, so nothing is
+	// promised, and a `model` this server cannot know is left unsaid rather
+	// than guessed at. pi still names its own on the wire; opencode does not,
+	// and a task on an opencode harness with no configured list is the one
+	// case #43's symptom survives — visibly, and for a reason.
+	//
+	// RequestedModel stays exactly as the client spelled it, empty included:
+	// the two fields exist to answer "did the model I asked for run?", and a
+	// client that asked for nothing is owed that answer as "I asked for
+	// nothing", not as a repeat of the default.
+	//
+	// Only asked when there is nothing else to say. Info() is what reads a CLI
+	// harness's model list, so the very first task on a cold harness forks
+	// `<cli> models` and waits up to modelQueryTimeout for it. Only the first:
+	// every later refresh is backgrounded by models(), so no request after it
+	// waits, and any client that has looked at /v1/harnesses has already paid
+	// even that one.
+	model := req.Model
+	if model == "" {
+		model = adapter.Info().DefaultModel
+	}
+
 	now := time.Now().UTC()
 	task := &domain.Task{
 		ID:                 "resp_" + uuid.NewString(),
 		Object:             "response",
 		Status:             domain.StatusInProgress,
-		Model:              req.Model,
+		Model:              model,
 		RequestedModel:     req.Model,
 		HarnessID:          req.HarnessID,
 		SessionID:          sessionID,
@@ -492,6 +532,39 @@ func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd ha
 
 	case harness.UpdateUsage:
 		task.Usage = upd.Usage
+		if err := s.store.UpdateTask(ctx, task); err != nil {
+			return nil, err
+		}
+		return nil, nil
+
+	case harness.UpdateModel:
+		// Issue #43: the harness has named the model it is actually running,
+		// which beats the default this task was created with — that one is the
+		// first entry of an advertised list, and this one is the runtime's own
+		// answer.
+		//
+		// It only ever replaces the router's own guess. A model the client
+		// named is left exactly as the client spelled it, and that restriction
+		// is not caution — it is a captured failure avoided.
+		//
+		// `model != requested_model` publishes `model_fallback: true`
+		// (domain.Task.MarshalJSON), a claim that the model asked for is not
+		// the model that ran. claude's init line reports `claude-opus-5[1m]`
+		// where the request said `claude-opus-5`: same model, Claude Code's
+		// 1M-context variant, no substitution of any kind. Overwriting there
+		// would tell every such client its request had been overridden, on
+		// every run. Reporting a fallback that never happened is the same
+		// class of defect as reporting nothing at all, and #43 is about the
+		// case where the client asked for nothing and can therefore be told
+		// nothing but the truth.
+		//
+		// What would justify widening this is a capture of a CLI actually
+		// serving a different model than the one it was given — not the
+		// absence of one.
+		if upd.Model == "" || task.RequestedModel != "" || upd.Model == task.Model {
+			return nil, nil
+		}
+		task.Model = upd.Model
 		if err := s.store.UpdateTask(ctx, task); err != nil {
 			return nil, err
 		}

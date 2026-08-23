@@ -179,6 +179,16 @@ selects which harness runs the task. Continuing a conversation is done by settin
 `previous_response_id` to a prior task's `id` — the router resolves the underlying session
 and, where the harness supports it, its native session/thread id (`--resume`, `--session`, etc.).
 
+`model` is optional, and the response names one either way. Omit it and the harness runs on
+its own default; the response reports that default rather than an empty string, because a
+client that pinned nothing has no other way to learn what served it. Where the runtime says
+which model it is running — `claude-code`, `grok-cli` and `pi` each do, on their own output
+— the response carries what was read rather than what was assumed. No captured line of
+`codex` or `opencode` names a model, so for those two it stays the advertised default, and
+a harness advertising no models at all reports no model rather than a guessed one. Naming a
+model leaves it untouched: `model` comes back as you spelled it, and
+`metadata.requested_model` is absent because there was no substitution to report.
+
 ### Capabilities are enforced, not decorative
 
 Every harness object carries a `capabilities` list, and discovery hands that list to a
