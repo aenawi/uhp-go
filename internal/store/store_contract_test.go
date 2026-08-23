@@ -117,12 +117,38 @@ func TestStoreTaskRoundTrip(t *testing.T) {
 			t.Fatalf("create: %v", err)
 		}
 
-		got, err := s.GetTask(ctx, "resp_a")
-		if err != nil {
-			t.Fatalf("get: %v", err)
-		}
-		assertTaskEqual(t, want, got)
+		assertTaskEqual(t, want, mustGetTask(t, s, "resp_a"))
 	})
+}
+
+// mustGetTask and mustGetSession read a row that has to be there.
+//
+// Both halves of the answer are checked. "found=false, err=nil" is how an
+// engine says the row is absent, so a caller that looked only at err would
+// nil-dereference the result instead of saying what went wrong — which is the
+// mistake these helpers exist to stop every call site from making once.
+func mustGetTask(t *testing.T, s service.Store, id string) *domain.Task {
+	t.Helper()
+	got, found, err := s.GetTask(context.Background(), id)
+	if err != nil {
+		t.Fatalf("get task %s: %v", id, err)
+	}
+	if !found {
+		t.Fatalf("get task %s: not found", id)
+	}
+	return got
+}
+
+func mustGetSession(t *testing.T, s service.Store, id string) *domain.Session {
+	t.Helper()
+	got, found, err := s.GetSession(context.Background(), id)
+	if err != nil {
+		t.Fatalf("get session %s: %v", id, err)
+	}
+	if !found {
+		t.Fatalf("get session %s: not found", id)
+	}
+	return got
 }
 
 // A store that serialises has to be told what a time is; one that keeps
@@ -184,11 +210,28 @@ func assertTaskEqual(t *testing.T, want, got *domain.Task) {
 	}
 }
 
+// A row that is not there is found=false and **no error**.
+//
+// This is the contract that decides a status code two layers up. An engine that
+// reported absence as an error would leave the service with one answer for two
+// conditions, and it picked the wrong one: a store that could not be read was
+// answered to the client as a response that does not exist — 404, which says
+// the id is wrong and retrying never helps, for a disk where retrying is
+// exactly what works. Asserting err == nil, not just err != nil somewhere, is
+// the half that keeps a new engine honest.
+//
+// The writes below still fail outright, and correctly: an update or an append
+// aimed at a row that is not there did not do what was asked, and there is no
+// second answer for the caller to pick between.
 func TestStoreTaskNotFound(t *testing.T) {
 	eachStore(t, func(t *testing.T, s service.Store) {
 		ctx := context.Background()
-		if _, err := s.GetTask(ctx, "resp_missing"); err == nil {
-			t.Fatal("GetTask on an unknown id must fail")
+		got, found, err := s.GetTask(ctx, "resp_missing")
+		if err != nil {
+			t.Fatalf("an absent task is not a failed read: %v", err)
+		}
+		if found || got != nil {
+			t.Fatalf("GetTask invented a task: found=%v task=%+v", found, got)
 		}
 		if err := s.UpdateTask(ctx, sampleTask("resp_missing", "sess_a", storeEpoch)); err == nil {
 			t.Fatal("UpdateTask must not create a task that was never created")
@@ -223,10 +266,7 @@ func TestStoreUpdateTask(t *testing.T) {
 			t.Fatalf("update: %v", err)
 		}
 
-		got, err := s.GetTask(ctx, "resp_a")
-		if err != nil {
-			t.Fatalf("get: %v", err)
-		}
+		got := mustGetTask(t, s, "resp_a")
 		if got.Status != domain.StatusCompleted || got.Text() != "hello world" {
 			t.Fatalf("update did not land: status=%v text=%q", got.Status, got.Text())
 		}
@@ -260,10 +300,7 @@ func TestStoreTaskIsolatedFromCaller(t *testing.T) {
 		task.Usage.TotalTokens = 999
 		task.Error.Code = "tampered"
 
-		got, err := s.GetTask(ctx, "resp_a")
-		if err != nil {
-			t.Fatalf("get: %v", err)
-		}
+		got := mustGetTask(t, s, "resp_a")
 		if got.Text() != "hello" {
 			t.Fatalf("caller edited stored output text: %q", got.Text())
 		}
@@ -295,10 +332,7 @@ func TestStoreTaskIsolatedFromCaller(t *testing.T) {
 		got.Metadata["tenant"] = "tampered"
 		got.Output[0].Content[0].Text = "tampered"
 		got.Artifacts[0].Path = "tampered"
-		again, err := s.GetTask(ctx, "resp_a")
-		if err != nil {
-			t.Fatalf("get again: %v", err)
-		}
+		again := mustGetTask(t, s, "resp_a")
 		if again.Metadata["tenant"] != "acme" || again.Text() != "hello" || again.Artifacts[0].Path != "out/report.md" {
 			t.Fatalf("a reader's edits reached storage: %+v", again)
 		}
@@ -337,10 +371,7 @@ func TestStoreNilAndEmptyStayDistinct(t *testing.T) {
 			t.Fatalf("create empty: %v", err)
 		}
 
-		got, err := s.GetTask(ctx, "resp_empty")
-		if err != nil {
-			t.Fatalf("get empty: %v", err)
-		}
+		got := mustGetTask(t, s, "resp_empty")
 		if got.Output[0].Content[0].Annotations == nil {
 			t.Fatal("an empty annotation list came back nil, which a client reads as null")
 		}
@@ -363,10 +394,7 @@ func TestStoreNilAndEmptyStayDistinct(t *testing.T) {
 		if err := s.CreateTask(ctx, absent); err != nil {
 			t.Fatalf("create nil: %v", err)
 		}
-		got, err = s.GetTask(ctx, "resp_nil")
-		if err != nil {
-			t.Fatalf("get nil: %v", err)
-		}
+		got = mustGetTask(t, s, "resp_nil")
 		if got.Output != nil || got.Artifacts != nil || got.Metadata != nil || got.IncompleteDetails != nil {
 			t.Fatalf("a store invented a value that was never set: %+v", got)
 		}
@@ -392,10 +420,7 @@ func TestStoreAppendArtifact(t *testing.T) {
 			}
 		}
 
-		got, err := s.GetTask(ctx, "resp_a")
-		if err != nil {
-			t.Fatalf("get: %v", err)
-		}
+		got := mustGetTask(t, s, "resp_a")
 		if len(got.Artifacts) != 3 {
 			t.Fatalf("want 3 artifacts, got %d", len(got.Artifacts))
 		}
@@ -443,10 +468,7 @@ func TestStoreAppendArtifactConcurrently(t *testing.T) {
 			}
 		}
 
-		got, err := s.GetTask(ctx, "resp_a")
-		if err != nil {
-			t.Fatalf("get: %v", err)
-		}
+		got := mustGetTask(t, s, "resp_a")
 		if len(got.Artifacts) != n {
 			t.Fatalf("want %d artifacts, got %d — an append was lost", n, len(got.Artifacts))
 		}
@@ -468,10 +490,7 @@ func TestStoreSessionRoundTrip(t *testing.T) {
 			t.Fatalf("create: %v", err)
 		}
 
-		got, err := s.GetSession(ctx, "sess_a")
-		if err != nil {
-			t.Fatalf("get: %v", err)
-		}
+		got := mustGetSession(t, s, "sess_a")
 		if got.ID != want.ID || got.HarnessID != want.HarnessID || got.Title != want.Title ||
 			got.Status != want.Status || got.NativeSessionID != want.NativeSessionID ||
 			got.LastResponseID != want.LastResponseID {
@@ -481,8 +500,15 @@ func TestStoreSessionRoundTrip(t *testing.T) {
 			t.Fatalf("session timestamps differ: %v / %v", got.CreatedAt, got.UpdatedAt)
 		}
 
-		if _, err := s.GetSession(ctx, "sess_missing"); err == nil {
-			t.Fatal("GetSession on an unknown id must fail")
+		// Absence is found=false and no error, for the reason TestStoreTaskNotFound
+		// gives: the service two layers up turns these two into different status
+		// codes, and an engine that merged them would leave it guessing.
+		missing, found, err := s.GetSession(ctx, "sess_missing")
+		if err != nil {
+			t.Fatalf("an absent session is not a failed read: %v", err)
+		}
+		if found || missing != nil {
+			t.Fatalf("GetSession invented a session: found=%v session=%+v", found, missing)
 		}
 		if err := s.UpdateSession(ctx, sampleSession("sess_missing", "claude-code", storeEpoch)); err == nil {
 			t.Fatal("UpdateSession must not create a session that was never created")
@@ -494,10 +520,7 @@ func TestStoreSessionRoundTrip(t *testing.T) {
 		if err := s.UpdateSession(ctx, want); err != nil {
 			t.Fatalf("update: %v", err)
 		}
-		got, err = s.GetSession(ctx, "sess_a")
-		if err != nil {
-			t.Fatalf("get after update: %v", err)
-		}
+		got = mustGetSession(t, s, "sess_a")
 		if got.Title != "renamed" || got.Status != domain.StatusCompleted || got.LastResponseID != "resp_z" {
 			t.Fatalf("session update did not land: %+v", got)
 		}

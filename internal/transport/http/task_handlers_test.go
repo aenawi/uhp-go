@@ -59,27 +59,30 @@ func TestGetTaskNotFound(t *testing.T) {
 	}
 }
 
-// Current behaviour, recorded rather than endorsed: handleGetTask maps every
-// error to 404 response_not_found instead of going through writeServiceError,
-// so a store that could not be read is reported as a response that does not
-// exist. Errors §4 makes the class the retry signal, and 404 tells a client
-// not to bother. Left as it is because it is not what issue #10 is about; the
-// test exists so that fixing it changes a red line rather than a silent one,
-// and it is deliberately absent from the storage-failure table in
-// errors_test.go, which records the endpoints that already get this right.
-func TestGetTaskReportsAStorageFailureAsNotFound(t *testing.T) {
+// A store that could not be read is the server's failure, not a response that
+// does not exist. This is the endpoint where the difference bites hardest: a
+// client polling for a task that is still running reads 404 as "it is gone" and
+// stops, while the supervisor carries on running it.
+//
+// What this pins is the half the transport owns — the handler routes its error
+// instead of choosing a status itself, which is why it can use a stand-in and
+// stay a unit test. The rule across every endpoint is
+// TestStorageFailureIsAlways500, and the whole stack answering it for real is
+// TestStorageFailureReaches500ThroughTheRealService.
+//
+// It stays here so it is read next to TestGetTaskNotFound above, which is the
+// answer it has to be kept apart from.
+func TestGetTaskReportsAStorageFailureAs500(t *testing.T) {
 	srv := newFakeServer(&fakeService{
-		getTask: func(context.Context, string) (*domain.Task, error) {
-			return nil, fmt.Errorf("disk gone: %w", service.ErrStorage)
-		},
+		getTask: func(context.Context, string) (*domain.Task, error) { return nil, errStorage() },
 	})
 
 	status, body := callJSON(t, srv, "GET", "/v1/responses/resp_1", "")
-	if status != 404 {
-		t.Fatalf("expected the documented 404, got %d: %v", status, body)
+	if status != 500 {
+		t.Fatalf("expected 500, got %d: %v", status, body)
 	}
-	if code := errorCode(t, body); code != "response_not_found" {
-		t.Fatalf("expected response_not_found, got %s", code)
+	if code := errorCode(t, body); code != vendorCodeStorageFailure {
+		t.Fatalf("expected %s, got %s", vendorCodeStorageFailure, code)
 	}
 }
 
@@ -123,9 +126,9 @@ func TestCancelTaskNotFound(t *testing.T) {
 	}
 }
 
-// Unlike the retrieve path, cancel routes its own failure through
-// writeServiceError, so a task already in a terminal state is a 409 rather than
-// a 404. Only a stand-in can produce it here without racing a real run.
+// A task already in a terminal state is a 409 rather than a 404: the response
+// exists, it just cannot be cancelled now. Only a stand-in can produce it here
+// without racing a real run.
 func TestCancelTaskOnABusySessionIsAConflict(t *testing.T) {
 	srv := newFakeServer(&fakeService{
 		cancelTask: func(context.Context, string) error { return service.ErrSessionBusy },
@@ -141,9 +144,10 @@ func TestCancelTaskOnABusySessionIsAConflict(t *testing.T) {
 }
 
 // The task is read back after the cancel signal, and that read can fail on its
-// own. The handler answers 404 for it, which is the same shape as the retrieve
-// path above and is recorded here for the same reason.
-func TestCancelTaskReportsAFailedReadBackAsNotFound(t *testing.T) {
+// own. The signal landed, so the response certainly exists — a 404 here would
+// be a lie about the one thing this call just proved. Reachable only through a
+// stand-in, for the same reason as the retrieve path above.
+func TestCancelTaskReportsAFailedReadBackAs500(t *testing.T) {
 	srv := newFakeServer(&fakeService{
 		cancelTask: func(context.Context, string) error { return nil },
 		getTask: func(context.Context, string) (*domain.Task, error) {
@@ -152,10 +156,10 @@ func TestCancelTaskReportsAFailedReadBackAsNotFound(t *testing.T) {
 	})
 
 	status, body := callJSON(t, srv, "POST", "/v1/responses/resp_1/cancel", "")
-	if status != 404 {
-		t.Fatalf("expected the documented 404, got %d: %v", status, body)
+	if status != 500 {
+		t.Fatalf("expected 500, got %d: %v", status, body)
 	}
-	if code := errorCode(t, body); code != "response_not_found" {
-		t.Fatalf("expected response_not_found, got %s", code)
+	if code := errorCode(t, body); code != vendorCodeStorageFailure {
+		t.Fatalf("expected %s, got %s", vendorCodeStorageFailure, code)
 	}
 }

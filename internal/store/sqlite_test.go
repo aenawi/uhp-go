@@ -36,15 +36,15 @@ func TestSQLiteStoreSurvivesRestart(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = second.Close() })
 
-	got, err := second.GetTask(ctx, "resp_a")
-	if err != nil {
-		t.Fatalf("get task after restart: %v", err)
+	got, found, err := second.GetTask(ctx, "resp_a")
+	if err != nil || !found {
+		t.Fatalf("get task after restart: found=%v err=%v", found, err)
 	}
 	assertTaskEqual(t, task, got)
 
-	sess, err := second.GetSession(ctx, "sess_a")
-	if err != nil {
-		t.Fatalf("get session after restart: %v", err)
+	sess, found, err := second.GetSession(ctx, "sess_a")
+	if err != nil || !found {
+		t.Fatalf("get session after restart: found=%v err=%v", found, err)
 	}
 	if sess.HarnessID != "claude-code" || !sess.CreatedAt.Equal(storeEpoch) {
 		t.Fatalf("session did not survive intact: %+v", sess)

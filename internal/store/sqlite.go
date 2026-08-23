@@ -264,16 +264,27 @@ func (s *SQLiteStore) UpdateTask(ctx context.Context, t *domain.Task) error {
 	return nil
 }
 
-func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*domain.Task, error) {
+// GetTask separates the row that is not there from the read that did not
+// happen: sql.ErrNoRows is found=false and no error, and everything else — a
+// locked file, a corrupt page, a cancelled context — stays an error. Folding
+// the two together is what let a storage failure be answered as a 404.
+func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*domain.Task, bool, error) {
 	var data string
 	err := s.db.QueryRowContext(ctx, `SELECT data FROM tasks WHERE id = ?`, id).Scan(&data)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("store: task %s not found", id)
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("store: get task %s: %w", id, err)
+		return nil, false, fmt.Errorf("store: get task %s: %w", id, err)
 	}
-	return decodeTask(id, data)
+	// A row that is there but will not decode is this store's failure, not a
+	// missing task. The error is what a caller acts on; found is reported
+	// truthfully beside it rather than left saying the row was never there.
+	t, err := decodeTask(id, data)
+	if err != nil {
+		return nil, true, err
+	}
+	return t, true, nil
 }
 
 // AppendArtifact adds one artifact to a task's list.
@@ -334,16 +345,21 @@ func (s *SQLiteStore) CreateSession(ctx context.Context, sess *domain.Session) e
 	return nil
 }
 
-func (s *SQLiteStore) GetSession(ctx context.Context, id string) (*domain.Session, error) {
+// GetSession splits absence from failure the way GetTask does.
+func (s *SQLiteStore) GetSession(ctx context.Context, id string) (*domain.Session, bool, error) {
 	var data string
 	err := s.db.QueryRowContext(ctx, `SELECT data FROM sessions WHERE id = ?`, id).Scan(&data)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("store: session %s not found", id)
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("store: get session %s: %w", id, err)
+		return nil, false, fmt.Errorf("store: get session %s: %w", id, err)
 	}
-	return decodeSession(id, data)
+	sess, err := decodeSession(id, data)
+	if err != nil {
+		return nil, true, err
+	}
+	return sess, true, nil
 }
 
 func (s *SQLiteStore) UpdateSession(ctx context.Context, sess *domain.Session) error {

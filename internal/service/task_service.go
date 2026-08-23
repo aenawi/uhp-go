@@ -396,12 +396,18 @@ func (s *TaskService) resolveSession(ctx context.Context, req CreateTaskRequest)
 		return sess.ID, "", sess, nil
 	}
 
-	prevTask, err := s.store.GetTask(ctx, req.PreviousResponseID)
+	prevTask, found, err := s.store.GetTask(ctx, req.PreviousResponseID)
 	if err != nil {
+		return "", "", nil, fmt.Errorf("%w: read response %q: %w", ErrStorage, req.PreviousResponseID, err)
+	}
+	if !found {
 		return "", "", nil, fmt.Errorf("%w: previous_response_id %q", ErrResponseNotFound, req.PreviousResponseID)
 	}
-	sess, err := s.store.GetSession(ctx, prevTask.SessionID)
+	sess, found, err := s.store.GetSession(ctx, prevTask.SessionID)
 	if err != nil {
+		return "", "", nil, fmt.Errorf("%w: read session %q: %w", ErrStorage, prevTask.SessionID, err)
+	}
+	if !found {
 		return "", "", nil, fmt.Errorf("%w: session for %q", ErrSessionNotFound, req.PreviousResponseID)
 	}
 	// Lifecycle §4: continuing a conversation with a different agent is a
@@ -589,9 +595,15 @@ func (s *TaskService) persistNativeSessionID(ctx context.Context, task *domain.T
 	if task.SessionID == "" || task.NativeSessionID == "" {
 		return nil
 	}
-	sess, err := s.store.GetSession(ctx, task.SessionID)
+	// The session is written before the run that reaches this, so neither answer
+	// can be the client's fault: a failed read and a session that is no longer
+	// there are both this server losing state mid-run.
+	sess, found, err := s.store.GetSession(ctx, task.SessionID)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: read session %q: %w", ErrStorage, task.SessionID, err)
+	}
+	if !found {
+		return fmt.Errorf("%w: session %q vanished mid-run", ErrStorage, task.SessionID)
 	}
 	sess.NativeSessionID = task.NativeSessionID
 	sess.LastResponseID = task.ID
@@ -602,9 +614,18 @@ func (s *TaskService) persistNativeSessionID(ctx context.Context, task *domain.T
 func intp(i int) *int { return &i }
 
 // GetTask answers GET /v1/responses/{id}.
+//
+// A store that could not be read is ErrStorage and a 500; only an absent row is
+// ErrResponseNotFound and a 404. The two used to be the same answer, which told
+// a client polling a task that was still running that its task had ceased to
+// exist — the one refusal it could not check by asking again, because not
+// asking again is what a 404 means.
 func (s *TaskService) GetTask(ctx context.Context, id string) (*domain.Task, error) {
-	t, err := s.store.GetTask(ctx, id)
+	t, found, err := s.store.GetTask(ctx, id)
 	if err != nil {
+		return nil, fmt.Errorf("%w: read response %q: %w", ErrStorage, id, err)
+	}
+	if !found {
 		return nil, fmt.Errorf("%w: %q", ErrResponseNotFound, id)
 	}
 	return t, nil
@@ -619,8 +640,11 @@ func (s *TaskService) GetRun(taskID string) (*Run, bool) { return s.runs.get(tas
 // supervisor observes the adapter's "cancelled" update and writes the terminal
 // state, so there is exactly one writer and no lost update.
 func (s *TaskService) CancelTask(ctx context.Context, taskID string) error {
-	task, err := s.store.GetTask(ctx, taskID)
+	task, found, err := s.store.GetTask(ctx, taskID)
 	if err != nil {
+		return fmt.Errorf("%w: read response %q: %w", ErrStorage, taskID, err)
+	}
+	if !found {
 		return fmt.Errorf("%w: %q", ErrResponseNotFound, taskID)
 	}
 

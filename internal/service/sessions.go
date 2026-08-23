@@ -33,13 +33,25 @@ func (s *TaskService) ListSessions(ctx context.Context, f domain.SessionFilter) 
 			f.HarnessID = canonical
 		}
 	}
-	return s.store.ListSessions(ctx, f)
+	page, err := s.store.ListSessions(ctx, f)
+	if err != nil {
+		// Wrapped rather than passed through: an unclassified error reaches the
+		// transport's default arm and becomes 502 harness_unavailable, which
+		// blames a harness for a disk. A listing has no row to be missing, so
+		// there is nothing here but the server's own failure.
+		return domain.SessionPage{}, fmt.Errorf("%w: list sessions: %w", ErrStorage, err)
+	}
+	return page, nil
 }
 
-// GetSession answers GET /v1/sessions/{id}.
+// GetSession answers GET /v1/sessions/{id}. A store that could not be read is
+// ErrStorage; only an absent row is ErrSessionNotFound. See GetTask.
 func (s *TaskService) GetSession(ctx context.Context, id string) (*domain.Session, error) {
-	sess, err := s.store.GetSession(ctx, id)
+	sess, found, err := s.store.GetSession(ctx, id)
 	if err != nil {
+		return nil, fmt.Errorf("%w: read session %q: %w", ErrStorage, id, err)
+	}
+	if !found {
 		return nil, fmt.Errorf("%w: %q", ErrSessionNotFound, id)
 	}
 	return sess, nil
@@ -48,10 +60,7 @@ func (s *TaskService) GetSession(ctx context.Context, id string) (*domain.Sessio
 // SessionTurns answers GET /v1/sessions/{id}/turns: the ordered task history of
 // a session, so a client can rebuild a transcript it did not store.
 func (s *TaskService) SessionTurns(ctx context.Context, id string) ([]domain.Turn, error) {
-	if _, err := s.store.GetSession(ctx, id); err != nil {
-		return nil, fmt.Errorf("%w: %q", ErrSessionNotFound, id)
-	}
-	tasks, err := s.store.ListSessionTasks(ctx, id)
+	tasks, err := s.sessionTasks(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -69,15 +78,36 @@ func (s *TaskService) SessionTurns(ctx context.Context, id string) ([]domain.Tur
 	return turns, nil
 }
 
+// sessionTasks reads a session's tasks, having first established that the
+// session exists at all.
+//
+// The two steps are one operation: without the existence check, a session that
+// is not there and a session with no tasks yet both come back as an empty list,
+// and a client asking for the history of an id it typed wrong is told the
+// conversation is simply empty. Every caller wants both halves, and each error
+// on the way is already classified — the miss as ErrSessionNotFound by
+// GetSession, the read as ErrStorage here — so no caller has to re-decide what
+// a failure means.
+func (s *TaskService) sessionTasks(ctx context.Context, id string) ([]*domain.Task, error) {
+	if _, err := s.GetSession(ctx, id); err != nil {
+		return nil, err
+	}
+	tasks, err := s.store.ListSessionTasks(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("%w: list tasks for session %q: %w", ErrStorage, id, err)
+	}
+	return tasks, nil
+}
+
 // CancelSession stops whatever is running in a session.
 //
 // Sessions §4 defines two deliberately distinct scopes — cancelling a task and
 // cancelling a session — and is explicit that cancelling MUST NOT delete the
 // session: the conversation remains continuable.
 func (s *TaskService) CancelSession(ctx context.Context, id string) error {
-	sess, err := s.store.GetSession(ctx, id)
+	sess, err := s.GetSession(ctx, id)
 	if err != nil {
-		return fmt.Errorf("%w: %q", ErrSessionNotFound, id)
+		return err
 	}
 	run, ok := s.runs.bySessionRun(id)
 	if !ok {
@@ -100,8 +130,11 @@ func (s *TaskService) markSessionStatus(ctx context.Context, sessionID string, s
 	if sessionID == "" {
 		return
 	}
-	sess, err := s.store.GetSession(ctx, sessionID)
-	if err != nil {
+	// Best-effort bookkeeping, so both a failed read and a session that is not
+	// there end the same way: nothing to record onto. The distinction the read
+	// endpoints need does not exist here, because nobody is being answered.
+	sess, found, err := s.store.GetSession(ctx, sessionID)
+	if err != nil || !found {
 		return
 	}
 	sess.Status = status

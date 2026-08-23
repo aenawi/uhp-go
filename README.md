@@ -493,10 +493,14 @@ Some notes on what is in the file:
 Uploaded files and idempotency keys are still in memory, and harnesses are still a JSON
 document — each is its own interface, so each moves on its own.
 
-One caveat this makes sharper rather than fixes: a failure to read the store is still
-reported to the client as `404`, because that was the only thing an error from an in-memory
-map could mean. A disk problem now answers the same way. That is
-[issue #28](https://github.com/aenawi/uhp-go/issues/28).
+Putting a real disk under the service exposed a caveat that had been harmless until then: a
+failure to read the store was reported to the client as `404`, because an error from an
+in-memory map could only ever mean "no such row". A disk that stopped answering said the
+same thing, and `404` tells a client its id is wrong and retrying will never help — so a
+client polling a task that was still running would conclude the task had vanished and stop.
+Fixed in [issue #28](https://github.com/aenawi/uhp-go/issues/28): `Store.GetTask` and
+`Store.GetSession` answer with a `found` flag alongside the error, so an absent row and an
+unreadable store reach the transport as different things and become `404` and `500`.
 
 `internal/store/store_contract_test.go` is one suite run against both engines. Ordering,
 paging and the rule that a caller may mutate whatever it hands over or is handed back are
