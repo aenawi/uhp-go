@@ -383,29 +383,43 @@ as the `Authorization` header that actually connects. A disabled entry of either
 never written at all: §4.1 requires that a disabled server not be contacted, and
 "connected then hidden" still tells its operator the turn happened.
 
+Leaving it out of the generated document is necessary and not sufficient, because a
+runtime can have MCP configuration of its own. Claude Code does, so its runs also carry
+`--strict-mcp-config`, which confines them to the file this server wrote — see the table
+below.
+
 How much of that the runtime enforces itself differs per base, and this server does not
 overstate it:
 
 | Base | Tool block | Skill loading | Per-run MCP |
 |---|---|---|---|
-| `claude-code` | `--disallowedTools` **(unverified)** | standing instruction | `--mcp-config` **(unverified)** |
+| `claude-code` | `--disallowedTools` (executed) | standing instruction | `--mcp-config` (executed) |
 | `grok-cli` | `--disallowed-tools` (verified) | standing instruction | none — refused at config time |
 | `pi` | `--exclude-tools` (verified) | `--skill` (verified) | none — refused at config time |
 | `codex`, `opencode` | standing instruction | standing instruction | none — refused at config time |
 
 "Verified" means the flag was read from that CLI's own `--help` on a machine where it is
-installed. The two marked **unverified** are documented for Claude Code but have not been
-run against the real binary here. If either is wrong the task fails to start rather than
-running with its tools quietly unblocked, which is the right direction for an unverified
-claim.
+installed. "Executed" is the stronger claim and the only one that settles issue #19: the
+flag was not read but run, and the run was watched from the far end. `make
+probe-claude-delivery` does that, and a flag the CLI accepts and ignores fails it:
 
-They are not the only unverified claims left. Issue #14 added one that fails in the worse
-direction: `parseClaudeLine` now reads `stream_event` envelopes whose shape was read out of
-the Claude Code binary rather than captured from a live run, and a wrong shape produces an
-empty answer rather than a refusal. What would settle it is a conformance run against that
-harness, which fails loudly on an empty answer — but the gate is a maintainer's local run
-rather than a CI job, so this stays unverified until someone performs one. See
-[docs/conformance.md](docs/conformance.md).
+- `--disallowedTools Bash` removes `Bash` from the session's tool list, so the model is
+  never offered it. The same run without the flag used `Bash` and returned its output.
+  The list is comma-joined rather than space-separated — `--help` allows either, but the
+  flag is variadic, so a space-separated list would spread across argv elements.
+- `--mcp-config` reaches the server: the generated document's `Authorization` header
+  arrives on every request, `tools/call` is served, and the model returns a secret only
+  that server knows.
+- A server the generated document does *not* name is never contacted — but only because
+  `--strict-mcp-config` is also sent, unconditionally, on every run. `--mcp-config` adds
+  a configuration rather than replacing the set: without the second flag, Claude Code
+  also connects the host's own MCP servers, and a server the operator disabled is
+  contacted anyway. The probe demonstrates both directions.
+
+All of that is a maintainer's command rather than a settled fact. `go test` cannot reach a
+logged-in CLI, so nothing in CI re-runs it, and a Claude Code release is free to change any
+of it — which is the whole reason these two claims went three issues without being checked.
+Run the probe after every upgrade.
 
 Where a runtime cannot hard-block a tool, the restriction is conveyed as a standing
 instruction and described to the model as unenforced — never dropped. §4.3 is explicit
@@ -677,6 +691,23 @@ run on purpose before merging something that could move the score — see
 ```bash
 UHP_API_KEY=devkey UHP_HARNESS_ID=chrn_… make conformance-gate
 ```
+
+Two Claude Code probes sit beside it, for the same reason and with the same schedule —
+run them after every Claude Code upgrade. Both need a logged-in `claude` and neither can
+be a `go test`, which is exactly how the claims they check went unverified for as long as
+they did.
+
+```bash
+make capture-claude          # what the CLI streams back  (#32)
+make probe-claude-delivery   # what it does with the configuration (#19)
+```
+
+The first runs the shipped invocation and checks the stream against what `parseClaudeLine`
+assumes — the failure it exists for is silent, an empty answer reported as a success. The
+second checks enforcement: that a blocked tool is really gone, that a configured MCP server
+is really reached as the configured principal, and that nothing else is. It starts its own
+MCP endpoints on loopback and needs no network. Both spend a few tokens; neither is in the
+pre-push hook.
 
 ## Building the image
 

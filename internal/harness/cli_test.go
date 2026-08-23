@@ -43,16 +43,24 @@ func TestBuildArgs(t *testing.T) {
 		checkFn func(t *testing.T, args []string)
 	}{
 		{
-			name: "claude: --verbose is mandatory with stream-json",
+			// `--strict-mcp-config` is in the base invocation rather than
+			// beside `--mcp-config`, and unconditionally (#19). Without it
+			// Claude Code also loads the host's own MCP configurations, so the
+			// run's MCP surface is whatever the machine happens to have plus
+			// whatever the harness configured — a superset the operator never
+			// authorised, and the route by which a server they disabled is
+			// contacted anyway. A harness with *no* MCP servers is the case
+			// MCPArgs cannot cover, because it is never called for one.
+			name: "claude: --verbose is mandatory with stream-json, MCP is confined to ours",
 			h:    NewClaude(models),
 			req:  RunRequest{Input: "hello"},
-			want: []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"},
+			want: []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--strict-mcp-config"},
 		},
 		{
 			name: "claude: model and resume",
 			h:    NewClaude(models),
 			req:  RunRequest{Input: "hello", Model: "m1", NativeSessionID: "s1"},
-			want: []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "m1", "--resume", "s1"},
+			want: []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--strict-mcp-config", "--model", "m1", "--resume", "s1"},
 		},
 		{
 			// Issue #14. Without it stream-json emits one event per finished
@@ -582,23 +590,112 @@ func TestParseClaudeLine(t *testing.T) {
 // gap #32 is about — so the two are pinned together here rather than by a
 // comment asking someone to remember.
 func TestClaudeProbeRunsTheShippedInvocation(t *testing.T) {
-	const probe = "../../scripts/capture-claude-stream.py"
-
-	src, err := os.ReadFile(probe)
-	if err != nil {
-		t.Fatalf("the claude stream probe is missing: %v", err)
-	}
-	got := pythonStringList(t, string(src), "HARNESS_ARGV")
-
 	args, err := NewClaude([]string{"m1"}).BuildArgs(RunRequest{Input: "hello"})
 	if err != nil {
 		t.Fatalf("BuildArgs: %v", err)
 	}
 	want := append([]string{"claude"}, args...)
 
+	// Both probes, because both launch the CLI themselves and either one can go
+	// stale alone.
+	for _, probe := range []string{
+		"../../scripts/capture-claude-stream.py",
+		"../../scripts/probe-claude-delivery.py",
+	} {
+		src, err := os.ReadFile(probe)
+		if err != nil {
+			t.Fatalf("a claude probe is missing: %v", err)
+		}
+		got := pythonStringList(t, string(src), "HARNESS_ARGV")
+		if strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Errorf("%s measures an invocation uhpd does not send:\n  probe: %v\n  uhpd:  %v",
+				probe, got, want)
+		}
+	}
+}
+
+// TestClaudeDeliveryProbeRunsTheShippedFlags pins scripts/probe-claude-
+// delivery.py to the two hooks it exists to verify, for the same reason
+// TestClaudeProbeRunsTheShippedInvocation pins the stream probe to BuildArgs.
+//
+// Issue #19: `--disallowedTools` and `--mcp-config` were declared from
+// documentation and never executed. They are executed now, but only by a probe
+// on a maintainer's machine — so the thing a test can hold is that the probe
+// spells the flags the way the adapter does. A probe that verified
+// `--disallowed-tools` (grok's spelling) would report a working block for a
+// flag uhpd never sends.
+//
+// The placeholders are what the probe substitutes at run time, and they go
+// through the real hooks so a change to either — a reordering, an added flag, a
+// different separator — lands here rather than in a silently stale probe.
+func TestClaudeDeliveryProbeRunsTheShippedFlags(t *testing.T) {
+	const probe = "../../scripts/probe-claude-delivery.py"
+
+	src, err := os.ReadFile(probe)
+	if err != nil {
+		t.Fatalf("the claude delivery probe is missing: %v", err)
+	}
+	h := NewClaude([]string{"m1"})
+
+	for _, tc := range []struct {
+		list string
+		want []string
+	}{
+		{"MCP_ARGV", h.MCPArgs("<config>")},
+		{"DISALLOW_ARGV", h.DisallowArgs([]string{"<tools>"})},
+	} {
+		got := pythonStringList(t, string(src), tc.list)
+		if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+			t.Errorf("%s: %s measures flags uhpd does not send:\n  probe: %v\n  uhpd:  %v",
+				tc.list, probe, got, tc.want)
+		}
+	}
+}
+
+// TestClaudeDisabledToolsAreOneCommaJoinedValue pins the separator.
+//
+// `claude --help` documents "Comma or space-separated", and the two are not
+// interchangeable here: `--disallowedTools <tools...>` is variadic, so
+// space-separating would spread the list across argv elements and let the
+// variadic keep eating until the next option. Comma-joining keeps the whole
+// list in one element, which is why a tool name is never mistaken for the
+// value of a flag that follows. Verified by execution 2026-08-23 against
+// 2.1.240: `--disallowedTools Bash,Read` removed both.
+func TestClaudeDisabledToolsAreOneCommaJoinedValue(t *testing.T) {
+	got := NewClaude([]string{"m1"}).DisallowArgs([]string{"Bash", "Read"})
+	want := []string{"--disallowedTools", "Bash,Read"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
-		t.Errorf("%s measures an invocation uhpd does not send:\n  probe: %v\n  uhpd:  %v",
-			probe, got, want)
+		t.Fatalf("DisallowArgs = %v, want %v", got, want)
+	}
+}
+
+// TestClaudeMcpConfigIsTheOnlyMcpConfig is issue #19's §4.1 half.
+//
+// The generated document holds the enabled servers and only those — the service
+// filters the disabled ones out before writing it (TestOnlyEnabledMcpServersReach
+// TheConfig). That is necessary and, on its own, not sufficient: `--mcp-config`
+// *adds* a configuration rather than replacing the set, so without
+// `--strict-mcp-config` the host's own MCP servers are connected too. Verified
+// by execution 2026-08-23: a server named only in the working directory's
+// `.mcp.json` was contacted (initialize, tools/list) and its tool advertised to
+// the model, on a run whose `--mcp-config` did not mention it. With the flag,
+// that server's log stayed empty.
+//
+// So the two flags have to travel together, and this checks the composed argv
+// rather than MCPArgs alone: argsFor is where they meet.
+func TestClaudeMcpConfigIsTheOnlyMcpConfig(t *testing.T) {
+	args, err := NewClaude([]string{"m1"}).argsFor(RunRequest{
+		Input:         "hello",
+		McpConfigPath: "/w/.uhp/mcp.json",
+	})
+	if err != nil {
+		t.Fatalf("argsFor: %v", err)
+	}
+	if i := index(args, "--mcp-config"); i < 0 || i+1 >= len(args) || args[i+1] != "/w/.uhp/mcp.json" {
+		t.Fatalf("the generated config never reaches the CLI: %v", args)
+	}
+	if !argvContains(args, "--strict-mcp-config") {
+		t.Fatalf("the host's MCP servers are connected alongside the configured ones: %v", args)
 	}
 }
 

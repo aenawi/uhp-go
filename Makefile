@@ -1,4 +1,4 @@
-.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude
+.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude probe-claude-delivery
 
 build:
 	go build -o bin/uhpd ./cmd/uhpd
@@ -105,3 +105,14 @@ CLAUDE_CAPTURE ?= claude-capture.jsonl
 
 capture-claude:
 	@python3 scripts/capture-claude-stream.py --out $(CLAUDE_CAPTURE)
+
+# The second Claude Code probe, and the other half of what `go test` cannot
+# reach: `capture-claude` checks what the CLI says back, this checks what it
+# does with the configuration uhpd hands it (#19). Five runs against a logged-in
+# CLI — a tool block with its control, an MCP server that must be reached, one
+# that must not be, and the control proving the isolation is this invocation's
+# doing. It starts its own MCP endpoints on loopback and needs no network.
+#
+# Run it after every Claude Code upgrade, alongside `capture-claude`.
+probe-claude-delivery:
+	@python3 scripts/probe-claude-delivery.py

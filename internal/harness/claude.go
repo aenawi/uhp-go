@@ -45,7 +45,32 @@ func NewClaude(models []string) *CLIHarness {
 			// exists to catch. Accepted by Claude Code 2.1.238 (verified by
 			// execution: the CLI ran with the flag and complained about the
 			// login, not the option).
-			args := []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"}
+			//
+			// `--strict-mcp-config` is unconditional, and that is the point.
+			// `--mcp-config` adds a configuration; it does not replace the set.
+			// Without this flag Claude Code also loads the host's own MCP
+			// configurations — user scope, the working directory's `.mcp.json`,
+			// plugins — so the run's MCP surface is whatever the machine happens
+			// to have plus whatever the harness configured. That is a superset
+			// the operator never authorised, and it is how a server they
+			// explicitly disabled gets contacted anyway (§4.1: a disabled entry
+			// "MUST NOT be contacted at all"). Putting it here rather than in
+			// MCPArgs covers the case MCPArgs cannot see: a harness configured
+			// with *no* MCP servers, whose runs would otherwise inherit every
+			// server on the box.
+			//
+			// Verified by execution 2026-08-23 against Claude Code 2.1.240
+			// (#19). A server named only in the working directory's `.mcp.json`
+			// was contacted — initialize, tools/list — and its tool advertised
+			// to the model, on a run whose `--mcp-config` did not mention it.
+			// With this flag the init event listed exactly the one configured
+			// server and that server's request log stayed empty. Alone, with no
+			// `--mcp-config` beside it, the flag is accepted and the run reports
+			// `"mcp_servers":[]`.
+			args := []string{
+				"-p", "--output-format", "stream-json", "--verbose",
+				"--include-partial-messages", "--strict-mcp-config",
+			}
 			if req.Model != "" {
 				args = append(args, "--model", req.Model)
 			}
@@ -73,16 +98,27 @@ func NewClaude(models []string) *CLIHarness {
 		},
 		ParseLine: parseClaudeLine,
 
-		// UNVERIFIED — both flags are documented for Claude Code, but unlike
-		// grok's and pi's they have not been run against the real binary here.
-		// If either is wrong the failure is loud (the CLI rejects the flag and
-		// the task fails to start) rather than silent, which is the right
-		// direction for an unverified claim: a harness that appeared to run
-		// with its tools un-blocked would be worse.
+		// Both flags were declared from Claude Code's documentation and, unlike
+		// grok's and pi's, had never been run against the real binary (#19).
+		// They have now, against 2.1.240 on 2026-08-23, by
+		// `make probe-claude-delivery` — which does not stop at the spelling,
+		// because a flag the CLI accepts and does not act on is the failure
+		// worth catching:
 		//
-		// They are now the only unverified claims here: the delta shape, which
-		// was the worse kind because it failed silently, is checked off the
-		// wire by `make capture-claude`. These two are tracked in #19.
+		//   - `--disallowedTools Bash` does not merely refuse the call. Bash is
+		//     absent from the init event's tool list, so the model is never
+		//     offered it and says so when asked to run a command. The same run
+		//     without the flag used Bash and returned its output.
+		//   - The list is comma-joined rather than space-separated, though
+		//     `--help` allows either: the flag is variadic, so a space-separated
+		//     list would spread across argv elements. `Bash,Read` removed both.
+		//   - `--mcp-config` reaches the server. The generated document's
+		//     `Authorization` header arrived on every request, tools/list and
+		//     tools/call were served, and the model returned the secret only
+		//     that server knows.
+		//   - A server the document does not name is not contacted — but only
+		//     because of `--strict-mcp-config` in BuildArgs. See there; it is
+		//     the half of §4.1 these two flags do not cover on their own.
 		MCPArgs: func(configPath string) []string {
 			return []string{"--mcp-config", configPath}
 		},

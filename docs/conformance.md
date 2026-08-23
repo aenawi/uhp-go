@@ -250,12 +250,17 @@ not counted as one.
 **What is genuinely weaker than the checks can see** is how much of a harness's
 configuration each runtime *enforces*, as opposed to being asked to honour. The suite
 tests that skills, MCP servers and disabled tools round-trip through the API; it does not
-test whether the agent was actually prevented from using a tool. Two of the three
-mechanisms for `claude-code` — `--disallowedTools` and `--mcp-config` — are documented but
-have not been run against the real binary, and are marked UNVERIFIED in
-`internal/harness/claude.go`. They are now the only such claim left: issue #13 settled
-opencode's prompt delivery by execution. `grok-cli` and `pi` were read from their own
-`--help` on a machine where they are installed. See the delivery table in the README.
+test whether the agent was actually prevented from using a tool.
+
+For `claude-code` that gap is now covered outside the suite. `--disallowedTools` and
+`--mcp-config` were documented and never executed (issue #19); `make probe-claude-delivery`
+executes them and watches the effect — the blocked tool is absent from the session's tool
+list, the configured MCP server is contacted as the configured principal, and a server the
+generated document does not name is not contacted at all. That last one needed a fix rather
+than a check: `--mcp-config` adds a configuration instead of replacing the set, so runs also
+carry `--strict-mcp-config`. `grok-cli` and `pi` were read from their own `--help` on a
+machine where they are installed, which is the weaker claim. See the delivery table in the
+README.
 
 **Nothing in the suite watches a silent stream.** Every streaming check asks a harness to
 answer, so events arrive promptly and the gap Errors §5 is about never opens. Stream
@@ -312,8 +317,10 @@ uhp-conformance --base-url http://localhost:8080 --api-key devkey \
 F-01 discovers a base to build on by POSTing a deliberately bogus one and reading
 `error.detail.supported` off the refusal, so that field is load-bearing for the check
 that follows it, not decoration on an error. It picks the first entry, which sorts to
-`claude-code` — the one base whose delivery mechanisms are unverified, so a run on a
-machine without that CLI installed measures the API and not the enforcement.
+`claude-code` — the base whose enforcement this repository has gone furthest to verify, and
+therefore the one whose absence is most worth noticing. A run on a machine without that CLI
+installed measures the API and not the enforcement, so name the harness explicitly rather
+than letting the sort choose.
 
 A workspace is required for more than the file checks now: skill folders are materialised
 into the session working directory, so a harness carrying skills refuses to run without

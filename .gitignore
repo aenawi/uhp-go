@@ -10,6 +10,10 @@ conformance-report.json
 # ones lifted into the fixtures in cli_test.go, not the whole run.
 claude-capture.jsonl
 
+# `probe-claude-delivery.py` imports its sibling MCP server, and importing a
+# Python module compiles it.
+scripts/__pycache__/
+
 # A task database, and the two files SQLite keeps beside one. `UHP_DB=./uhp.db`
 # or a workspace pointed at the checkout puts one here, and it holds every
 # prompt a client sent and every answer a harness gave — a committed one

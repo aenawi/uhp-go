@@ -50,6 +50,7 @@ HARNESS_ARGV = [
     "stream-json",
     "--verbose",
     "--include-partial-messages",
+    "--strict-mcp-config",
 ]
 
 # This list used to carry `--bare`, and the probe used to refuse to run inside a
