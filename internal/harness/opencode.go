@@ -48,8 +48,7 @@ func NewOpenCode(models []string) *CLIHarness {
 		// never discovered, so the branch was unreachable and every
 		// continuation quietly started a new conversation.
 		Capabilities: []domain.Capability{
-			domain.CapStreaming, domain.CapFilesIn, domain.CapFilesOut,
-			domain.CapSessions, domain.CapTools,
+			domain.CapStreaming, domain.CapSessions, domain.CapTools,
 		},
 		// `opencode models` prints the models this install's configured
 		// providers actually expose, which is the only honest source: there is

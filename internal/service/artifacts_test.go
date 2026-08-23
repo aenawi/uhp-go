@@ -23,11 +23,15 @@ type writingAdapter struct {
 	seen   harness.RunRequest
 }
 
+// It declares neither file capability, exactly as every shipped harness now
+// does, and that omission is part of what these tests check: file input and
+// artifact capture are the router's, so an adapter that says nothing about them
+// still receives its attachments and still has its output captured. An adapter
+// that had to claim them would be a claim the router never reads.
 func (a *writingAdapter) Info() domain.Harness {
 	return domain.Harness{ID: "chrn_writer", Base: "writer", Object: "harness", Name: "Writer",
 		Capabilities: []domain.Capability{
-			domain.CapStreaming, domain.CapFilesIn, domain.CapFilesOut,
-			domain.CapSessions, domain.CapCancellation,
+			domain.CapStreaming, domain.CapSessions, domain.CapCancellation,
 		}}
 }
 func (a *writingAdapter) HealthCheck(context.Context) error { return nil }

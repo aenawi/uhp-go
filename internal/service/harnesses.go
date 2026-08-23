@@ -143,6 +143,9 @@ func (s *TaskService) SupportedBases() []string {
 // into this server and the ones a client created.
 func (s *TaskService) ListHarnesses(ctx context.Context) ([]domain.Harness, error) {
 	out := s.registry.List()
+	for i := range out {
+		out[i] = s.withRouterCapabilities(out[i])
+	}
 	if s.harnesses == nil {
 		return out, nil
 	}
@@ -160,7 +163,7 @@ func (s *TaskService) ListHarnesses(ctx context.Context) ([]domain.Harness, erro
 // GetHarness answers GET /v1/harnesses/{id}, accepting an id or an alias.
 func (s *TaskService) GetHarness(ctx context.Context, id string) (domain.Harness, bool, error) {
 	if a, ok := s.registry.Get(id); ok {
-		return a.Info(), true, nil
+		return s.withRouterCapabilities(a.Info()), true, nil
 	}
 	cfg, ok, err := s.managedConfig(ctx, id)
 	if err != nil || !ok {
@@ -476,10 +479,12 @@ func (s *TaskService) baseAdapter(base string) (harness.Adapter, bool) {
 
 // harnessView renders a stored configuration as the harness object a client
 // sees. Managed.Info recomputes the base-derived fields and strips the MCP
-// credentials.
+// credentials; withRouterCapabilities adds what this router delivers rather
+// than the base, so a managed harness answers the file question the same way
+// the base it was built on does.
 func (s *TaskService) harnessView(cfg domain.HarnessConfig) domain.Harness {
 	base, _ := s.baseAdapter(cfg.Base)
-	return harness.NewManaged(cfg, base).Info()
+	return s.withRouterCapabilities(harness.NewManaged(cfg, base).Info())
 }
 
 // adapterFor resolves a harness id — compiled-in or managed, canonical or

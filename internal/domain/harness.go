@@ -3,6 +3,16 @@ package domain
 // Capability flags describe what a harness backend can do.
 type Capability string
 
+// Three of the six are not a backend's to claim, and no harness declaration
+// lists them:
+//
+//   - CapCancellation belongs to the shared runner, which starts every harness
+//     in its own process group and stops it by killing it. harness.Build adds it.
+//   - CapFilesIn and CapFilesOut belong to the router, which writes a task's
+//     attachments into the session working directory and diffs that directory
+//     afterwards, consulting no adapter either time. Both also need a configured
+//     workspace, so they are computed per deployment rather than declared at
+//     all — see service.withRouterCapabilities.
 const (
 	CapStreaming    Capability = "streaming"
 	CapFilesIn      Capability = "files_in"
