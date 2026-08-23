@@ -182,6 +182,27 @@ func (p *process) run(ctx context.Context, req RunRequest) (<-chan RunUpdate, er
 				stderrBuf = append(stderrBuf, sc.Bytes()...)
 				stderrBuf = append(stderrBuf, '\n')
 			}
+			// A scan error here cannot fail the run — stderr is not the answer,
+			// and a diagnostic too long to read is no reason to discard a
+			// successful one. But it must not pass for the whole of what the CLI
+			// said: stderrBuf is quoted verbatim into the failure below, so an
+			// unmarked truncation is a partial diagnostic presented as complete,
+			// which is the same lie the stdout path refuses to tell — and it
+			// would be told at the exact moment someone is reading the message
+			// to find out why a run failed. Say so in the buffer instead.
+			if err := sc.Err(); err != nil {
+				stderrBuf = append(stderrBuf,
+					fmt.Sprintf("\n[harness: stderr truncated: %v]\n", err)...)
+				// And keep reading. The scanner has given up but the child has
+				// not: it is still writing into a pipe with no reader, and once
+				// that pipe fills it blocks forever. A blocked child never
+				// exits, so it never writes stdout and never closes it — which
+				// hangs the stdout scan below and cmd.Wait after it, with no
+				// timeout to break the deadlock and the process leaked until
+				// the caller's own context expires. Draining costs nothing and
+				// is the only thing that guarantees the child can finish.
+				_, _ = io.Copy(io.Discard, stderr)
+			}
 		}()
 
 		// send delivers one update, giving up if the consumer has gone away.
