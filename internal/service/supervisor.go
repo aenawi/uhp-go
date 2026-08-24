@@ -7,6 +7,8 @@ import (
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // Run is a supervised task: one goroutine owns the task's lifetime and is the
@@ -83,7 +85,7 @@ func newRun(taskID, sessionID string, feed *Feed, cancel, release func()) *Run {
 // Both writes happen here, in the one place an event enters the world, so
 // there is no path that reaches a task's own stream without also reaching the
 // harness feed — the two cannot disagree about what happened.
-func (r *Run) publish(ev domain.Event) {
+func (r *Run) publish(ev uhpgo.Event) {
 	r.log.append(ev)
 	r.feed.publish(ev, r.TaskID, r.SessionID)
 }
@@ -110,7 +112,7 @@ func (r *Run) finish() {
 // other subscriber sees. Streaming and non-streaming therefore cannot
 // disagree: they read the same log. A reconnecting client passes the number it
 // last saw plus one and is handed the rest, with nothing replayed.
-func (r *Run) Events(ctx context.Context, from int, idle IdleTick, fn func(domain.Event) error) error {
+func (r *Run) Events(ctx context.Context, from int, idle IdleTick, fn func(uhpgo.Event) error) error {
 	return r.log.subscribe(ctx, from, idle, fn)
 }
 
@@ -316,7 +318,7 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 	}()
 
 	seq := newSequencer()
-	run.publish(seq.next(domain.Event{Type: "response.created", Response: cloneTask(task)}))
+	run.publish(seq.next(uhp.Event{Type: "response.created", Response: responseOf(task)}))
 
 	for upd := range updates {
 		evs, err := s.applyUpdate(ctx, task, upd, seq, rs)
@@ -341,9 +343,9 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 	// requires every task to end terminal, and a task stuck "in_progress"
 	// forever is the exact defect this design exists to prevent.
 	if !isTerminalStatus(task.Status) {
-		task.Status = domain.StatusFailed
-		task.Error = &domain.TaskError{
-			Type:    "harness_error",
+		task.Status = uhp.StatusFailed
+		task.Error = &uhp.Error{
+			Type:    uhp.ErrorTypeHarness,
 			Code:    "harness_error",
 			Message: "the harness closed its update stream without reporting a terminal state",
 		}
@@ -358,9 +360,9 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 	}
 }
 
-func isTerminalStatus(st domain.TaskStatus) bool {
+func isTerminalStatus(st uhp.ResponseStatus) bool {
 	switch st {
-	case domain.StatusCompleted, domain.StatusFailed, domain.StatusCancelled, domain.StatusIncomplete:
+	case uhp.StatusCompleted, uhp.StatusFailed, uhp.StatusCancelled, uhp.StatusIncomplete:
 		return true
 	}
 	return false
@@ -369,17 +371,28 @@ func isTerminalStatus(st domain.TaskStatus) bool {
 // cloneTask copies a task for embedding in an event, so that a later mutation
 // by the supervisor cannot retroactively change an event a subscriber has
 // already been handed.
-func cloneItem(it *domain.OutputItem) *domain.OutputItem {
+func cloneItem(it *uhp.OutputItem) *uhp.OutputItem {
 	cp := *it
-	cp.Content = append([]domain.ContentPart(nil), it.Content...)
+	cp.Content = append([]uhp.ContentPart(nil), it.Content...)
 	return &cp
+}
+
+// responseOf snapshots the wire response a task will be reported as.
+//
+// An event carries the response object, not the task: the six internal fields
+// have no place on a stream, and [uhp.Event].Response is typed as the protocol
+// object precisely so they cannot travel by accident. The clone is what makes
+// it a snapshot — the task keeps changing after the event is published.
+func responseOf(t *domain.Task) *uhp.Response {
+	cp := cloneTask(t)
+	return &cp.Response
 }
 
 func cloneTask(t *domain.Task) *domain.Task {
 	cp := *t
-	cp.Output = append([]domain.OutputItem(nil), t.Output...)
+	cp.Output = append([]uhp.OutputItem(nil), t.Output...)
 	for i := range cp.Output {
-		cp.Output[i].Content = append([]domain.ContentPart(nil), t.Output[i].Content...)
+		cp.Output[i].Content = append([]uhp.ContentPart(nil), t.Output[i].Content...)
 	}
 	if t.Metadata != nil {
 		cp.Metadata = make(map[string]any, len(t.Metadata))

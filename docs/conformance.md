@@ -347,6 +347,71 @@ repository's tests alone — `internal/service/feed_test.go` and
 single connection cannot show: that a second subscriber attaching at sequence *n* is handed
 exactly the events from *n* onward and none of the ones before it.
 
+**Nothing in the suite sends eight of the thirteen request fields.**
+`CreateResponseRequest` has 13 properties in the schema; `createTaskBody` reads five. The 52
+checks contain no reference to `max_step`, `timeout_seconds`, `max_output_tokens`,
+`instructions` or `include`, so the 52/52 `full` result is silent about every one of them —
+and about `tools` and `store` besides. Dropping them is the specified behaviour rather than a
+defect: Tasks §1.1 marks all eight optional and requires a server to ignore request fields it
+does not understand rather than reject them. So this is not a check that fails, and not a
+check that passes; it is a column of the request surface the suite never fills in. Issue #48.
+
+All thirteen are now *published*, on `uhp.CreateResponseRequest`, which widens the distance
+rather than closing it: a caller can set `MaxStep` in Go, against a server that will ignore
+it, and get no error from either side. That is the deliberate consequence recorded in
+ADR-0002 — the package models the protocol, not this server — and it is why the gap is
+written down here instead of being hidden by a narrower type. Two of the eight carry a MUST
+*if honoured*: a server that acts on `max_step` or `timeout_seconds` must stop at or after
+the budget, report `incomplete`, and never report `completed` for truncated work.
+Implementing them later means implementing that too.
+
+`store` is the one worth naming separately, because the field is not merely unimplemented but
+inert: `Task.Store` is hardcoded `true` at `internal/service/task_service.go:357` and the
+request's own `store` is never consulted. Tasks §4 says a server MAY answer `404` with
+`response_not_found` for a response created with `store: false` — MAY, so retaining it anyway
+is permitted, and the `store: true` echoed back is an accurate report of what this server
+did. No check sends `store: false`, so nothing has ever asked.
+
+**Nothing in the suite provokes a failed adapter start,** which is how an error object
+missing a schema-required field survived to be found by reading the specification rather than
+by running anything. Issue #47: `domain.TaskError.Type` carried `omitempty` against a field
+the schema lists in `required`, and the adapter-start path set no type at all — so a client
+following UHP's fourth client rule, treat an unrecognised `code` as its `type`, was handed
+nothing to fall back on. A missing CLI binary is not a condition the 52 checks arrange, and
+nothing in this repository validated a marshalled object against the published schema either.
+The second half of that is what [#16](https://github.com/aenawi/uhp-go/issues/16) adds: a
+local schema test costs nothing, runs on every push, and would have caught it on the first
+run.
+
+**The schema test and the suite measure different things, and neither substitutes.**
+`uhp/schema_test.go` marshals every public type and validates it against a vendored copy of
+`uhp-2026-08-11.schema.json` — the twenty-three objects, plus a check that no object in the
+schema is missing a Go type. It is free, deterministic, and part of `go test ./...`, so it
+runs on every push where the suite runs on a maintainer's machine and costs real tokens.
+
+What it proves is that the *published types* are the protocol. What it cannot prove is that
+this server emits them: it never starts a task, never opens a stream, and would stay green
+against a server that returned the right shapes with the wrong contents. The suite is the
+only thing that answers that, and it in turn never touches the Go types — nothing in its 52
+checks would notice `uhp.Response` drifting from what the handlers write. The overlap between
+the two is empty by construction, which is why both exist.
+
+One check does bridge them:
+`TestServerStreamDecodesWithThePublishedDecoder` in `internal/transport/http/sse_test.go`
+feeds this server's own SSE output to `uhp.EventDecoder`. Framing is the one place a server
+and a client written in the same repository can drift silently — each half tested against
+bytes its own package wrote — and a suite green on both halves would say nothing about the
+join.
+
+**One field left the wire.** A failed task's `error` used to carry `retryable: true`, which
+is not in the schema and never appeared on the HTTP error envelope that models the same
+object. Collapsing both renderings onto `uhp.Error` removed it (ADR-0002; the shape survives
+as `uhpgo.Error` for anyone holding older responses). Nothing measured it — the suite does
+not mention it and nothing in this repository read it back — and Errors §4 already makes the
+error *type* the retry signal, which that failure sets to `harness_error`. It is recorded
+here because "no check noticed" is the reason it was safe to remove, not a reason it did not
+happen.
+
 Nothing is advertised for either in the discovery document. The capability vocabulary is
 the specification's and neither feature has a key in it, so a key invented here would be a
 private dialect rather than a claim a client could rely on. What is on the wire instead is

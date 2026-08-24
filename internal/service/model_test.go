@@ -7,6 +7,8 @@ import (
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // reportingAdapter names the model it ran on its own output, the way claude,
@@ -17,7 +19,7 @@ type reportingAdapter struct {
 	reports string
 }
 
-func (a reportingAdapter) Info() domain.Harness {
+func (a reportingAdapter) Info() uhpgo.Harness {
 	info := a.echoAdapter.Info()
 	info.ID, info.Base, info.Name = "chrn_reporting", "reporting", "Reporting"
 	info.Models = []string{"echo-1", "echo-2"}
@@ -124,10 +126,10 @@ func TestAHarnessThatNamesItsModelReplacesTheDefaultGuess(t *testing.T) {
 // CLI to enumerate. It is the one shape #43's symptom survives in.
 type silentAdapter struct{ echoAdapter }
 
-func (silentAdapter) Info() domain.Harness {
-	return domain.Harness{ID: "chrn_silent", Base: "silent", Object: "harness", Name: "Silent",
-		Models: []string{}, DefaultModel: "",
-		Capabilities: []domain.Capability{domain.CapStreaming, domain.CapSessions, domain.CapCancellation}}
+func (silentAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: "chrn_silent", Base: "silent", Object: "harness", Name: "Silent", DefaultModel: ""},
+		Models:       []string{},
+		Capabilities: []uhpgo.Capability{uhpgo.CapStreaming, uhpgo.CapSessions, uhpgo.CapCancellation}}
 }
 
 // The limit of the fix, asserted rather than left to be discovered. A harness

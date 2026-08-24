@@ -3,7 +3,7 @@ package service
 import (
 	"fmt"
 
-	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // CapabilityError is a request for something the harness does not advertise.
@@ -22,7 +22,7 @@ import (
 // it already holds.
 type CapabilityError struct {
 	HarnessID  string
-	Capability domain.Capability
+	Capability uhpgo.Capability
 
 	// Consequence names what the client asked for, in the client's own terms,
 	// so the message says what will not happen rather than only which flag is
@@ -41,7 +41,7 @@ func (e *CapabilityError) Error() string {
 // The check reads the same list a client can read, so a client that consults
 // discovery first never sees this error at all, and one that does not is told
 // exactly which capability it assumed.
-func requireCapability(h domain.Harness, c domain.Capability, consequence string) error {
+func requireCapability(h uhpgo.Harness, c uhpgo.Capability, consequence string) error {
 	if h.HasCapability(c) {
 		return nil
 	}
@@ -73,18 +73,18 @@ func requireCapability(h domain.Harness, c domain.Capability, consequence string
 // Every path that hands a client a harness object goes through here —
 // ListHarnesses, GetHarness, and harnessView for the managed ones — so that
 // two endpoints cannot describe the same harness differently.
-func (s *TaskService) withRouterCapabilities(h domain.Harness) domain.Harness {
+func (s *TaskService) withRouterCapabilities(h uhpgo.Harness) uhpgo.Harness {
 	// A fresh slice: Managed.Info hands back the base adapter's own capability
 	// list, and appending to it could write into the array the base is still
 	// serving to everyone else.
-	caps := make([]domain.Capability, 0, len(h.Capabilities)+2)
+	caps := make([]uhpgo.Capability, 0, len(h.Capabilities)+2)
 	for _, c := range h.Capabilities {
-		if c != domain.CapFilesIn && c != domain.CapFilesOut {
+		if c != uhpgo.CapFilesIn && c != uhpgo.CapFilesOut {
 			caps = append(caps, c)
 		}
 	}
 	if s.FilesEnabled() {
-		caps = append(caps, domain.CapFilesIn, domain.CapFilesOut)
+		caps = append(caps, uhpgo.CapFilesIn, uhpgo.CapFilesOut)
 	}
 	h.Capabilities = caps
 	return h

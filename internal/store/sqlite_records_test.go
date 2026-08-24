@@ -28,8 +28,8 @@ func TestSQLiteRecordsCoverDomainFields(t *testing.T) {
 		atLeast int
 	}{
 		{name: "task", domainType: domain.Task{}, recordType: taskRecord{}, atLeast: 19},
-		{name: "session", domainType: domain.Session{}, recordType: sessionRecord{}, atLeast: 8},
-		{name: "artifact", domainType: domain.Artifact{}, recordType: artifactRecord{}, atLeast: 6},
+		{name: "session", domainType: domain.Session{}, recordType: sessionRecord{}, atLeast: 9},
+		{name: "artifact", domainType: domain.Artifact{}, recordType: artifactRecord{}, atLeast: 7},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -57,12 +57,29 @@ func TestSQLiteRecordsCoverDomainFields(t *testing.T) {
 	}
 }
 
+// fieldNames flattens a struct's fields, walking into embedded ones.
+//
+// The walk is the whole point since the domain types started embedding their
+// wire objects. reflect reports an embedded struct as one field named after its
+// type, so a plain loop would see domain.Task as eight fields — "Response" plus
+// the seven internal ones — and report that a record covering all nineteen has
+// eleven fields the type does not. Worse, it would be blind to exactly the
+// twelve fields the protocol owns: an addition to uhp.Response, which is the
+// change most likely to be dropped on the way to disk, would pass unnoticed.
 func fieldNames(v any) map[string]bool {
-	rt := reflect.TypeOf(v)
-	out := make(map[string]bool, rt.NumField())
-	for i := 0; i < rt.NumField(); i++ {
-		out[rt.Field(i).Name] = true
+	out := map[string]bool{}
+	var walk func(reflect.Type)
+	walk = func(rt reflect.Type) {
+		for i := 0; i < rt.NumField(); i++ {
+			f := rt.Field(i)
+			if f.Anonymous && f.Type.Kind() == reflect.Struct {
+				walk(f.Type)
+				continue
+			}
+			out[f.Name] = true
+		}
 	}
+	walk(reflect.TypeOf(v))
 	return out
 }
 

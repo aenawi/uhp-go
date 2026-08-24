@@ -8,16 +8,19 @@ import (
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/service"
+	"github.com/aenawi/uhp-go/uhp"
 )
 
-func newTask(id string, status domain.TaskStatus) *domain.Task {
+func newTask(id string, status uhp.ResponseStatus) *domain.Task {
 	return &domain.Task{
-		ID:        id,
-		Object:    "response",
-		Status:    status,
-		Model:     "m",
-		Store:     true,
-		CreatedAt: time.Unix(1700000000, 0).UTC(),
+		Response: uhp.Response{
+			ID:        id,
+			Object:    "response",
+			Status:    status,
+			Model:     "m",
+			Store:     true,
+			CreatedAt: 1700000000,
+		},
 		UpdatedAt: time.Unix(1700000001, 0).UTC(),
 	}
 }
@@ -27,7 +30,7 @@ func TestGetTask(t *testing.T) {
 	srv := newFakeServer(&fakeService{
 		getTask: func(_ context.Context, id string) (*domain.Task, error) {
 			asked = id
-			return newTask(id, domain.StatusCompleted), nil
+			return newTask(id, uhp.StatusCompleted), nil
 		},
 	})
 
@@ -38,7 +41,7 @@ func TestGetTask(t *testing.T) {
 	if asked != "resp_1" {
 		t.Fatalf("handler asked for %q, want resp_1", asked)
 	}
-	if body["id"] != "resp_1" || body["status"] != string(domain.StatusCompleted) {
+	if body["id"] != "resp_1" || body["status"] != string(uhp.StatusCompleted) {
 		t.Fatalf("unexpected response: %v", body)
 	}
 }
@@ -96,7 +99,7 @@ func TestCancelTaskReturnsTheTask(t *testing.T) {
 			return nil
 		},
 		getTask: func(_ context.Context, id string) (*domain.Task, error) {
-			return newTask(id, domain.StatusCancelled), nil
+			return newTask(id, uhp.StatusCancelled), nil
 		},
 	})
 
@@ -107,7 +110,7 @@ func TestCancelTaskReturnsTheTask(t *testing.T) {
 	if cancelled != "resp_1" {
 		t.Fatalf("cancelled %q, want resp_1", cancelled)
 	}
-	if body["status"] != string(domain.StatusCancelled) {
+	if body["status"] != string(uhp.StatusCancelled) {
 		t.Fatalf("expected a cancelled task, got %v", body)
 	}
 }

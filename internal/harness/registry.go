@@ -4,7 +4,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // Registry resolves a harness id to its adapter and lists what is registered.
@@ -65,10 +65,10 @@ func (r *Registry) Resolve(id string) (string, bool) {
 // different order on every request, and clients — including the UHP
 // conformance suite — routinely take "the first harness listed" as the default,
 // so an unordered list hands successive callers different harnesses.
-func (r *Registry) List() []domain.Harness {
+func (r *Registry) List() []uhpgo.Harness {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]domain.Harness, 0, len(r.adapters))
+	out := make([]uhpgo.Harness, 0, len(r.adapters))
 	for _, a := range r.adapters {
 		out = append(out, a.Info())
 	}

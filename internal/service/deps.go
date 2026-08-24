@@ -5,6 +5,7 @@ import (
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // Registry resolves a harness id to its adapter and lists what is registered.
@@ -15,7 +16,7 @@ import (
 // and there is no third package for both sides to agree with.
 type Registry interface {
 	Get(harnessID string) (harness.Adapter, bool)
-	List() []domain.Harness
+	List() []uhpgo.Harness
 	// Resolve maps an id or a friendly alias to the canonical harness id.
 	Resolve(harnessID string) (string, bool)
 }
@@ -67,8 +68,8 @@ type Store interface {
 // of them — and a deployment that wants uploads on disk while tasks stay in
 // memory should be able to say so without reimplementing the rest.
 type Uploads interface {
-	Put(ctx context.Context, up domain.Upload) error
-	Get(ctx context.Context, id string) (domain.Upload, error)
+	Put(ctx context.Context, up uhpgo.Upload) error
+	Get(ctx context.Context, id string) (uhpgo.Upload, error)
 }
 
 // HarnessStore persists the harnesses a client created over the API

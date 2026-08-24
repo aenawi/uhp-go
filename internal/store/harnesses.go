@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 // FileHarnesses persists the harnesses a client created over the API as one
@@ -189,7 +190,7 @@ func (f *FileHarnesses) flush() error {
 // PutHarness.
 func copyHarnessConfig(h domain.HarnessConfig) domain.HarnessConfig {
 	out := h
-	out.McpServers = make([]domain.McpServer, len(h.McpServers))
+	out.McpServers = make([]uhp.McpServer, len(h.McpServers))
 	for i, m := range h.McpServers {
 		copied := m
 		if m.Enabled != nil {
@@ -204,14 +205,14 @@ func copyHarnessConfig(h domain.HarnessConfig) domain.HarnessConfig {
 		}
 		out.McpServers[i] = copied
 	}
-	out.Skills = make([]domain.Skill, len(h.Skills))
+	out.Skills = make([]uhp.Skill, len(h.Skills))
 	for i, s := range h.Skills {
 		copied := s
 		if s.Enabled != nil {
 			enabled := *s.Enabled
 			copied.Enabled = &enabled
 		}
-		copied.Files = append([]domain.SkillFile(nil), s.Files...)
+		copied.Files = append([]uhp.SkillFile(nil), s.Files...)
 		out.Skills[i] = copied
 	}
 	out.DisabledTools = append([]string(nil), h.DisabledTools...)

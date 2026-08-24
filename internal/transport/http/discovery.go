@@ -3,11 +3,16 @@ package http
 import (
 	"net/http"
 
-	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // UHPVersion is the protocol version this server implements.
-const UHPVersion = "2026-08-11"
+//
+// Taken from the package whose types describe it, rather than spelled again
+// here: a server that served one version and published the shapes of another
+// would be wrong in a way no test in this package could see.
+const UHPVersion = uhp.Version
 
 // supportedVersions is every version this server can serve.
 var supportedVersions = []string{UHPVersion}
@@ -20,54 +25,47 @@ var supportedVersions = []string{UHPVersion}
 // corresponding capabilities are genuinely true.
 const ConformanceClass = "core"
 
-type discoveryDoc struct {
-	Object           string          `json:"object"`
-	Protocol         string          `json:"protocol"`
-	Versions         []string        `json:"versions"`
-	DefaultVersion   string          `json:"default_version"`
-	ConformanceClass string          `json:"conformance_class"`
-	Capabilities     map[string]bool `json:"capabilities"`
-	Implementation   map[string]any  `json:"implementation"`
-}
-
 // capabilities reports what this server actually implements.
 //
-// Every key is present with an explicit boolean, never omitted: a client must
-// be able to tell "not supported" from "this server is older than the field".
-// Reporting false for something unimplemented is the honest answer and is what
-// keeps conformance_class consistent with reality.
+// It returns [uhp.Capabilities] rather than the map[string]bool this used to
+// build, and the difference is not cosmetic. Every capability must be present
+// with an explicit boolean, never omitted, so that a client can tell "not
+// supported" from "this server is older than the field" — and a map is a shape
+// in which forgetting a key is possible. A struct reports the full set or does
+// not compile.
+//
 // The two file capabilities are computed rather than asserted, because they
 // depend on configuration: file input and artifact capture both need a
 // per-session working directory, and without UHP_WORKSPACE there is nowhere to
 // put a client's file and nothing to diff for artifacts.
-func capabilities(files, harnessManagement bool) map[string]bool {
-	return map[string]bool{
-		"streaming":          true,
-		"sessions":           true,
-		"cancellation":       true,
-		"files_input":        files,
-		"files_output":       files,
-		"session_listing":    true,
-		"harness_management": harnessManagement,
-		"session_sharing":    false,
+func capabilities(files, harnessManagement bool) uhp.Capabilities {
+	return uhp.Capabilities{
+		Streaming:         true,
+		Sessions:          true,
+		Cancellation:      true,
+		FilesInput:        files,
+		FilesOutput:       files,
+		SessionListing:    true,
+		HarnessManagement: harnessManagement,
+		SessionSharing:    false,
 		// Unconditional, unlike the two file capabilities: an idempotency key
 		// needs no configuration, only somewhere to remember it, and this
 		// server always has that. It is remembered in memory, so a restart
 		// forgets every key — and every task, in the default store, so a key
 		// that survived would point at a response that did not.
-		"idempotency": true,
+		Idempotency: true,
 	}
 }
 
 func (s *Server) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, discoveryDoc{
+	writeJSON(w, http.StatusOK, uhp.Discovery{
 		Object:           "uhp.discovery",
 		Protocol:         "uhp",
 		Versions:         supportedVersions,
 		DefaultVersion:   UHPVersion,
 		ConformanceClass: ConformanceClass,
 		Capabilities:     capabilities(s.tasks.FilesEnabled(), s.tasks.HarnessManagementEnabled()),
-		Implementation:   map[string]any{"name": "uhp-go", "version": Version},
+		Implementation:   &uhp.Implementation{Name: "uhp-go", Version: Version},
 	})
 }
 
@@ -117,7 +115,7 @@ func (s *Server) handleListHarnesses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if hs == nil {
-		hs = []domain.Harness{}
+		hs = []uhpgo.Harness{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"harnesses": hs})
 }
@@ -142,12 +140,21 @@ func writeHarnessNotFound(w http.ResponseWriter, id string) {
 		"no harness with id "+id)
 }
 
-type modelEntry struct {
-	ID        string `json:"id"`
-	Label     string `json:"label"`
-	Backend   string `json:"backend"`
-	Available bool   `json:"available"`
-	Default   bool   `json:"default"`
+// modelsFor builds one harness's model entries.
+//
+// Available is computed rather than asserted, and the schema is unusually
+// pointed about why: listing a model as available and then failing the task is
+// the worst outcome for a client, because a user has already chosen it.
+func (s *Server) modelsFor(r *http.Request, h uhpgo.Harness) []uhp.Model {
+	entries := make([]uhp.Model, 0, len(h.Models))
+	for _, m := range h.Models {
+		entries = append(entries, uhp.Model{
+			ID: m, Label: m, Backend: h.Base,
+			Available: s.tasks.ModelAvailable(r.Context(), h.ID, m),
+			Default:   m == h.DefaultModel,
+		})
+	}
+	return entries
 }
 
 // handleListModels answers GET /v1/models with the catalogue, keyed by backend.
@@ -157,21 +164,14 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	backends := map[string]any{}
+	backends := map[string]uhp.ModelCatalogBackend{}
 	for _, h := range harnesses {
-		entries := make([]modelEntry, 0, len(h.Models))
-		for _, m := range h.Models {
-			entries = append(entries, modelEntry{
-				ID: m, Label: m, Backend: h.Base,
-				// Computed, not asserted: this reflects whether the CLI is
-				// actually reachable right now.
-				Available: s.tasks.ModelAvailable(r.Context(), h.ID, m),
-				Default:   m == h.DefaultModel,
-			})
+		backends[h.Base] = uhp.ModelCatalogBackend{
+			Default: h.DefaultModel,
+			Models:  s.modelsFor(r, h),
 		}
-		backends[h.Base] = map[string]any{"default": h.DefaultModel, "models": entries}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"backends": backends})
+	writeJSON(w, http.StatusOK, uhp.ModelCatalog{Backends: backends})
 }
 
 // handleHarnessModels answers GET /v1/harnesses/{id}/models.
@@ -186,19 +186,14 @@ func (s *Server) handleHarnessModels(w http.ResponseWriter, r *http.Request) {
 		writeHarnessNotFound(w, id)
 		return
 	}
-	entries := make([]modelEntry, 0, len(h.Models))
-	for _, m := range h.Models {
-		entries = append(entries, modelEntry{
-			ID: m, Label: m, Backend: h.Base,
-			Available: s.tasks.ModelAvailable(r.Context(), h.ID, m),
-			Default:   m == h.DefaultModel,
-		})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"harness_id": h.ID,
-		"backend":    h.Base,
-		"default":    h.DefaultModel,
-		"fallback":   h.DefaultModel,
-		"models":     entries,
+	writeJSON(w, http.StatusOK, uhp.HarnessModels{
+		HarnessID: h.ID,
+		Backend:   h.Base,
+		Default:   h.DefaultModel,
+		// This server does not substitute: an unavailable model is refused
+		// with model_unavailable rather than quietly replaced, so the only
+		// model it would ever fall back to is the default it already named.
+		Fallback: h.DefaultModel,
+		Models:   s.modelsFor(r, h),
 	})
 }

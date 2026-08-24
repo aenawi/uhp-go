@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // NewClaude declares the Claude Code harness (`claude -p --output-format
@@ -19,8 +20,8 @@ func NewClaude(models []string) *CLIHarness {
 		Vendor: "Anthropic",
 		Binary: "claude",
 		Models: models,
-		Capabilities: []domain.Capability{
-			domain.CapStreaming, domain.CapSessions, domain.CapTools,
+		Capabilities: []uhpgo.Capability{
+			uhpgo.CapStreaming, uhpgo.CapSessions, uhpgo.CapTools,
 		},
 		// No ModelsArgs: Claude Code is the one harness here that cannot
 		// enumerate its own models. `claude --help` has no listing command and
@@ -246,7 +247,7 @@ func parseClaudeLine(line string) []RunUpdate {
 
 	// The result event carries the run totals.
 	if ev.Type == "result" && ev.Usage != nil {
-		updates = append(updates, RunUpdate{Type: UpdateUsage, Usage: &domain.Usage{
+		updates = append(updates, RunUpdate{Type: UpdateUsage, Usage: &uhp.Usage{
 			InputTokens:      ev.Usage.InputTokens,
 			OutputTokens:     ev.Usage.OutputTokens,
 			TotalTokens:      ev.Usage.InputTokens + ev.Usage.OutputTokens,

@@ -6,6 +6,8 @@ import (
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/service"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // fakeService is a TaskService whose behaviour a test sets one method at a
@@ -22,8 +24,8 @@ import (
 type fakeService struct {
 	TaskService
 
-	listHarnesses  func(context.Context) ([]domain.Harness, error)
-	getHarness     func(context.Context, string) (domain.Harness, bool, error)
+	listHarnesses  func(context.Context) ([]uhpgo.Harness, error)
+	getHarness     func(context.Context, string) (uhpgo.Harness, bool, error)
 	modelAvailable func(context.Context, string, string) bool
 
 	startTask  func(context.Context, service.CreateTaskRequest) (*domain.Task, *service.Run, error)
@@ -32,15 +34,15 @@ type fakeService struct {
 
 	listSessions  func(context.Context, domain.SessionFilter) (domain.SessionPage, error)
 	getSession    func(context.Context, string) (*domain.Session, error)
-	sessionTurns  func(context.Context, string) ([]domain.Turn, error)
+	sessionTurns  func(context.Context, string) ([]uhp.Turn, error)
 	cancelSession func(context.Context, string) error
 }
 
-func (f *fakeService) ListHarnesses(ctx context.Context) ([]domain.Harness, error) {
+func (f *fakeService) ListHarnesses(ctx context.Context) ([]uhpgo.Harness, error) {
 	return f.listHarnesses(ctx)
 }
 
-func (f *fakeService) GetHarness(ctx context.Context, id string) (domain.Harness, bool, error) {
+func (f *fakeService) GetHarness(ctx context.Context, id string) (uhpgo.Harness, bool, error) {
 	return f.getHarness(ctx, id)
 }
 
@@ -72,7 +74,7 @@ func (f *fakeService) GetSession(ctx context.Context, id string) (*domain.Sessio
 	return f.getSession(ctx, id)
 }
 
-func (f *fakeService) SessionTurns(ctx context.Context, id string) ([]domain.Turn, error) {
+func (f *fakeService) SessionTurns(ctx context.Context, id string) ([]uhp.Turn, error) {
 	return f.sessionTurns(ctx, id)
 }
 

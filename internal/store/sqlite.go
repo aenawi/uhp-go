@@ -5,11 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/aenawi/uhp-go/internal/domain"
 
@@ -48,9 +46,16 @@ const sqliteSchemaVersion = 1
 // columns would buy nothing — no query selects on a task's usage or its error
 // code — and would turn every field added to domain.Task into a migration.
 //
-// `created_at` is Unix nanoseconds and is derived: the authoritative timestamp
-// is the one inside `data`, and this copy exists only so the index can order
-// on it. See sortKey.
+// `created_at` is Unix seconds and is derived: the authoritative timestamp is
+// the one inside `data`, and this copy exists only so the index can order on
+// it.
+//
+// It used to be nanoseconds, written through a `sortKey` helper that saturated
+// rather than let time.Time.UnixNano wrap outside 1678–2262 — where the zero
+// time came back as a large positive number and sorted as the newest row in
+// the table. Both are gone: a task and a session now carry their created_at as
+// the Unix seconds the wire object uses, so the value written here is the value
+// itself, and there is no conversion left to get wrong.
 var sqliteSchema = []string{
 	`CREATE TABLE IF NOT EXISTS tasks (
 		id         TEXT PRIMARY KEY,
@@ -58,9 +63,16 @@ var sqliteSchema = []string{
 		created_at INTEGER NOT NULL,
 		data       TEXT NOT NULL
 	)`,
-	// ListSessionTasks reads a session's tasks oldest first, and this index is
-	// the whole of that query: the same order, and the id already there to
-	// break ties.
+	// ListSessionTasks reads a session's tasks oldest first, and this index
+	// serves that query.
+	//
+	// The query breaks ties on rowid rather than on the `id` column here,
+	// which is deliberate and is why the two do not match. created_at is Unix
+	// seconds — the protocol's resolution — so two tasks in one session
+	// routinely share it, and a task id is a UUID: ordering on it would shuffle
+	// a transcript rather than order it. rowid is the order the rows were
+	// inserted, which is the order the tasks ran. The residual sort within one
+	// second is over a handful of rows.
 	`CREATE INDEX IF NOT EXISTS tasks_by_session ON tasks (session_id, created_at, id)`,
 	`CREATE TABLE IF NOT EXISTS sessions (
 		id         TEXT PRIMARY KEY,
@@ -233,7 +245,7 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, t *domain.Task) error {
 			session_id = excluded.session_id,
 			created_at = excluded.created_at,
 			data       = excluded.data`,
-		t.ID, t.SessionID, sortKey(t.CreatedAt), data)
+		t.ID, t.SessionID, t.CreatedAt, data)
 	if err != nil {
 		return fmt.Errorf("store: create task %s: %w", t.ID, err)
 	}
@@ -247,7 +259,7 @@ func (s *SQLiteStore) UpdateTask(ctx context.Context, t *domain.Task) error {
 	}
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE tasks SET session_id = ?, created_at = ?, data = ? WHERE id = ?`,
-		t.SessionID, sortKey(t.CreatedAt), data, t.ID)
+		t.SessionID, t.CreatedAt, data, t.ID)
 	if err != nil {
 		return fmt.Errorf("store: update task %s: %w", t.ID, err)
 	}
@@ -338,7 +350,7 @@ func (s *SQLiteStore) CreateSession(ctx context.Context, sess *domain.Session) e
 			harness_id = excluded.harness_id,
 			created_at = excluded.created_at,
 			data       = excluded.data`,
-		sess.ID, sess.HarnessID, sortKey(sess.CreatedAt), data)
+		sess.ID, sess.HarnessID, sess.CreatedAt, data)
 	if err != nil {
 		return fmt.Errorf("store: create session %s: %w", sess.ID, err)
 	}
@@ -369,7 +381,7 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, sess *domain.Session) e
 	}
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE sessions SET harness_id = ?, created_at = ?, data = ? WHERE id = ?`,
-		sess.HarnessID, sortKey(sess.CreatedAt), data, sess.ID)
+		sess.HarnessID, sess.CreatedAt, data, sess.ID)
 	if err != nil {
 		return fmt.Errorf("store: update session %s: %w", sess.ID, err)
 	}
@@ -486,7 +498,7 @@ func (s *SQLiteStore) cursorPosition(ctx context.Context, f domain.SessionFilter
 // ListSessionTasks returns a session's tasks in the order they ran.
 func (s *SQLiteStore) ListSessionTasks(ctx context.Context, sessionID string) ([]*domain.Task, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT data FROM tasks WHERE session_id = ? ORDER BY created_at ASC, id ASC`, sessionID)
+		SELECT data FROM tasks WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("store: list tasks for %s: %w", sessionID, err)
 	}
@@ -508,29 +520,4 @@ func (s *SQLiteStore) ListSessionTasks(ctx context.Context, sessionID string) ([
 		return nil, fmt.Errorf("store: list tasks for %s: %w", sessionID, err)
 	}
 	return out, nil
-}
-
-// sortKey is the ordering value written to a created_at column. The
-// authoritative timestamp is the one inside the JSON document; this is derived
-// and only has to order.
-//
-// UnixNano is undefined outside 1678–2262 and wraps rather than saturating, so
-// the zero time — which is the earliest instant there is — would come back as
-// a large positive number and sort as the newest row in the table. Saturating
-// puts it where MemoryStore's comparison would.
-//
-// Two distinct out-of-range instants do collapse to the same key, so SQLite
-// breaks their tie by id where MemoryStore would order them by time. Nothing
-// this server mints lands there — CreatedAt comes from time.Now — and the
-// alternative is a wrap that misorders the one out-of-range value that is
-// reachable, the zero time of a task built without one.
-func sortKey(t time.Time) int64 {
-	switch {
-	case t.Year() < 1678:
-		return math.MinInt64
-	case t.Year() > 2262:
-		return math.MaxInt64
-	default:
-		return t.UnixNano()
-	}
 }

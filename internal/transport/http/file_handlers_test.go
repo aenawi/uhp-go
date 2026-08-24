@@ -19,6 +19,8 @@ import (
 	"github.com/aenawi/uhp-go/internal/harness"
 	"github.com/aenawi/uhp-go/internal/service"
 	"github.com/aenawi/uhp-go/internal/store"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // producingAdapter is a harness that reads whatever it was given and writes a
@@ -28,8 +30,8 @@ type producingAdapter struct {
 	seenDir string
 }
 
-func (a *producingAdapter) Info() domain.Harness {
-	return domain.Harness{ID: "chrn_writer", Base: "writer", Name: "Writer", Object: "harness"}
+func (a *producingAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: "chrn_writer", Base: "writer", Name: "Writer", Object: "harness"}}
 }
 func (a *producingAdapter) HealthCheck(context.Context) error { return nil }
 func (a *producingAdapter) Cancel(context.Context, string) error {

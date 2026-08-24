@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/aenawi/uhp-go/internal/service"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // vendorCodeEventGap is a resumption whose starting point the server has
@@ -12,7 +13,7 @@ import (
 // Errors §3 has no entry for it — the specification describes resumption but
 // not its refusal — so the code carries the vendor prefix rather than
 // borrowing a standard one that means something else.
-const vendorCodeEventGap = "uhpgo_event_gap"
+const vendorCodeEventGap = uhpgo.CodeEventGap
 
 // handleHarnessEvents answers GET /v1/harnesses/{id}/events with the live
 // event stream of one harness.

@@ -4,19 +4,18 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
-func echoHarness() domain.Harness {
-	return domain.Harness{
-		ID:           "chrn_echo",
+func echoHarness() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: "chrn_echo",
 		Object:       "harness",
 		Name:         "Echo",
 		Base:         "echo",
-		DefaultModel: "fast",
-		Models:       []string{"fast", "slow"},
-		Status:       domain.HarnessReady,
-	}
+		DefaultModel: "fast"},
+		Models: []string{"fast", "slow"},
+		Status: uhpgo.HarnessReady}
 }
 
 // modelEntries pulls one backend's model list out of GET /v1/models.
@@ -40,8 +39,8 @@ func modelEntries(t *testing.T, body map[string]any, backend string) []any {
 func TestListModelsComputesAvailability(t *testing.T) {
 	asked := map[string]bool{}
 	srv := newFakeServer(&fakeService{
-		listHarnesses: func(context.Context) ([]domain.Harness, error) {
-			return []domain.Harness{echoHarness()}, nil
+		listHarnesses: func(context.Context) ([]uhpgo.Harness, error) {
+			return []uhpgo.Harness{echoHarness()}, nil
 		},
 		modelAvailable: func(_ context.Context, harnessID, model string) bool {
 			asked[harnessID+"/"+model] = true
@@ -83,8 +82,8 @@ func TestListModelsEmptyCatalogueIsAnArray(t *testing.T) {
 	h.Models = nil
 	h.DefaultModel = ""
 	srv := newFakeServer(&fakeService{
-		listHarnesses: func(context.Context) ([]domain.Harness, error) {
-			return []domain.Harness{h}, nil
+		listHarnesses: func(context.Context) ([]uhpgo.Harness, error) {
+			return []uhpgo.Harness{h}, nil
 		},
 		modelAvailable: func(context.Context, string, string) bool { return true },
 	})
@@ -100,7 +99,7 @@ func TestListModelsEmptyCatalogueIsAnArray(t *testing.T) {
 
 func TestHarnessModels(t *testing.T) {
 	srv := newFakeServer(&fakeService{
-		getHarness: func(_ context.Context, id string) (domain.Harness, bool, error) {
+		getHarness: func(_ context.Context, id string) (uhpgo.Harness, bool, error) {
 			if id != "echo" {
 				t.Fatalf("handler asked for %q", id)
 			}
@@ -133,8 +132,8 @@ func TestHarnessModels(t *testing.T) {
 
 func TestHarnessModelsUnknownHarness(t *testing.T) {
 	srv := newFakeServer(&fakeService{
-		getHarness: func(context.Context, string) (domain.Harness, bool, error) {
-			return domain.Harness{}, false, nil
+		getHarness: func(context.Context, string) (uhpgo.Harness, bool, error) {
+			return uhpgo.Harness{}, false, nil
 		},
 	})
 
@@ -154,7 +153,7 @@ func TestHarnessModelsUnknownHarness(t *testing.T) {
 // must not be confused with.
 func TestListHarnessesEmptyIsAnArrayNotNull(t *testing.T) {
 	srv := newFakeServer(&fakeService{
-		listHarnesses: func(context.Context) ([]domain.Harness, error) { return nil, nil },
+		listHarnesses: func(context.Context) ([]uhpgo.Harness, error) { return nil, nil },
 	})
 
 	status, body := callJSON(t, srv, "GET", "/v1/harnesses", "")

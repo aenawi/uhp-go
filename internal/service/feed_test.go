@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // errEnough stops a subscription that has read as much as its test wanted. A
@@ -14,13 +15,13 @@ import (
 var errEnough = errors.New("read enough")
 
 // take reads n events from a feed starting at `from`, or fails the test.
-func take(t *testing.T, f *Feed, from, n int) []domain.Event {
+func take(t *testing.T, f *Feed, from, n int) []uhpgo.Event {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	var evs []domain.Event
-	err := f.Events(ctx, from, IdleTick{}, func(ev domain.Event) error {
+	var evs []uhpgo.Event
+	err := f.Events(ctx, from, IdleTick{}, func(ev uhpgo.Event) error {
 		evs = append(evs, ev)
 		if len(evs) == n {
 			return errEnough
@@ -69,8 +70,8 @@ func TestHarnessFeedCarriesEveryRunOnThatHarness(t *testing.T) {
 
 	evs := take(t, feed, 0, 16)
 	for i, ev := range evs {
-		if ev.Seq != i {
-			t.Fatalf("event %d has sequence_number %d; a feed numbers its own stream", i, ev.Seq)
+		if ev.SequenceNumber != i {
+			t.Fatalf("event %d has sequence_number %d; a feed numbers its own stream", i, ev.SequenceNumber)
 		}
 		want := first
 		if i >= 8 {
@@ -120,7 +121,7 @@ func TestHarnessFeedStaysOpenWhenTheHarnessGoesIdle(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	err = feed.Events(ctx, 8, IdleTick{}, func(domain.Event) error { return nil })
+	err = feed.Events(ctx, 8, IdleTick{}, func(uhpgo.Event) error { return nil })
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Events = %v, want the subscription to still be waiting", err)
 	}
@@ -141,8 +142,8 @@ func TestHarnessFeedResumesAfterTheEventTheClientSaw(t *testing.T) {
 	}
 
 	evs := take(t, feed, 8, 8)
-	if evs[0].Seq != 8 {
-		t.Fatalf("resumed at %d, want 8", evs[0].Seq)
+	if evs[0].SequenceNumber != 8 {
+		t.Fatalf("resumed at %d, want 8", evs[0].SequenceNumber)
 	}
 	for _, ev := range evs {
 		if ev.ResponseID != second {
@@ -171,8 +172,8 @@ func TestRunResumesAfterTheEventTheClientSaw(t *testing.T) {
 		t.Fatalf("run produced %d events, too few to resume within", len(all))
 	}
 
-	var got []domain.Event
-	if err := run.Events(ctx, 3, IdleTick{}, func(ev domain.Event) error {
+	var got []uhpgo.Event
+	if err := run.Events(ctx, 3, IdleTick{}, func(ev uhpgo.Event) error {
 		got = append(got, ev)
 		return nil
 	}); err != nil {
@@ -181,8 +182,8 @@ func TestRunResumesAfterTheEventTheClientSaw(t *testing.T) {
 	if len(got) != len(all)-3 {
 		t.Fatalf("resumed stream has %d events, want %d", len(got), len(all)-3)
 	}
-	if got[0].Seq != 3 {
-		t.Fatalf("resumed at %d, want 3", got[0].Seq)
+	if got[0].SequenceNumber != 3 {
+		t.Fatalf("resumed at %d, want 3", got[0].SequenceNumber)
 	}
 }
 
@@ -192,7 +193,7 @@ func TestRunResumesAfterTheEventTheClientSaw(t *testing.T) {
 func TestFeedRefusesAResumePointItHasDiscarded(t *testing.T) {
 	f := newFeed(4)
 	for i := 0; i < 10; i++ {
-		f.publish(domain.Event{Type: "response.output_text.delta"}, "resp_x", "sess_x")
+		f.publish(uhpgo.Event{Event: uhp.Event{Type: "response.output_text.delta"}}, "resp_x", "sess_x")
 	}
 
 	if f.Oldest() == 0 {
@@ -201,7 +202,7 @@ func TestFeedRefusesAResumePointItHasDiscarded(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err := f.Events(ctx, 0, IdleTick{}, func(domain.Event) error { return nil })
+	err := f.Events(ctx, 0, IdleTick{}, func(uhpgo.Event) error { return nil })
 
 	var gap *EventGapError
 	if !errors.As(err, &gap) {
@@ -219,10 +220,10 @@ func TestFeedKeepsAtLeastItsRetentionFloor(t *testing.T) {
 	const retain = 16
 	f := newFeed(retain)
 	for i := 0; i < 200; i++ {
-		f.publish(domain.Event{Type: "response.output_text.delta"}, "resp_x", "sess_x")
+		f.publish(uhpgo.Event{Event: uhp.Event{Type: "response.output_text.delta"}}, "resp_x", "sess_x")
 	}
 
-	newest := take(t, f, f.Oldest(), 1)[0].Seq
+	newest := take(t, f, f.Oldest(), 1)[0].SequenceNumber
 	if available := 200 - f.Oldest(); available < retain {
 		t.Fatalf("feed retains %d events (oldest %d, newest at least %d), want at least %d",
 			available, f.Oldest(), newest, retain)
@@ -235,7 +236,7 @@ func TestFeedKeepsAtLeastItsRetentionFloor(t *testing.T) {
 func TestFeedTellsASubscriberThatFellBehind(t *testing.T) {
 	f := newFeed(4)
 	for i := 0; i < 3; i++ {
-		f.publish(domain.Event{Type: "response.output_text.delta"}, "resp_x", "sess_x")
+		f.publish(uhpgo.Event{Event: uhp.Event{Type: "response.output_text.delta"}}, "resp_x", "sess_x")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -243,9 +244,9 @@ func TestFeedTellsASubscriberThatFellBehind(t *testing.T) {
 
 	// The first event is delivered, and then the log runs away underneath this
 	// subscriber before it asks for the second.
-	err := f.Events(ctx, 0, IdleTick{}, func(domain.Event) error {
+	err := f.Events(ctx, 0, IdleTick{}, func(uhpgo.Event) error {
 		for i := 0; i < 40; i++ {
-			f.publish(domain.Event{Type: "response.output_text.delta"}, "resp_x", "sess_x")
+			f.publish(uhpgo.Event{Event: uhp.Event{Type: "response.output_text.delta"}}, "resp_x", "sess_x")
 		}
 		return nil
 	})
@@ -291,7 +292,7 @@ func TestAFeedAskedForAfterDeletionIsAlreadyClosed(t *testing.T) {
 	// entry keeps is visible.
 	before := s.feed("chrn_gone")
 	for i := 0; i < 20; i++ {
-		before.publish(domain.Event{Type: "response.output_text.delta"}, "resp_x", "sess_x")
+		before.publish(uhpgo.Event{Event: uhp.Event{Type: "response.output_text.delta"}}, "resp_x", "sess_x")
 	}
 	s.closeFeed("chrn_gone")
 
@@ -300,7 +301,7 @@ func TestAFeedAskedForAfterDeletionIsAlreadyClosed(t *testing.T) {
 
 	after := s.feed("chrn_gone")
 	var seen int
-	if err := s.feed("chrn_gone").Events(ctx, 0, IdleTick{}, func(domain.Event) error {
+	if err := s.feed("chrn_gone").Events(ctx, 0, IdleTick{}, func(uhpgo.Event) error {
 		seen++
 		return nil
 	}); err != nil {
@@ -325,7 +326,7 @@ func TestDeletionEndsSubscribersAlreadyOnTheFeed(t *testing.T) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		done <- feed.Events(ctx, 0, IdleTick{}, func(domain.Event) error { return nil })
+		done <- feed.Events(ctx, 0, IdleTick{}, func(uhpgo.Event) error { return nil })
 	}()
 
 	s.closeFeed("chrn_gone")
@@ -347,12 +348,12 @@ func TestDeletionEndsSubscribersAlreadyOnTheFeed(t *testing.T) {
 func TestFromOldestIsResolvedInsideTheSubscription(t *testing.T) {
 	f := newFeed(4)
 	for i := 0; i < 30; i++ {
-		f.publish(domain.Event{Type: "response.output_text.delta"}, "resp_x", "sess_x")
+		f.publish(uhpgo.Event{Event: uhp.Event{Type: "response.output_text.delta"}}, "resp_x", "sess_x")
 	}
 
 	evs := take(t, f, FromOldest, 1)
-	if evs[0].Seq != f.Oldest() {
-		t.Fatalf("started at %d, want the oldest retained event %d", evs[0].Seq, f.Oldest())
+	if evs[0].SequenceNumber != f.Oldest() {
+		t.Fatalf("started at %d, want the oldest retained event %d", evs[0].SequenceNumber, f.Oldest())
 	}
 }
 
@@ -361,12 +362,12 @@ func TestFromOldestIsResolvedInsideTheSubscription(t *testing.T) {
 func TestFeedResumesWithinItsRetainedWindow(t *testing.T) {
 	f := newFeed(8)
 	for i := 0; i < 8; i++ {
-		f.publish(domain.Event{Type: "response.output_text.delta"}, "resp_x", "sess_x")
+		f.publish(uhpgo.Event{Event: uhp.Event{Type: "response.output_text.delta"}}, "resp_x", "sess_x")
 	}
 
 	evs := take(t, f, 6, 2)
-	if evs[0].Seq != 6 || evs[1].Seq != 7 {
-		t.Fatalf("resumed at %d,%d, want 6,7", evs[0].Seq, evs[1].Seq)
+	if evs[0].SequenceNumber != 6 || evs[1].SequenceNumber != 7 {
+		t.Fatalf("resumed at %d,%d, want 6,7", evs[0].SequenceNumber, evs[1].SequenceNumber)
 	}
 }
 
@@ -390,7 +391,7 @@ func TestDeletingAHarnessEndsItsFeed(t *testing.T) {
 	go func() {
 		sub, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		done <- feed.Events(sub, 0, IdleTick{}, func(domain.Event) error { return nil })
+		done <- feed.Events(sub, 0, IdleTick{}, func(uhpgo.Event) error { return nil })
 	}()
 
 	if err := svc.DeleteHarness(ctx, h.ID); err != nil {

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -14,21 +16,16 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// errorEnvelope is the body UHP requires on every non-2xx response
-// (Errors §1). Every field is required, and `param` and `detail` are present
-// as explicit nulls rather than omitted, so a client can tell "no value" from
-// "this server is older than the field".
-type errorEnvelope struct {
-	Error errorPayload `json:"error"`
-}
-
-type errorPayload struct {
-	Type    string         `json:"type"`
-	Code    string         `json:"code"`
-	Message string         `json:"message"`
-	Param   *string        `json:"param"`
-	Detail  map[string]any `json:"detail"`
-}
+// The envelope this package used to declare privately — an errorEnvelope and
+// an errorPayload — is [uhp.ErrorEnvelope] and [uhp.Error].
+//
+// They were not merely duplicates of the published types; the private payload
+// disagreed with the other rendering of the same schema object. It carried
+// `param` and `detail`, which the schema defines, and no `retryable`; the
+// error a failed task carried had `retryable` and neither of the other two. A
+// client reading one field off both found it in one and missing from the other
+// for no reason the specification explains. One type is what makes that
+// unrepresentable rather than merely fixed.
 
 func writeError(w http.ResponseWriter, status int, errType, code, message string) {
 	writeErrorFull(w, status, errType, code, message, "", nil)
@@ -37,12 +34,17 @@ func writeError(w http.ResponseWriter, status int, errType, code, message string
 // writeErrorFull is the one that actually writes; the three below name the
 // common shapes so a call site does not have to pass two zero values to say it
 // has neither a param nor a detail.
+//
+// The empty param becomes an explicit null rather than an empty string:
+// Errors §1 asks for the dotted path "whenever there is one", and a request
+// with no such field has none. Naming a field that is not in the request would
+// send a client looking for something it cannot find.
 func writeErrorFull(w http.ResponseWriter, status int, errType, code, message, param string, detail map[string]any) {
 	var p *string
 	if param != "" {
 		p = &param
 	}
-	writeJSON(w, status, errorEnvelope{Error: errorPayload{
+	writeJSON(w, status, uhp.ErrorEnvelope{Error: uhp.Error{
 		Type: errType, Code: code, Message: message, Param: p, Detail: detail,
 	}})
 }

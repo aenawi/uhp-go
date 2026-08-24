@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // ErrNoBase is returned when a managed harness names a base this server does
@@ -43,30 +45,32 @@ func NewManaged(cfg domain.HarnessConfig, base Adapter) *Managed {
 // result: a redaction the caller has to remember is one a future caller
 // forgets, and Harnesses §4.1 gives no second chance — a credential returned
 // once is a credential leaked.
-func (m *Managed) Info() domain.Harness {
-	h := domain.Harness{
-		ID:             m.cfg.ID,
-		Object:         "harness",
-		Name:           m.cfg.Name,
-		Base:           m.cfg.Base,
-		DefaultModel:   m.cfg.DefaultModel,
-		SystemPrompt:   m.cfg.SystemPrompt,
-		McpServers:     withoutCredentials(m.cfg.McpServers),
-		Skills:         m.cfg.Skills,
-		DisabledTools:  m.cfg.DisabledTools,
-		MaxStep:        m.cfg.MaxStep,
-		TimeoutSeconds: m.cfg.TimeoutSeconds,
-		CreatedAt:      m.cfg.CreatedAt,
-		Status:         domain.HarnessUnavailable,
+func (m *Managed) Info() uhpgo.Harness {
+	h := uhpgo.Harness{
+		Harness: uhp.Harness{
+			ID:             m.cfg.ID,
+			Object:         "harness",
+			Name:           m.cfg.Name,
+			Base:           m.cfg.Base,
+			DefaultModel:   m.cfg.DefaultModel,
+			SystemPrompt:   m.cfg.SystemPrompt,
+			McpServers:     withoutCredentials(m.cfg.McpServers),
+			Skills:         m.cfg.Skills,
+			DisabledTools:  m.cfg.DisabledTools,
+			MaxStep:        m.cfg.MaxStep,
+			TimeoutSeconds: m.cfg.TimeoutSeconds,
+			CreatedAt:      m.cfg.CreatedAt,
+		},
+		Status: uhpgo.HarnessUnavailable,
 	}
 	if h.Skills == nil {
-		h.Skills = []domain.Skill{}
+		h.Skills = []uhp.Skill{}
 	}
 	if h.DisabledTools == nil {
 		h.DisabledTools = []string{}
 	}
 	h.Models = []string{}
-	h.Capabilities = []domain.Capability{}
+	h.Capabilities = []uhpgo.Capability{}
 
 	if m.base == nil {
 		return h
@@ -106,7 +110,7 @@ func (m *Managed) Available(model string) bool {
 	// unqualified `true` here is the "assert rather than compute" failure
 	// Harnesses §3.1 exists to forbid.
 	info := m.base.Info()
-	if info.Status != domain.HarnessReady {
+	if info.Status != uhpgo.HarnessReady {
 		return false
 	}
 	if model == "" {
@@ -159,8 +163,8 @@ func (m *Managed) Cancel(ctx context.Context, taskID string) error {
 // Harnesses §4.1: "A server must never return a resolved credential to a
 // client." The copy matters as much as the blanking — clearing the field in
 // place would erase the credential this server still has to connect with.
-func withoutCredentials(servers []domain.McpServer) []domain.McpServer {
-	out := make([]domain.McpServer, len(servers))
+func withoutCredentials(servers []uhp.McpServer) []uhp.McpServer {
+	out := make([]uhp.McpServer, len(servers))
 	for i, m := range servers {
 		m.Auth = ""
 		out[i] = m

@@ -1,6 +1,9 @@
 package service
 
-import "github.com/aenawi/uhp-go/internal/domain"
+import (
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
+)
 
 // sequencer owns event numbering for one run.
 //
@@ -14,8 +17,14 @@ type sequencer struct{ n int }
 func newSequencer() *sequencer { return &sequencer{} }
 
 // next stamps the event with the next sequence number.
-func (s *sequencer) next(ev domain.Event) domain.Event {
-	ev.Seq = s.n
+//
+// It takes the protocol event and returns this server's, which is the shape the
+// two extension fields actually have: a task's own stream leaves ResponseID and
+// SessionID empty, and only [Feed.publish] fills them, because only a feed
+// multiplexes enough runs for an event to need attributing. Numbering is
+// protocol; attribution is not.
+func (s *sequencer) next(ev uhp.Event) uhpgo.Event {
+	ev.SequenceNumber = s.n
 	s.n++
-	return ev
+	return uhpgo.Event{Event: ev}
 }

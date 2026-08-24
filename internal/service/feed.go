@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // feedRetention is how many of the most recent events a harness feed always
@@ -52,18 +52,22 @@ func newFeed(retain int) *Feed {
 // subscriber a stream whose sequence_number restarts at every task — and a
 // `Last-Event-ID` would then name several different events rather than one.
 // Streaming §1 numbers a stream, and this is a different stream.
-func (f *Feed) publish(ev domain.Event, taskID, sessionID string) {
-	ev.ResponseID = taskID
-	ev.SessionID = sessionID
-
+// It is also where the two uhpgo extension fields are set, and the only place:
+// a run's own log keeps the protocol event untouched, so the extension exists
+// exactly where it earns its keep.
+func (f *Feed) publish(ev uhpgo.Event, taskID, sessionID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.log.append(f.seq.next(ev))
+
+	out := f.seq.next(ev.Event)
+	out.ResponseID = taskID
+	out.SessionID = sessionID
+	f.log.append(out)
 }
 
 // Events calls fn for every event numbered `from` or later, until ctx is
 // cancelled or the harness is deleted. See eventLog.subscribe.
-func (f *Feed) Events(ctx context.Context, from int, idle IdleTick, fn func(domain.Event) error) error {
+func (f *Feed) Events(ctx context.Context, from int, idle IdleTick, fn func(uhpgo.Event) error) error {
 	return f.log.subscribe(ctx, from, idle, fn)
 }
 

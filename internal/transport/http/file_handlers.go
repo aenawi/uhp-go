@@ -108,7 +108,7 @@ func (s *Server) handleSessionArchive(w http.ResponseWriter, r *http.Request) {
 			s.log.Warn("artifact missing from archive", "session_id", sessionID, "file_id", a.ID)
 			continue
 		}
-		entry, err := zw.Create(a.Path)
+		entry, err := zw.Create(a.Filename)
 		if err == nil {
 			_, err = io.Copy(entry, f)
 		}
@@ -150,7 +150,7 @@ func (s *Server) handleDownloadArtifact(w http.ResponseWriter, r *http.Request) 
 	// The header names one file, so it carries the base name even though the
 	// listing's `filename` carries the path within the container.
 	w.Header().Set("Content-Disposition", contentDisposition(a.BaseName()))
-	w.Header().Set("Content-Length", strconv.FormatInt(a.SizeBytes, 10))
+	w.Header().Set("Content-Length", strconv.FormatInt(a.Bytes, 10))
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.Copy(w, f); err != nil {
 		s.log.Debug("artifact download interrupted", "error", err)

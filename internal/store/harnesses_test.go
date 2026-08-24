@@ -7,12 +7,13 @@ import (
 	"testing"
 
 	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 func testConfig(id, name string) domain.HarnessConfig {
 	return domain.HarnessConfig{
 		ID: id, Name: name, Base: "claude-code", CreatedAt: 1786403298205,
-		Skills: []domain.Skill{{Name: "manual", Files: []domain.SkillFile{
+		Skills: []uhp.Skill{{Name: "manual", Files: []uhp.SkillFile{
 			{Path: "SKILL.md", Content: "---\nname: manual\n---\n"},
 			{Path: "assets/blob.bin", ContentB64: "AAECAwQF"},
 		}}},

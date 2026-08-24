@@ -5,8 +5,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/service"
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 // harnessBody is the create and replace body (Harnesses §5.1 and §5.2).
@@ -23,15 +23,15 @@ import (
 // — so a second set of structs would be five more places to forget a field in
 // exchange for nothing.
 type harnessBody struct {
-	Name           string             `json:"name"`
-	Base           string             `json:"base"`
-	DefaultModel   string             `json:"default_model"`
-	SystemPrompt   string             `json:"system_prompt"`
-	McpServers     []domain.McpServer `json:"mcp_servers"`
-	Skills         []domain.Skill     `json:"skills"`
-	DisabledTools  []string           `json:"disabled_tools"`
-	MaxStep        *int               `json:"max_step"`
-	TimeoutSeconds *int               `json:"timeout_seconds"`
+	Name           string          `json:"name"`
+	Base           string          `json:"base"`
+	DefaultModel   string          `json:"default_model"`
+	SystemPrompt   string          `json:"system_prompt"`
+	McpServers     []uhp.McpServer `json:"mcp_servers"`
+	Skills         []uhp.Skill     `json:"skills"`
+	DisabledTools  []string        `json:"disabled_tools"`
+	MaxStep        *int            `json:"max_step"`
+	TimeoutSeconds *int            `json:"timeout_seconds"`
 }
 
 // patch reads the same body as a partial update. `present` carries which keys
@@ -44,8 +44,8 @@ func (b harnessBody) patch(present map[string]json.RawMessage) service.HarnessPa
 		Base:           service.Optional[string]{Set: set("base"), Value: b.Base},
 		DefaultModel:   service.Optional[string]{Set: set("default_model"), Value: b.DefaultModel},
 		SystemPrompt:   service.Optional[string]{Set: set("system_prompt"), Value: b.SystemPrompt},
-		McpServers:     service.Optional[[]domain.McpServer]{Set: set("mcp_servers"), Value: b.McpServers},
-		Skills:         service.Optional[[]domain.Skill]{Set: set("skills"), Value: b.Skills},
+		McpServers:     service.Optional[[]uhp.McpServer]{Set: set("mcp_servers"), Value: b.McpServers},
+		Skills:         service.Optional[[]uhp.Skill]{Set: set("skills"), Value: b.Skills},
 		DisabledTools:  service.Optional[[]string]{Set: set("disabled_tools"), Value: b.DisabledTools},
 		MaxStep:        service.Optional[*int]{Set: set("max_step"), Value: b.MaxStep},
 		TimeoutSeconds: service.Optional[*int]{Set: set("timeout_seconds"), Value: b.TimeoutSeconds},

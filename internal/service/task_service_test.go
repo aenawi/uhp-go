@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
 	"github.com/aenawi/uhp-go/internal/store"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // echoAdapter completes immediately.
@@ -20,24 +21,28 @@ type echoAdapter struct{}
 // The capability list is what the router now enforces, so a double that stands
 // in for a fully-featured harness has to say so — exactly as a real declaration
 // does, and for the same reason: what is advertised is what may be asked for.
-func (echoAdapter) Info() domain.Harness {
-	return domain.Harness{ID: "chrn_echo", Base: "echo", Object: "harness", Name: "Echo",
+func (echoAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{
+		Harness: uhp.Harness{
+			ID: "chrn_echo", Base: "echo", Object: "harness", Name: "Echo",
+			DefaultModel: "echo-1",
+		},
 		// A real adapter that can enumerate its models advertises them, and
 		// the router refuses anything outside the list. A double with an empty
 		// list would exercise the opposite path — "this base does not know
 		// what it serves" — so it names one.
-		Models:       []string{"echo-1"},
-		DefaultModel: "echo-1",
-		Capabilities: []domain.Capability{
-			domain.CapStreaming, domain.CapSessions, domain.CapCancellation,
-		}}
+		Models: []string{"echo-1"},
+		Capabilities: []uhpgo.Capability{
+			uhpgo.CapStreaming, uhpgo.CapSessions, uhpgo.CapCancellation,
+		},
+	}
 }
 
 // otherAdapter is a second, distinct harness, for the mismatch test.
 type otherAdapter struct{ echoAdapter }
 
-func (otherAdapter) Info() domain.Harness {
-	return domain.Harness{ID: "chrn_other", Base: "other", Object: "harness", Name: "Other"}
+func (otherAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: "chrn_other", Base: "other", Object: "harness", Name: "Other"}}
 }
 func (echoAdapter) HealthCheck(context.Context) error { return nil }
 func (echoAdapter) Run(_ context.Context, req harness.RunRequest) (<-chan harness.RunUpdate, error) {
@@ -76,10 +81,10 @@ func newSlowAdapter() *slowAdapter {
 	return &slowAdapter{started: make(chan struct{}), cancel: make(map[string]context.CancelFunc)}
 }
 
-func (a *slowAdapter) Info() domain.Harness {
-	return domain.Harness{ID: "slow", Name: "Slow",
-		Capabilities: []domain.Capability{
-			domain.CapStreaming, domain.CapSessions, domain.CapCancellation,
+func (a *slowAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: "slow", Name: "Slow"},
+		Capabilities: []uhpgo.Capability{
+			uhpgo.CapStreaming, uhpgo.CapSessions, uhpgo.CapCancellation,
 		}}
 }
 
@@ -131,7 +136,9 @@ var errNoSuchTask = errors.New("no such task")
 // an adapter bug the router must survive.
 type neverTerminalAdapter struct{}
 
-func (neverTerminalAdapter) Info() domain.Harness              { return domain.Harness{ID: "bad"} }
+func (neverTerminalAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: "bad"}}
+}
 func (neverTerminalAdapter) HealthCheck(context.Context) error { return nil }
 func (neverTerminalAdapter) Run(context.Context, harness.RunRequest) (<-chan harness.RunUpdate, error) {
 	ch := make(chan harness.RunUpdate, 1)
@@ -157,12 +164,12 @@ func newRegistryWith(as ...harness.Adapter) *harness.Registry {
 func newMemStore() Store       { return store.NewMemoryStore() }
 func testLogger() *slog.Logger { return slog.Default() }
 
-func collect(t *testing.T, run *Run) []domain.Event {
+func collect(t *testing.T, run *Run) []uhpgo.Event {
 	t.Helper()
-	var evs []domain.Event
+	var evs []uhpgo.Event
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := run.Events(ctx, 0, IdleTick{}, func(ev domain.Event) error {
+	if err := run.Events(ctx, 0, IdleTick{}, func(ev uhpgo.Event) error {
 		evs = append(evs, ev)
 		return nil
 	}); err != nil {
@@ -190,7 +197,7 @@ func TestStartTaskCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if got.Status != domain.StatusCompleted {
+	if got.Status != uhp.StatusCompleted {
 		t.Fatalf("status = %q, want completed", got.Status)
 	}
 	if got.Text() != "hello world" {
@@ -211,8 +218,8 @@ func TestSequenceNumbersStartAtZeroAndAreGapless(t *testing.T) {
 		t.Fatalf("expected several events, got %d", len(evs))
 	}
 	for i, ev := range evs {
-		if ev.Seq != i {
-			t.Fatalf("event %d has sequence_number %d; numbering must start at 0 and be gapless: %+v", i, ev.Seq, evs)
+		if ev.SequenceNumber != i {
+			t.Fatalf("event %d has sequence_number %d; numbering must start at 0 and be gapless: %+v", i, ev.SequenceNumber, evs)
 		}
 	}
 	if evs[0].Type != "response.created" {
@@ -235,7 +242,7 @@ func TestAllSubscribersSeeTheSameStream(t *testing.T) {
 		t.Fatalf("subscribers saw different lengths: %d vs %d", len(a), len(b))
 	}
 	for i := range a {
-		if a[i].Type != b[i].Type || a[i].Seq != b[i].Seq {
+		if a[i].Type != b[i].Type || a[i].SequenceNumber != b[i].SequenceNumber {
 			t.Fatalf("event %d differs: %+v vs %+v", i, a[i], b[i])
 		}
 	}
@@ -272,10 +279,10 @@ func TestClientDisconnectDoesNotStrandTheTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if got.Status == domain.StatusInProgress {
+	if got.Status == uhp.StatusInProgress {
 		t.Fatal("task is still in_progress after the client disconnected: it has been stranded")
 	}
-	if got.Status != domain.StatusCancelled {
+	if got.Status != uhp.StatusCancelled {
 		t.Fatalf("status = %q, want cancelled", got.Status)
 	}
 	// Sessions §4: output produced before cancellation MUST be retained.
@@ -312,7 +319,7 @@ func TestCancelDoesNotRaceTheUpdateStream(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetTask: %v", err)
 		}
-		if got.Status != domain.StatusCancelled {
+		if got.Status != uhp.StatusCancelled {
 			t.Fatalf("iteration %d: status = %q, want cancelled (a lost update)", i, got.Status)
 		}
 		if got.Error != nil {
@@ -361,10 +368,10 @@ func TestAdapterClosingWithoutTerminalStillEndsTerminal(t *testing.T) {
 		t.Fatalf("Wait: %v", err)
 	}
 	got, _ := svc.GetTask(ctx, task.ID)
-	if got.Status == domain.StatusInProgress {
+	if got.Status == uhp.StatusInProgress {
 		t.Fatal("adapter closed without a terminal update and the task was left in_progress forever")
 	}
-	if got.Status != domain.StatusFailed {
+	if got.Status != uhp.StatusFailed {
 		t.Fatalf("status = %q, want failed", got.Status)
 	}
 	// Terminal responses MUST retain whatever output was produced.

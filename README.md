@@ -50,6 +50,52 @@ disagree, treat it as a bug in this implementation and please open an issue —
 if the specification itself looks wrong or ambiguous, the issue is still the
 right place to start, and we will raise it upstream.
 
+## Using the wire types
+
+The protocol's objects are importable, so a client does not have to hand-roll them from the
+specification:
+
+```bash
+go get github.com/aenawi/uhp-go/uhp
+```
+
+```go
+import "github.com/aenawi/uhp-go/uhp"
+
+var resp uhp.Response
+if err := json.NewDecoder(body).Decode(&resp); err != nil { … }
+
+// Streaming: framing only — no HTTP, no retries, no auth.
+dec := uhp.NewEventDecoder(body)
+for {
+    ev, err := dec.Next()
+    if errors.Is(err, io.EOF) { break }
+    if err != nil { … }
+    switch ev.Type {
+    case uhp.EventOutputTextDelta:
+        io.WriteString(os.Stdout, ev.Delta)
+    }
+    // Every other type is ignored, which is UHP's second client rule.
+}
+```
+
+Three things worth knowing before you depend on it:
+
+- **It models the protocol, not this server.** All 23 schema objects are there with every
+  field, including the ones this server ignores — `docs/conformance.md` records which. A
+  type narrowed to one implementation would misrepresent UHP as being that narrow.
+- **`uhp` is the protocol; `uhp/uhpgo` is this server's additions.** Importing the second is
+  a dependency on this implementation. Nothing in `uhp` imports anything outside the standard
+  library, and module graph pruning means importing it does not pull the SQLite tree into
+  your build.
+- **Use keyed struct literals.** UHP permits adding response fields within a published
+  version and these types will follow; `uhp.Response{a, b, c}` stops compiling when one
+  arrives, and `uhp.Response{ID: …}` does not.
+
+The types are frozen by the specification rather than by us: UHP versions are dates, and a
+published version is immutable in structure. See
+[ADR-0002](docs/adr/0002-uhp-package-models-the-protocol.md).
+
 ## Conformance status
 
 UHP conformance is defined by a runnable suite, not by self-assessment. The suite lives
@@ -110,8 +156,14 @@ is the harness measured, when to run the gate, and what `S-09` can and cannot se
 Layered, dependency-inverted design (Clean/Hexagonal architecture):
 
 ```
+uhp/                       the published wire types: all 23 objects of UHP 2026-08-11, plus an
+                           SSE event decoder and a vendored copy of the schema. Imports only
+                           the standard library; this repository consumes it like any client
+uhp/uhpgo/                 what this server adds to UHP, kept out of uhp so the boundary
+                           between protocol and implementation is compiler-visible
 cmd/uhpd/                  composition root (main.go) — the only file wiring concrete types together
-internal/domain/           entities: Task, Harness, Session, Artifact, Event — no external deps
+internal/domain/           entities: Task, Session, Artifact — no external deps. Each embeds
+                           the uhp type it is reported as, so there is one shape per concept
 internal/harness/          the adapter contract, the shared subprocess runner, the
                            registry, and one ~30-line declaration per harness
 internal/service/          application core: TaskService; declares the Registry and Store
@@ -133,6 +185,11 @@ internal/config/           environment-variable configuration loader
 - Two stores behind one interface: SQLite when a path is configured, in memory when not.
   The SQLite driver is pure Go, so the binary still needs nothing installed to run or test.
 - Plain `net/http` with Go 1.22 method/path routing. No framework.
+- No wire shape exists anywhere outside `uhp/`. `domain.Task` embeds `uhp.Response`,
+  `domain.Artifact` embeds `uhp.File`, `domain.Session` embeds `uhp.Session`, and the
+  router's error envelope, discovery document and model catalogue are the published types
+  rather than private copies of them. A router whose purpose is to stop its clients
+  duplicating integrations is a poor place to duplicate the protocol internally.
 
 ## UHP surface implemented
 
@@ -774,6 +831,14 @@ make hooks   # git config core.hooksPath .githooks
 `.githooks/pre-push` builds, vets, checks formatting and runs the tests — about twenty
 seconds, no tokens. It is the same set CI runs, so a failure here is a red build you did not
 have to wait for. Bypass a single push with `git push --no-verify`.
+
+`go test ./...` includes `uhp/schema_test.go`, which marshals every published type and
+validates it against the vendored copy of `uhp-2026-08-11.schema.json` — and fails if the
+schema defines an object no Go type mirrors. It is the only thing in the repository that
+checks the types against the specification rather than against each other, and it is free.
+It does not overlap with the conformance gate below: that one proves *this server*
+conformant end to end and never looks at the Go types, so neither would catch what the other
+does. See [docs/conformance.md](docs/conformance.md).
 
 The conformance gate is separate and is *not* in that hook, because it spends real tokens on
 real agent tasks. It needs the suite installed and a running server, and it is a thing you

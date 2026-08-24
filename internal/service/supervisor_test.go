@@ -3,18 +3,21 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // refusingAdapter fails to start, the way a CLI that is not installed does.
 type refusingAdapter struct{ echoAdapter }
 
-func (refusingAdapter) Info() domain.Harness {
-	return domain.Harness{ID: "chrn_refusing", Base: "refusing", Object: "harness", Name: "Refusing"}
+func (refusingAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: "chrn_refusing", Base: "refusing", Object: "harness", Name: "Refusing"}}
 }
 
 func (refusingAdapter) Run(context.Context, harness.RunRequest) (<-chan harness.RunUpdate, error) {
@@ -116,6 +119,34 @@ func TestRunSlotIsReleasedWhenTheStartFails(t *testing.T) {
 		t.Fatalf("the only slot leaked on the failed starts: %v", err)
 	}
 	drain(t, svc, task.ID, run)
+}
+
+// Issue #47: the same failed start that the test above counts slots for used to
+// leave an error object the schema rejects — no `type` at all, and a code with
+// no vendor prefix for a condition the specification does not name. A client
+// following UHP's fourth client rule, treat an unrecognised code as its type,
+// was handed nothing to fall back on.
+func TestAFailedStartReportsASchemaShapedError(t *testing.T) {
+	svc := NewTaskService(newRegistryWith(refusingAdapter{}), newMemStore(), testLogger())
+
+	task, _, err := svc.StartTask(context.Background(), CreateTaskRequest{Input: "x", HarnessID: "refusing"})
+	if err == nil {
+		t.Fatal("the refusing adapter reported success")
+	}
+	if task == nil || task.Error == nil {
+		t.Fatal("a failed start left no error on the task")
+	}
+	if task.Error.Type != uhp.ErrorTypeServerError {
+		t.Errorf("error.type = %q, want %q: an adapter that would not start is this server's problem",
+			task.Error.Type, uhp.ErrorTypeServerError)
+	}
+	if !strings.HasPrefix(task.Error.Code, "uhpgo_") {
+		t.Errorf("error.code = %q, want a vendor prefix: the specification has no entry for this condition",
+			task.Error.Code)
+	}
+	if task.Status != uhp.StatusFailed {
+		t.Errorf("status = %q, want %q", task.Status, uhp.StatusFailed)
+	}
 }
 
 // A TaskService built without the option is still bounded. main.go always
@@ -233,7 +264,7 @@ func TestIdleTickFiresWhileNothingIsPublished(t *testing.T) {
 				}
 				return nil
 			},
-		}, func(domain.Event) error { return nil })
+		}, func(uhpgo.Event) error { return nil })
 	}()
 
 	for i := 1; i <= 3; i++ {
@@ -264,13 +295,13 @@ func TestIdleTickChangesNoEventOrder(t *testing.T) {
 	defer cancel()
 
 	for i := 0; i < 3; i++ {
-		run.publish(domain.Event{Type: "response.output_text.delta", Seq: i})
+		run.publish(uhpgo.Event{Event: uhp.Event{Type: "response.output_text.delta", SequenceNumber: i}})
 	}
 	run.finish()
 
 	var got []int
 	err := run.Events(ctx, 0, IdleTick{Every: time.Millisecond, Do: func() error { return nil }},
-		func(ev domain.Event) error { got = append(got, ev.Seq); return nil })
+		func(ev uhpgo.Event) error { got = append(got, ev.SequenceNumber); return nil })
 	if err != nil {
 		t.Fatalf("Events: %v", err)
 	}
@@ -292,7 +323,7 @@ func TestIdleTickErrorEndsTheSubscription(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- run.Events(ctx, 0, IdleTick{Every: time.Millisecond, Do: func() error { return want }},
-			func(domain.Event) error { return nil })
+			func(uhpgo.Event) error { return nil })
 	}()
 
 	select {

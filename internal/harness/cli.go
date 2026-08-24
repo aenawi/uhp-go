@@ -10,7 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // ErrUnsupportedModel is returned when a request names a model the harness
@@ -74,7 +75,7 @@ type CLIHarness struct {
 	// shared runner's, and the router adds the two file capabilities, which are
 	// its own and depend on the deployment having a workspace. See the
 	// Capability constants for the split, and Build below.
-	Capabilities []domain.Capability
+	Capabilities []uhpgo.Capability
 
 	// declared is what the declaration above asked for, kept as Build found it.
 	//
@@ -83,7 +84,7 @@ type CLIHarness struct {
 	// exactly what Build added, and a test reading only the finished list cannot
 	// tell a claim from a grant — which is how `cancellation` stayed in two
 	// declarations after it stopped being theirs to make.
-	declared []domain.Capability
+	declared []uhpgo.Capability
 
 	// ModelsArgs is argv that makes this CLI print the models it can actually
 	// serve, and ParseModels turns that output into ids. Nil means this CLI
@@ -179,10 +180,10 @@ func NewID(base string) string {
 func (h *CLIHarness) Build() *CLIHarness {
 	h.proc = newProcess(h.Binary, h.Prompt, h.argsFor, h.ParseLine)
 	h.declared = h.Capabilities
-	if !domain.HasCapability(h.Capabilities, domain.CapCancellation) {
+	if !uhpgo.HasCapability(h.Capabilities, uhpgo.CapCancellation) {
 		// A fresh slice: h.declared must keep pointing at the declaration, and
 		// appending in place could write into the array behind it.
-		h.Capabilities = append(append([]domain.Capability{}, h.Capabilities...), domain.CapCancellation)
+		h.Capabilities = append(append([]uhpgo.Capability{}, h.Capabilities...), uhpgo.CapCancellation)
 	}
 	return h
 }
@@ -286,7 +287,7 @@ func (h *CLIHarness) storeModels(discovered []string) {
 // once and cached the answer, so checking is free and forking a binary that is
 // not installed is not.
 func (h *CLIHarness) queryModels() []string {
-	if h.status() != domain.HarnessReady {
+	if h.status() != uhpgo.HarnessReady {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), modelQueryTimeout)
@@ -308,29 +309,31 @@ func firstModel(models []string) string {
 	return models[0]
 }
 
-func (h *CLIHarness) Info() domain.Harness {
+func (h *CLIHarness) Info() uhpgo.Harness {
 	// One read of the list, not one for `models` and another for the default.
 	// Between two reads the cache can expire and come back different, and a
 	// `defaultModel` that is absent from the `models` printed beside it is a
 	// discovery document contradicting itself.
 	models := h.models()
-	return domain.Harness{
-		ID:             h.ID,
-		Object:         "harness",
-		Name:           h.Name,
-		Base:           h.Base,
-		BaseLabel:      h.Name,
-		DefaultModel:   firstModel(models),
-		SystemPrompt:   "",
-		McpServers:     []domain.McpServer{},
-		Skills:         []domain.Skill{},
-		DisabledTools:  []string{},
-		MaxStep:        nil,
-		TimeoutSeconds: nil,
-		CreatedAt:      startedAtMillis,
-		Models:         models,
-		Capabilities:   h.Capabilities,
-		Status:         h.status(),
+	return uhpgo.Harness{
+		Harness: uhp.Harness{
+			ID:             h.ID,
+			Object:         "harness",
+			Name:           h.Name,
+			Base:           h.Base,
+			BaseLabel:      h.Name,
+			DefaultModel:   firstModel(models),
+			SystemPrompt:   "",
+			McpServers:     []uhp.McpServer{},
+			Skills:         []uhp.Skill{},
+			DisabledTools:  []string{},
+			MaxStep:        nil,
+			TimeoutSeconds: nil,
+			CreatedAt:      startedAtMillis,
+		},
+		Models:       models,
+		Capabilities: h.Capabilities,
+		Status:       h.status(),
 	}
 }
 
@@ -360,9 +363,9 @@ func (h *CLIHarness) status() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := h.proc.healthCheck(ctx); err != nil {
-		h.health = domain.HarnessUnavailable
+		h.health = uhpgo.HarnessUnavailable
 	} else {
-		h.health = domain.HarnessReady
+		h.health = uhpgo.HarnessReady
 	}
 	h.healthAt = time.Now()
 	return h.health
@@ -373,7 +376,7 @@ func (h *CLIHarness) status() string {
 // model as available and then failing the task is the worst outcome for a
 // client."
 func (h *CLIHarness) Available(model string) bool {
-	if h.status() != domain.HarnessReady {
+	if h.status() != uhpgo.HarnessReady {
 		return false
 	}
 	return h.validateModel(model) == nil

@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 // handleListSessions answers GET /v1/sessions?limit=&cursor=&harness=
@@ -22,9 +23,14 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessions := page.Sessions
-	if sessions == nil {
-		sessions = []*domain.Session{}
+	// The wire object, not the page: [domain.SessionPage] holds pointers the
+	// store owns and spells "no more pages" as an empty string, where the
+	// protocol spells it as an explicit null. This is the one place the two
+	// meet, and taking the embedded wire object off each row is the whole
+	// conversion — there is no second copy of a session to keep in step.
+	sessions := make([]uhp.Session, 0, len(page.Sessions))
+	for _, sess := range page.Sessions {
+		sessions = append(sessions, sess.Session)
 	}
 
 	// next_cursor is null on the last page, never absent: a client must not
@@ -36,10 +42,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		next = &c
 	}
 
-	writeJSON(w, http.StatusOK, struct {
-		Sessions   []*domain.Session `json:"sessions"`
-		NextCursor *string           `json:"next_cursor"`
-	}{Sessions: sessions, NextCursor: next})
+	writeJSON(w, http.StatusOK, uhp.SessionList{Sessions: sessions, NextCursor: next})
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +61,7 @@ func (s *Server) handleSessionTurns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if turns == nil {
-		turns = []domain.Turn{}
+		turns = []uhp.Turn{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"turns": turns})
 }
