@@ -26,22 +26,38 @@ and a real defect rather than a suite artefact. **The three runs above did not f
 because all three pinned a model**, which is the configuration that never exercises the
 default path.
 
-Both numbers were true of this server and neither replaced the other. The one to quote
-depended on the question: 52/52 is what a client that pins its models gets, and 36/37 was
-what one that did not. The gate defends the second, deliberately.
+Both numbers were true of this server at the time and neither replaced the other. The one to
+quote depended on the question: 52/52 was what a client that pins its models got, and 36/37
+was what one that did not. The gate defends the second, deliberately.
 
-**#43 is fixed in code and the model-less run has not been re-measured.** A task that names
-no model is now created carrying the harness's effective default, and three of the five
-adapters — `claude-code`, `grok-cli` and `pi` — replace that default mid-run with the model
-their own output names, so the answer is read rather than guessed wherever it can be read.
-No captured line of `codex` or `opencode` names a model, so those two keep the guess and say
-so in a comment where the parser would otherwise have read it — with a test over their
-fixtures that goes red if a later capture proves them wrong. The unit tests cover both
-halves; what they cannot cover is the suite's own verdict, which needs a running server, a
-logged-in CLI and the `uhp-conformance` package. **Until `make conformance-gate` is run
-again, the recorded model-less score stays 36/37 here.** Quoting anything better before it
-is measured is the mistake the History table below records three times over, in the rows
-that read "measured at last".
+**#43 is fixed and the gate has now been re-run — the two configurations agree.**
+
+```
+37/37 core · 0 failed · 0 skipped · 0 errored
+CONFORMANT — UHP 2026-08-11 (core)
+```
+
+Measured 2026-08-24 by `make conformance-gate` against the same pinned suite and the same
+`claude-code` harness, with no `--model`. T-03 passed reading `model=claude-opus-5[1m]` — a
+task that named no model came back naming the one that served it. The 36/37 split above is
+closed; the model-less core score is now the same 37/37 the pinned runs reported.
+
+**What the fix does, and where it still guesses.** A task that names no model is created
+carrying the harness's effective default, and three of the five adapters — `claude-code`,
+`grok-cli` and `pi` — replace that default mid-run with the model their own output names, so
+the answer is read rather than guessed wherever it can be read. No captured line of `codex`
+or `opencode` names a model, so those two keep the guess and say so in a comment where the
+parser would otherwise have read it — with a test over their fixtures that goes red if a
+later capture proves them wrong.
+
+**T-03 measures presence, not truth, and this run measured one adapter of five.** The check
+asserts `model` is non-empty and that a substitution sets `metadata.model_fallback`; it has
+no independent way to learn what actually ran, so a wrong-but-populated `model` passes it.
+The old failure was an *absent* field, which is why fixing #43 moves the check. The gate
+names `claude-code` — one of the three that read the value back — so what passed here is the
+reading path. `codex` and `opencode` would pass T-03 on their guess being populated, not on
+its being right, and only their fixture tests speak to that. Read this row as "the field is
+now always there", not "the field is now always correct".
 
 **The previous result — 37/37 core, 42/52 overall — predated three bodies of work**, and
 this run is the first to measure them: input items, artifact capture and download (#2),
@@ -272,7 +288,7 @@ cannot reach.
 | Progressive streaming for `claude-code` and `pi`, CI gate | no change expected | S-09 cannot fail this server either way — see above |
 | Re-measure after three unmeasured landings (#42) | **52/52, full 52/52** | the ten checks above, all at once |
 | Same run, no `--model` (the gate's configuration) | 36/37 core | T-03 regressed into view — see #43 |
-| A model-less task reports the model that ran (#43) | not re-measured | T-03's cause is fixed; the gate has not been run since |
+| A model-less task reports the model that ran (#43) | **37/37 core, model-less** | T-03, re-measured 2026-08-24 — the gate's split with the pinned runs is closed |
 
 The #42 re-measure is the largest single jump in this table, and none of it was new work. Ten
 checks moved because the code that satisfies them had been sitting there unmeasured since
