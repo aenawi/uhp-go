@@ -78,12 +78,16 @@ conformance:
 # server, ninety seconds apart. check-conformance.py refuses skips outright,
 # which is the right answer — but it means `extended` is not a class to gate on.
 #
-# THIS GATE IS CURRENTLY RED, AND THE FLOOR IS NOT THE THING TO CHANGE. It
-# scores 36/37: T-03 fails because a task naming no model gets a response naming
-# none either (issue #43). The gate is the only thing in this repository that
-# runs the suite without `--model`, which is why it found a defect three pinned
-# runs walked straight past. Lowering this to 36 would retire the finding
-# instead of the bug — the number is a floor, not a description. Fix #43.
+# This gate was red at 36/37 and is now green: 2026-08-24 scored 37/37 with no
+# skips, T-03 reading `claude-opus-5[1m]` off a task that named no model (#43).
+# It went green because the bug was fixed, not because the floor moved — the
+# proposal at the time was to lower this to 36, which would have retired the
+# finding instead of the defect. The number is a floor, not a description.
+#
+# Keep this gate the one place the suite runs without `--model`. That is the
+# configuration that found #43 while three pinned runs walked straight past it,
+# and it stops being worth anything the moment someone adds `--model` here to
+# make a run reproducible.
 CONFORMANCE_FLOOR ?= 37
 CONFORMANCE_REPORT ?= conformance-report.json
 

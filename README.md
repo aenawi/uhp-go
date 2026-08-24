@@ -77,12 +77,13 @@ only tests anything if the agent chose to write a file, and the `full` run passe
 check ninety seconds later on the same server. Read `skipped_not_verified` in the JSON
 report rather than the summary line.
 
-**All three of those runs pinned a model, and that is doing work.** `make conformance-gate`
-runs the same suite against the same server *without* `--model` and scores **36/37 core**:
-a task that names no model comes back naming none either, so a client that does not pin one
-cannot tell what served it (issue #43). Both numbers are honest and neither replaces the
-other — 52/52 is what a client that pins its models gets, 36/37 is what one that does not
-gets, and the gate defends the second on purpose.
+**All three of those runs pinned a model, and that was doing work.** `make conformance-gate`
+runs the same suite against the same server *without* `--model`, and on 2026-08-23 it scored
+**36/37 core**: a task that named no model came back naming none either, so a client that did
+not pin one could not tell what served it (issue #43). That is fixed, and the gate was
+re-run on 2026-08-24 — **37/37 core, 0 skipped**, `T-03` reading `claude-opus-5[1m]` off a
+task that named no model. The two configurations now agree. The gate stays the one place the
+suite runs unpinned, because that is the configuration that found the defect.
 
 This server still reports `conformance_class: core` in its discovery document. Raising it
 to `full` is a deliberate follow-up rather than an automatic consequence of one green run:
