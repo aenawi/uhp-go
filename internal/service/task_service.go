@@ -389,7 +389,15 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 	})
 	if err != nil {
 		task.Status = domain.StatusFailed
-		task.Error = &domain.TaskError{Code: "adapter_start_failed", Message: err.Error()}
+		// An adapter that would not start is this server's problem, not the
+		// caller's request being wrong, so the class is server_error. The code is
+		// vendor-prefixed because the specification has no entry for it and
+		// requires an additional code to be namespaced.
+		task.Error = &domain.TaskError{
+			Type:    domain.ErrorTypeServerError,
+			Code:    "uhpgo_adapter_start_failed",
+			Message: err.Error(),
+		}
 		task.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateTask(ctx, task)
 		return task, nil, err
@@ -600,7 +608,7 @@ func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd ha
 		if upd.Err != nil {
 			msg = upd.Err.Error()
 		}
-		task.Error = &domain.TaskError{Type: "harness_error", Code: "harness_error", Message: msg, Retryable: true}
+		task.Error = &domain.TaskError{Type: domain.ErrorTypeHarness, Code: "harness_error", Message: msg, Retryable: true}
 		return s.terminal(ctx, task, seq, "response.failed", rs)
 
 	default:

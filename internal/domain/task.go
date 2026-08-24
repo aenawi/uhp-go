@@ -57,10 +57,31 @@ type Usage struct {
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
+// Error types are the broad failure class (Errors §2); `code` carries the
+// specific reason. The schema constrains `type` to six values and this names the
+// four the server has a use for — a constant nothing sets is not a vocabulary,
+// and the full enum belongs in the public package rather than here.
+//
+// They live in domain because both the service, which sets a task's error, and
+// the transport, which writes an error envelope, need the same words. Defining
+// them twice is how the two renderings of this object drifted apart in the first
+// place.
+const (
+	ErrorTypeInvalidRequest = "invalid_request_error"
+	ErrorTypeAuthentication = "authentication_error"
+	ErrorTypeHarness        = "harness_error"
+	ErrorTypeServerError    = "server_error"
+)
+
 // TaskError follows UHP's failure taxonomy: a stable machine code plus a human
 // message, so clients can branch on Code without matching on prose.
+//
+// Type is not omitempty. The schema requires it, and it is what UHP's fourth
+// client rule falls back to: an unrecognised code with `type: "server_error"` is
+// still retryable. Omitting it leaves a client that followed the specification
+// with nothing to read.
 type TaskError struct {
-	Type      string `json:"type,omitempty"`
+	Type      string `json:"type"`
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	Retryable bool   `json:"retryable,omitempty"`

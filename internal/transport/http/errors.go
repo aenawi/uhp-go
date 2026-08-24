@@ -12,10 +12,15 @@ import (
 
 // UHP error types (Errors §2). The broad class; `code` carries the specific
 // reason.
+//
+// Aliases rather than a second set of literals: the service layer sets the same
+// `type` on a task's error and cannot see an unexported constant here, and two
+// independent spellings of one vocabulary is what let this object's two
+// renderings disagree.
 const (
-	typeInvalidRequest = "invalid_request_error"
-	typeAuthentication = "authentication_error"
-	typeServerError    = "server_error"
+	typeInvalidRequest = domain.ErrorTypeInvalidRequest
+	typeAuthentication = domain.ErrorTypeAuthentication
+	typeServerError    = domain.ErrorTypeServerError
 )
 
 // retryAfterNoCapacity is the floor this server asks a refused client to wait,

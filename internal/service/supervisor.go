@@ -343,7 +343,7 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 	if !isTerminalStatus(task.Status) {
 		task.Status = domain.StatusFailed
 		task.Error = &domain.TaskError{
-			Type:    "harness_error",
+			Type:    domain.ErrorTypeHarness,
 			Code:    "harness_error",
 			Message: "the harness closed its update stream without reporting a terminal state",
 		}
