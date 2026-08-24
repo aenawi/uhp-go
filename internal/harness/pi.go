@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // NewPi declares the Pi harness.
@@ -28,8 +28,8 @@ func NewPi(models []string) *CLIHarness {
 		// why they land together: opencode shipped the flag alone, the branch
 		// was unreachable, and every continuation quietly started a new
 		// conversation.
-		Capabilities: []domain.Capability{
-			domain.CapStreaming, domain.CapSessions, domain.CapTools,
+		Capabilities: []uhpgo.Capability{
+			uhpgo.CapStreaming, uhpgo.CapSessions, uhpgo.CapTools,
 		},
 		// `pi --list-models` prints the models pi will route to, filtered by
 		// which providers have credentials — the same "computed, not asserted"

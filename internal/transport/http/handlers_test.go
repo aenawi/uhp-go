@@ -14,12 +14,14 @@ import (
 	"github.com/aenawi/uhp-go/internal/harness"
 	"github.com/aenawi/uhp-go/internal/service"
 	"github.com/aenawi/uhp-go/internal/store"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 type echoAdapter struct{}
 
-func (echoAdapter) Info() domain.Harness {
-	return domain.Harness{ID: "chrn_echo", Base: "echo", Name: "Echo", Object: "harness"}
+func (echoAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: "chrn_echo", Base: "echo", Name: "Echo", Object: "harness"}}
 }
 func (echoAdapter) HealthCheck(ctx context.Context) error { return nil }
 func (echoAdapter) Run(ctx context.Context, req harness.RunRequest) (<-chan harness.RunUpdate, error) {
@@ -63,7 +65,7 @@ func TestCreateTaskNonStreaming(t *testing.T) {
 	if task.Text() != "ok" {
 		t.Fatalf("expected output 'ok', got %q", task.Text())
 	}
-	if task.Status != domain.StatusCompleted {
+	if task.Status != uhp.StatusCompleted {
 		t.Fatalf("expected completed status, got %s", task.Status)
 	}
 }

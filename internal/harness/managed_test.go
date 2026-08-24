@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // recordingBase stands in for a compiled-in base adapter and remembers the
@@ -13,14 +15,12 @@ type recordingBase struct {
 	last RunRequest
 }
 
-func (b *recordingBase) Info() domain.Harness {
-	return domain.Harness{
-		ID: "chrn_base", Object: "harness", Name: "Claude Code", Base: "claude-code",
-		BaseLabel: "Claude Code", DefaultModel: "m1",
+func (b *recordingBase) Info() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: "chrn_base", Object: "harness", Name: "Claude Code", Base: "claude-code",
+		BaseLabel: "Claude Code", DefaultModel: "m1"},
 		Models:       []string{"m1", "m2"},
-		Capabilities: []domain.Capability{domain.CapStreaming},
-		Status:       domain.HarnessReady,
-	}
+		Capabilities: []uhpgo.Capability{uhpgo.CapStreaming},
+		Status:       uhpgo.HarnessReady}
 }
 func (b *recordingBase) HealthCheck(context.Context) error { return nil }
 func (b *recordingBase) Run(_ context.Context, req RunRequest) (<-chan RunUpdate, error) {
@@ -56,7 +56,7 @@ func TestManagedInfoKeepsConfigAndComputesTheRest(t *testing.T) {
 		t.Fatalf("createdAt is not the configured one: %d", info.CreatedAt)
 	}
 	// Computed from the base, never from what a client stored.
-	if len(info.Models) != 2 || info.Status != domain.HarnessReady {
+	if len(info.Models) != 2 || info.Status != uhpgo.HarnessReady {
 		t.Fatalf("base-derived fields missing: %+v", info)
 	}
 	if info.BaseLabel != "Claude Code" {
@@ -69,7 +69,7 @@ func TestManagedInfoKeepsConfigAndComputesTheRest(t *testing.T) {
 func TestManagedWithoutABaseIsUnavailable(t *testing.T) {
 	m := NewManaged(managedCfg(), nil)
 	info := m.Info()
-	if info.Status != domain.HarnessUnavailable {
+	if info.Status != uhpgo.HarnessUnavailable {
 		t.Fatalf("expected unavailable, got %q", info.Status)
 	}
 	if m.Available("m1") {

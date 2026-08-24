@@ -11,6 +11,8 @@ import (
 	"context"
 
 	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // RunRequest is what the router hands to an adapter to start work.
@@ -135,14 +137,14 @@ type RunUpdate struct {
 	Artifact  *domain.Artifact
 	SessionID string
 	Model     string
-	Usage     *domain.Usage
+	Usage     *uhp.Usage
 	Err       error
 }
 
 // Adapter is the single interface every harness backend must satisfy.
 type Adapter interface {
 	// Info returns static capability/model metadata for discovery.
-	Info() domain.Harness
+	Info() uhpgo.Harness
 
 	// HealthCheck reports whether the underlying CLI/SDK/binary is reachable.
 	HealthCheck(ctx context.Context) error

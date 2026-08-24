@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // EventGapError is a resumption whose starting point has already been
@@ -41,7 +41,7 @@ func (e *EventGapError) Error() string {
 // and a slow or vanished client cannot stall the task behind it.
 type eventLog struct {
 	mu     sync.Mutex
-	events []domain.Event
+	events []uhpgo.Event
 	// notify is closed and replaced on every append, which wakes every waiting
 	// subscriber without the writer ever blocking on one of them.
 	notify   chan struct{}
@@ -70,7 +70,7 @@ func newEventLog(retain int) *eventLog {
 }
 
 // append adds an event and wakes every subscriber.
-func (l *eventLog) append(ev domain.Event) {
+func (l *eventLog) append(ev uhpgo.Event) {
 	l.mu.Lock()
 	l.events = append(l.events, ev)
 	l.evict()
@@ -103,7 +103,7 @@ func (l *eventLog) evict() {
 		return
 	}
 	drop := len(l.events) - l.retain
-	l.oldest = l.events[drop].Seq
+	l.oldest = l.events[drop].SequenceNumber
 	copy(l.events, l.events[drop:])
 	clear(l.events[l.retain:])
 	l.events = l.events[:l.retain]
@@ -127,7 +127,7 @@ func (l *eventLog) head() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if n := len(l.events); n > 0 {
-		return l.events[n-1].Seq + 1
+		return l.events[n-1].SequenceNumber + 1
 	}
 	return l.oldest
 }
@@ -141,7 +141,7 @@ func (l *eventLog) head() int {
 // one makes "index i is sequence i" wrong, and a resumption that assumed it
 // would hand the client the wrong events.
 func (l *eventLog) indexOf(seq int) int {
-	return sort.Search(len(l.events), func(i int) bool { return l.events[i].Seq >= seq })
+	return sort.Search(len(l.events), func(i int) bool { return l.events[i].SequenceNumber >= seq })
 }
 
 // IdleTick asks a subscription to call Do every Every of silence. Its zero
@@ -182,7 +182,7 @@ const FromOldest = -1
 // error from it ends the subscription exactly as an error from fn does. What
 // to put on the wire in that gap belongs to the transport; all this knows is
 // that the gap happened.
-func (l *eventLog) subscribe(ctx context.Context, from int, idle IdleTick, fn func(domain.Event) error) error {
+func (l *eventLog) subscribe(ctx context.Context, from int, idle IdleTick, fn func(uhpgo.Event) error) error {
 	// A nil channel blocks forever in a select, so a subscriber that asked for
 	// no tick reads exactly as it did before there was one.
 	var tick *time.Ticker
@@ -218,7 +218,7 @@ func (l *eventLog) subscribe(ctx context.Context, from int, idle IdleTick, fn fu
 				break
 			}
 			ev := l.events[i]
-			next = ev.Seq + 1
+			next = ev.SequenceNumber + 1
 			l.mu.Unlock()
 			if err := fn(ev); err != nil {
 				return err

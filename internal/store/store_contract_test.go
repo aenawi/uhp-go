@@ -10,6 +10,7 @@ import (
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/service"
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 // The interface is declared at its consumer, so this is the only place that
@@ -62,49 +63,62 @@ var storeEpoch = time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
 // actually observe.
 func sampleTask(id, sessionID string, created time.Time) *domain.Task {
 	return &domain.Task{
-		ID:     id,
-		Object: "response",
-		Status: domain.StatusCompleted,
-		Model:  "claude-sonnet-5",
-		Output: []domain.OutputItem{
-			{
-				ID: "msg_" + id, Type: "message", Status: "completed", Role: "assistant",
-				Content: []domain.ContentPart{{
-					Type: "output_text", Text: "hello",
-					Annotations: []domain.Annotation{{
-						Type:        domain.AnnotationTypeFileCitation,
-						ContainerID: "cntr_1", FileID: "file_1", Filename: "out/report.md",
-						DownloadURL: "/v1/containers/cntr_1/files/file_1/content",
+		Response: uhp.Response{
+			ID:     id,
+			Object: "response",
+			Status: uhp.StatusCompleted,
+			Model:  "claude-sonnet-5",
+			Output: []uhp.OutputItem{
+				{
+					ID: "msg_" + id, Type: "message", Status: "completed", Role: "assistant",
+					Content: []uhp.ContentPart{{
+						Type: "output_text", Text: "hello",
+						Annotations: []uhp.Annotation{{
+							Type:        uhp.AnnotationTypeFileCitation,
+							ContainerID: "cntr_1", FileID: "file_1", Filename: "out/report.md",
+							DownloadURL: "/v1/containers/cntr_1/files/file_1/content",
+						}},
 					}},
-				}},
+				},
+				{Type: "function_call", CallID: "call_1", Name: "bash", Arguments: `{"cmd":"ls"}`},
+				// An object, not a bare string: the schema types a reasoning
+				// summary's entries as objects, and tasks.md §3 shows them as
+				// {"type": "summary_text", ...}.
+				{Type: "reasoning", Summary: []map[string]any{{"type": "summary_text", "text": "thought"}}},
 			},
-			{Type: "function_call", CallID: "call_1", Name: "bash", Args: `{"cmd":"ls"}`},
-			{Type: "reasoning", Summary: []any{"thought"}},
+			Usage:              &uhp.Usage{InputTokens: 11, OutputTokens: 22, TotalTokens: 33, CacheReadTokens: 4},
+			Error:              &uhp.Error{Type: "harness_error", Code: "harness_failed", Message: "boom"},
+			IncompleteDetails:  map[string]any{"reason": "max_steps"},
+			PreviousResponseID: ptr("resp_prev"),
+			Store:              true,
+			Metadata:           map[string]any{"tenant": "acme", "attempt": 2.0, "tags": []any{"a", "b"}},
+			CreatedAt:          created.Unix(),
 		},
-		Usage:              &domain.Usage{InputTokens: 11, OutputTokens: 22, TotalTokens: 33, CacheReadTokens: 4},
-		Error:              &domain.TaskError{Type: "harness_error", Code: "harness_failed", Message: "boom", Retryable: true},
-		IncompleteDetails:  map[string]any{"reason": "max_steps"},
-		PreviousResponseID: "resp_prev",
-		Store:              true,
-		Metadata:           map[string]any{"tenant": "acme", "attempt": 2.0, "tags": []any{"a", "b"}},
-		CreatedAt:          created,
-		UpdatedAt:          created.Add(time.Second),
-		HarnessID:          "claude-code",
-		SessionID:          sessionID,
-		Input:              "do the thing",
-		RequestedModel:     "claude-opus-5",
+		UpdatedAt:      created.Add(time.Second),
+		HarnessID:      "claude-code",
+		SessionID:      sessionID,
+		Input:          "do the thing",
+		RequestedModel: "claude-opus-5",
 		Artifacts: []domain.Artifact{{
-			ID: "file_1", ContainerID: "cntr_1", Path: "out/report.md",
-			MimeType: "text/markdown", SizeBytes: 42, CreatedAt: created,
+			File: uhp.File{
+				ID: "file_1", Object: "file", ContainerID: "cntr_1",
+				Filename: "out/report.md", Bytes: 42, CreatedAt: created.Unix(),
+			},
+			MimeType: "text/markdown",
 		}},
 		NativeSessionID: "native-abc",
 	}
 }
 
+func ptr[T any](v T) *T { return &v }
+
 func sampleSession(id, harnessID string, created time.Time) *domain.Session {
 	return &domain.Session{
-		ID: id, HarnessID: harnessID, Title: "a session", Status: domain.StatusInProgress,
-		CreatedAt: created, UpdatedAt: created.Add(time.Minute),
+		Session: uhp.Session{
+			ID: id, Object: "session", HarnessID: harnessID, Title: "a session",
+			Status:    string(uhp.StatusInProgress),
+			CreatedAt: created.Unix(), UpdatedAt: created.Add(time.Minute).Unix(),
+		},
 		NativeSessionID: "native-" + id, LastResponseID: "resp_last",
 	}
 }
@@ -163,16 +177,27 @@ func assertTaskEqual(t *testing.T, want, got *domain.Task) {
 	}
 	if got.HarnessID != want.HarnessID || got.SessionID != want.SessionID ||
 		got.NativeSessionID != want.NativeSessionID || got.Input != want.Input ||
-		got.PreviousResponseID != want.PreviousResponseID || got.Store != want.Store {
+		got.Store != want.Store {
 		t.Fatalf("bookkeeping fields differ: got %+v", got)
 	}
-	if !got.CreatedAt.Equal(want.CreatedAt) || !got.UpdatedAt.Equal(want.UpdatedAt) {
+	// A pointer, so the comparison is of what it points at — and of whether it
+	// points at anything, because null and "" are different answers to "does
+	// this response continue one?".
+	if (got.PreviousResponseID == nil) != (want.PreviousResponseID == nil) ||
+		(got.PreviousResponseID != nil && *got.PreviousResponseID != *want.PreviousResponseID) {
+		t.Fatalf("previous_response_id differs: got %v", got.PreviousResponseID)
+	}
+	if got.CreatedAt != want.CreatedAt || !got.UpdatedAt.Equal(want.UpdatedAt) {
 		t.Fatalf("timestamps differ: got created=%v updated=%v", got.CreatedAt, got.UpdatedAt)
 	}
 	if got.Usage == nil || *got.Usage != *want.Usage {
 		t.Fatalf("usage differs: got %+v", got.Usage)
 	}
-	if got.Error == nil || *got.Error != *want.Error {
+	// Field-wise rather than ==: uhp.Error carries a map, so the struct is not
+	// comparable. Collapsing the two renderings of this object onto one type is
+	// what put `detail` on the error a task carries in the first place.
+	if got.Error == nil || got.Error.Type != want.Error.Type ||
+		got.Error.Code != want.Error.Code || got.Error.Message != want.Error.Message {
 		t.Fatalf("error differs: got %+v", got.Error)
 	}
 	if got.IncompleteDetails["reason"] != want.IncompleteDetails["reason"] {
@@ -191,21 +216,21 @@ func assertTaskEqual(t *testing.T, want, got *domain.Task) {
 		t.Fatalf("assistant text differs: got %q want %q", got.Text(), want.Text())
 	}
 	ann := got.Output[0].Content[0].Annotations
-	if len(ann) != 1 || ann[0].FileID != "file_1" || ann[0].Type != domain.AnnotationTypeFileCitation {
+	if len(ann) != 1 || ann[0].FileID != "file_1" || ann[0].Type != uhp.AnnotationTypeFileCitation {
 		t.Fatalf("annotations differ: got %+v", ann)
 	}
-	if got.Output[1].CallID != "call_1" || got.Output[1].Args != `{"cmd":"ls"}` {
+	if got.Output[1].CallID != "call_1" || got.Output[1].Arguments != `{"cmd":"ls"}` {
 		t.Fatalf("function_call item differs: got %+v", got.Output[1])
 	}
-	if len(got.Output[2].Summary) != 1 || got.Output[2].Summary[0] != "thought" {
+	if len(got.Output[2].Summary) != 1 || got.Output[2].Summary[0]["text"] != "thought" {
 		t.Fatalf("reasoning summary differs: got %+v", got.Output[2].Summary)
 	}
 	if len(got.Artifacts) != len(want.Artifacts) {
 		t.Fatalf("artifact count differs: got %d", len(got.Artifacts))
 	}
 	a, w := got.Artifacts[0], want.Artifacts[0]
-	if a.ID != w.ID || a.ContainerID != w.ContainerID || a.Path != w.Path ||
-		a.MimeType != w.MimeType || a.SizeBytes != w.SizeBytes || !a.CreatedAt.Equal(w.CreatedAt) {
+	if a.ID != w.ID || a.ContainerID != w.ContainerID || a.Filename != w.Filename ||
+		a.MimeType != w.MimeType || a.Bytes != w.Bytes || a.CreatedAt != w.CreatedAt {
 		t.Fatalf("artifact differs: got %+v want %+v", a, w)
 	}
 }
@@ -236,7 +261,7 @@ func TestStoreTaskNotFound(t *testing.T) {
 		if err := s.UpdateTask(ctx, sampleTask("resp_missing", "sess_a", storeEpoch)); err == nil {
 			t.Fatal("UpdateTask must not create a task that was never created")
 		}
-		if err := s.AppendArtifact(ctx, "resp_missing", domain.Artifact{ID: "file_x"}); err == nil {
+		if err := s.AppendArtifact(ctx, "resp_missing", domain.Artifact{File: uhp.File{ID: "file_x"}}); err == nil {
 			t.Fatal("AppendArtifact on an unknown task must fail")
 		}
 	})
@@ -246,7 +271,7 @@ func TestStoreUpdateTask(t *testing.T) {
 	eachStore(t, func(t *testing.T, s service.Store) {
 		ctx := context.Background()
 		task := sampleTask("resp_a", "sess_a", storeEpoch)
-		task.Status = domain.StatusInProgress
+		task.Status = uhp.StatusInProgress
 		if err := s.CreateTask(ctx, task); err != nil {
 			t.Fatalf("create: %v", err)
 		}
@@ -259,7 +284,7 @@ func TestStoreUpdateTask(t *testing.T) {
 			t.Fatalf("no-op update: %v", err)
 		}
 
-		task.Status = domain.StatusCompleted
+		task.Status = uhp.StatusCompleted
 		task.Output[0].Content[0].Text = "hello world"
 		task.UpdatedAt = storeEpoch.Add(time.Hour)
 		if err := s.UpdateTask(ctx, task); err != nil {
@@ -267,7 +292,7 @@ func TestStoreUpdateTask(t *testing.T) {
 		}
 
 		got := mustGetTask(t, s, "resp_a")
-		if got.Status != domain.StatusCompleted || got.Text() != "hello world" {
+		if got.Status != uhp.StatusCompleted || got.Text() != "hello world" {
 			t.Fatalf("update did not land: status=%v text=%q", got.Status, got.Text())
 		}
 		if !got.UpdatedAt.Equal(storeEpoch.Add(time.Hour)) {
@@ -296,7 +321,7 @@ func TestStoreTaskIsolatedFromCaller(t *testing.T) {
 		task.Metadata["tenant"] = "tampered"
 		task.Metadata["tags"].([]any)[0] = "tampered"
 		task.IncompleteDetails["reason"] = "tampered"
-		task.Artifacts[0].Path = "tampered"
+		task.Artifacts[0].Filename = "tampered"
 		task.Usage.TotalTokens = 999
 		task.Error.Code = "tampered"
 
@@ -318,7 +343,7 @@ func TestStoreTaskIsolatedFromCaller(t *testing.T) {
 		if got.IncompleteDetails["reason"] != "max_steps" {
 			t.Fatalf("caller edited stored incomplete_details: %+v", got.IncompleteDetails)
 		}
-		if got.Artifacts[0].Path != "out/report.md" {
+		if got.Artifacts[0].Filename != "out/report.md" {
 			t.Fatalf("caller edited a stored artifact: %+v", got.Artifacts[0])
 		}
 		if got.Usage.TotalTokens != 33 {
@@ -331,9 +356,9 @@ func TestStoreTaskIsolatedFromCaller(t *testing.T) {
 		// And now the other direction: what a reader was handed is its own.
 		got.Metadata["tenant"] = "tampered"
 		got.Output[0].Content[0].Text = "tampered"
-		got.Artifacts[0].Path = "tampered"
+		got.Artifacts[0].Filename = "tampered"
 		again := mustGetTask(t, s, "resp_a")
-		if again.Metadata["tenant"] != "acme" || again.Text() != "hello" || again.Artifacts[0].Path != "out/report.md" {
+		if again.Metadata["tenant"] != "acme" || again.Text() != "hello" || again.Artifacts[0].Filename != "out/report.md" {
 			t.Fatalf("a reader's edits reached storage: %+v", again)
 		}
 	})
@@ -357,11 +382,11 @@ func TestStoreNilAndEmptyStayDistinct(t *testing.T) {
 		ctx := context.Background()
 
 		empty := sampleTask("resp_empty", "sess_a", storeEpoch)
-		empty.Output = []domain.OutputItem{{
+		empty.Output = []uhp.OutputItem{{
 			ID: "msg_resp_empty", Type: "message", Role: "assistant",
-			Content: []domain.ContentPart{{
+			Content: []uhp.ContentPart{{
 				Type: "output_text", Text: "hello",
-				Annotations: []domain.Annotation{},
+				Annotations: []uhp.Annotation{},
 			}},
 		}}
 		empty.Artifacts = []domain.Artifact{}
@@ -412,8 +437,11 @@ func TestStoreAppendArtifact(t *testing.T) {
 
 		for _, id := range []string{"file_1", "file_2", "file_3"} {
 			a := domain.Artifact{
-				ID: id, ContainerID: "cntr_a", Path: "out/" + id + ".md",
-				MimeType: "text/markdown", SizeBytes: 7, CreatedAt: storeEpoch,
+				File: uhp.File{
+					ID: id, Object: "file", ContainerID: "cntr_a",
+					Filename: "out/" + id + ".md", Bytes: 7, CreatedAt: storeEpoch.Unix(),
+				},
+				MimeType: "text/markdown",
 			}
 			if err := s.AppendArtifact(ctx, "resp_a", a); err != nil {
 				t.Fatalf("append %s: %v", id, err)
@@ -453,12 +481,13 @@ func TestStoreAppendArtifactConcurrently(t *testing.T) {
 		for i := 0; i < n; i++ {
 			go func(i int) {
 				start.Wait()
-				errs <- s.AppendArtifact(ctx, "resp_a", domain.Artifact{
+				errs <- s.AppendArtifact(ctx, "resp_a", domain.Artifact{File: uhp.File{
 					ID:          fmt.Sprintf("file_%02d", i),
+					Object:      "file",
 					ContainerID: "cntr_a",
-					Path:        fmt.Sprintf("out/%02d.md", i),
-					CreatedAt:   storeEpoch,
-				})
+					Filename:    fmt.Sprintf("out/%02d.md", i),
+					CreatedAt:   storeEpoch.Unix(),
+				}})
 			}(i)
 		}
 		start.Done()
@@ -496,7 +525,7 @@ func TestStoreSessionRoundTrip(t *testing.T) {
 			got.LastResponseID != want.LastResponseID {
 			t.Fatalf("session round-trip lost fields: %+v", got)
 		}
-		if !got.CreatedAt.Equal(want.CreatedAt) || !got.UpdatedAt.Equal(want.UpdatedAt) {
+		if got.CreatedAt != want.CreatedAt || got.UpdatedAt != want.UpdatedAt {
 			t.Fatalf("session timestamps differ: %v / %v", got.CreatedAt, got.UpdatedAt)
 		}
 
@@ -515,13 +544,13 @@ func TestStoreSessionRoundTrip(t *testing.T) {
 		}
 
 		want.Title = "renamed"
-		want.Status = domain.StatusCompleted
+		want.Status = string(uhp.StatusCompleted)
 		want.LastResponseID = "resp_z"
 		if err := s.UpdateSession(ctx, want); err != nil {
 			t.Fatalf("update: %v", err)
 		}
 		got = mustGetSession(t, s, "sess_a")
-		if got.Title != "renamed" || got.Status != domain.StatusCompleted || got.LastResponseID != "resp_z" {
+		if got.Title != "renamed" || got.Status != string(uhp.StatusCompleted) || got.LastResponseID != "resp_z" {
 			t.Fatalf("session update did not land: %+v", got)
 		}
 	})
@@ -622,6 +651,14 @@ func TestStoreListSessionTasks(t *testing.T) {
 		ctx := context.Background()
 		// Two of a session's tasks share an instant, and one belongs to
 		// another session entirely.
+		//
+		// The pair is created in reverse id order on purpose, and the id that
+		// sorts *later* is created first. A response's created_at is Unix
+		// seconds, so a shared instant is the ordinary case rather than a
+		// contrived one — two tasks in a conversation are usually seconds
+		// apart, sometimes less — and the answer has to be the order they ran.
+		// A store that fell back to comparing ids would pass this with the
+		// operands the other way round and shuffle every real transcript.
 		mustCreate(t, s, sampleTask("resp_c", "sess_a", storeEpoch.Add(2*time.Minute)))
 		mustCreate(t, s, sampleTask("resp_b", "sess_a", storeEpoch))
 		mustCreate(t, s, sampleTask("resp_a", "sess_a", storeEpoch))
@@ -639,8 +676,8 @@ func TestStoreListSessionTasks(t *testing.T) {
 			ids += task.ID
 		}
 		// Oldest first: this is a transcript, not a feed.
-		if ids != "resp_a,resp_b,resp_c" {
-			t.Fatalf("order is %s, want resp_a,resp_b,resp_c", ids)
+		if ids != "resp_b,resp_a,resp_c" {
+			t.Fatalf("order is %s, want resp_b,resp_a,resp_c", ids)
 		}
 
 		// A session with no tasks is an empty list, not an error: a session

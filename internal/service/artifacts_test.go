@@ -12,6 +12,8 @@ import (
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
 	"github.com/aenawi/uhp-go/internal/store"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // writingAdapter stands in for a real harness: it writes files into the working
@@ -28,10 +30,10 @@ type writingAdapter struct {
 // artifact capture are the router's, so an adapter that says nothing about them
 // still receives its attachments and still has its output captured. An adapter
 // that had to claim them would be a claim the router never reads.
-func (a *writingAdapter) Info() domain.Harness {
-	return domain.Harness{ID: "chrn_writer", Base: "writer", Object: "harness", Name: "Writer",
-		Capabilities: []domain.Capability{
-			domain.CapStreaming, domain.CapSessions, domain.CapCancellation,
+func (a *writingAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: "chrn_writer", Base: "writer", Object: "harness", Name: "Writer"},
+		Capabilities: []uhpgo.Capability{
+			uhpgo.CapStreaming, uhpgo.CapSessions, uhpgo.CapCancellation,
 		}}
 }
 func (a *writingAdapter) HealthCheck(context.Context) error { return nil }
@@ -105,13 +107,13 @@ func TestArtifactCaptureReportsWhatTheRunWrote(t *testing.T) {
 	}
 	got := map[string]domain.Artifact{}
 	for _, f := range files {
-		got[f.Path] = f
+		got[f.Filename] = f
 	}
 	if len(got) != 2 {
 		t.Fatalf("expected 2 artifacts, got %d: %v", len(got), got)
 	}
-	if got["report.md"].SizeBytes != int64(len("artifact-ok\n")) {
-		t.Errorf("report.md size = %d", got["report.md"].SizeBytes)
+	if got["report.md"].Bytes != int64(len("artifact-ok\n")) {
+		t.Errorf("report.md size = %d", got["report.md"].Bytes)
 	}
 	if got["report.md"].ContainerID != domain.ContainerIDFor(task.SessionID) {
 		t.Errorf("artifact container %q does not belong to session %q",
@@ -183,7 +185,7 @@ func TestArtifactCaptureNeverFollowsASymlink(t *testing.T) {
 		t.Fatalf("session files: %v", err)
 	}
 	for _, f := range files {
-		if f.Path == "escape.txt" {
+		if f.Filename == "escape.txt" {
 			t.Fatalf("a symlink was captured as an artifact")
 		}
 	}
@@ -225,8 +227,8 @@ func TestRewrittenArtifactKeepsOneEntry(t *testing.T) {
 	if len(files) != 1 {
 		t.Fatalf("expected one entry for one file, got %v", files)
 	}
-	if files[0].SizeBytes != int64(len("v2-longer\n")) {
-		t.Errorf("listing reports the stale size %d", files[0].SizeBytes)
+	if files[0].Bytes != int64(len("v2-longer\n")) {
+		t.Errorf("listing reports the stale size %d", files[0].Bytes)
 	}
 }
 
@@ -246,7 +248,7 @@ func TestArtifactsAreCitedOnTheAssistantMessage(t *testing.T) {
 	if len(ans) != 1 {
 		t.Fatalf("expected one annotation, got %v", ans)
 	}
-	if ans[0].Type != domain.AnnotationTypeFileCitation {
+	if ans[0].Type != uhp.AnnotationTypeFileCitation {
 		t.Errorf("annotation type = %q", ans[0].Type)
 	}
 	if ans[0].Filename != "report.md" || ans[0].FileID == "" || ans[0].DownloadURL == "" {

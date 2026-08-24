@@ -8,7 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // argvContains reports whether args contains the exact element s.
@@ -855,7 +856,7 @@ func TestParseGrokLine(t *testing.T) {
 // onlyUsage returns the single usage update in a parse result, failing if
 // there is not exactly one. A parser that emitted two would be publishing one
 // of them as the run's total by accident.
-func onlyUsage(t *testing.T, updates []RunUpdate) *domain.Usage {
+func onlyUsage(t *testing.T, updates []RunUpdate) *uhp.Usage {
 	t.Helper()
 	return onlyOfType(t, updates, UpdateUsage).Usage
 }
@@ -952,7 +953,7 @@ func assertModelNotRepublished(t *testing.T, parse func(string) []RunUpdate, lin
 // messageDeltaUsage reads a `message_delta` line's own usage, which parseGrokLine
 // deliberately does not. It exists so the fixtures' arithmetic can be checked
 // against the numbers grok actually printed rather than against a comment.
-func messageDeltaUsage(t *testing.T, line string) domain.Usage {
+func messageDeltaUsage(t *testing.T, line string) uhp.Usage {
 	t.Helper()
 	var ev struct {
 		Event struct {
@@ -965,7 +966,7 @@ func messageDeltaUsage(t *testing.T, line string) domain.Usage {
 	if err := json.Unmarshal([]byte(line), &ev); err != nil {
 		t.Fatalf("fixture is not JSON: %v", err)
 	}
-	return domain.Usage{
+	return uhp.Usage{
 		InputTokens:  ev.Event.Usage.InputTokens,
 		OutputTokens: ev.Event.Usage.OutputTokens,
 	}
@@ -1124,7 +1125,7 @@ func TestParseClaudeLine(t *testing.T) {
 		if len(got) != 1 || got[0].Type != UpdateUsage || got[0].Usage == nil {
 			t.Fatalf("got %+v, want one %s update", got, UpdateUsage)
 		}
-		want := domain.Usage{
+		want := uhp.Usage{
 			InputTokens: 12, OutputTokens: 5, TotalTokens: 17,
 			CacheReadTokens: 22400, CacheWriteTokens: 7,
 		}
@@ -1742,7 +1743,7 @@ func TestRegistryListIsOrdered(t *testing.T) {
 	}
 }
 
-func ids(hs []domain.Harness) []string {
+func ids(hs []uhpgo.Harness) []string {
 	out := make([]string, 0, len(hs))
 	for _, h := range hs {
 		out = append(out, h.ID)
@@ -1763,9 +1764,9 @@ func ids(hs []domain.Harness) []string {
 // refuse a cancel that would in fact have worked.
 func TestEveryCLIHarnessAdvertisesCancellation(t *testing.T) {
 	for _, h := range allCLIHarnesses() {
-		if !h.Info().HasCapability(domain.CapCancellation) {
+		if !h.Info().HasCapability(uhpgo.CapCancellation) {
 			t.Errorf("%s does not advertise %q, but the shared runner cancels it by killing its process group",
-				h.Base, domain.CapCancellation)
+				h.Base, uhpgo.CapCancellation)
 		}
 	}
 }
@@ -1795,10 +1796,10 @@ func TestEveryCLIHarnessAdvertisesCancellation(t *testing.T) {
 // because the finished list is where the additions land and a test that read it
 // could not tell a claim from a grant.
 func TestNoCLIHarnessDeclaresACapabilityItDoesNotDeliver(t *testing.T) {
-	notTheirs := []domain.Capability{domain.CapCancellation, domain.CapFilesIn, domain.CapFilesOut}
+	notTheirs := []uhpgo.Capability{uhpgo.CapCancellation, uhpgo.CapFilesIn, uhpgo.CapFilesOut}
 	for _, h := range allCLIHarnesses() {
 		for _, c := range notTheirs {
-			if domain.HasCapability(h.declared, c) {
+			if uhpgo.HasCapability(h.declared, c) {
 				t.Errorf("%s declares %q, which it does not deliver: %s", h.Base, c,
 					"cancellation comes from the shared runner and the file capabilities from the router")
 			}
@@ -1811,7 +1812,7 @@ func TestNoCLIHarnessDeclaresACapabilityItDoesNotDeliver(t *testing.T) {
 // and every continuation sent to it silently starts a new conversation.
 func TestAdvertisedSessionsReachArgv(t *testing.T) {
 	for _, h := range allCLIHarnesses() {
-		if !domain.HasCapability(h.Capabilities, domain.CapSessions) {
+		if !uhpgo.HasCapability(h.Capabilities, uhpgo.CapSessions) {
 			continue
 		}
 		fresh, err := h.BuildArgs(RunRequest{Input: "hello"})
@@ -1824,7 +1825,7 @@ func TestAdvertisedSessionsReachArgv(t *testing.T) {
 		}
 		if strings.Join(fresh, "\x00") == strings.Join(resumed, "\x00") {
 			t.Errorf("%s advertises %q but its argv is unchanged by a native session id: %v",
-				h.Base, domain.CapSessions, resumed)
+				h.Base, uhpgo.CapSessions, resumed)
 		}
 	}
 }

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // NewOpenCode declares the OpenCode harness (`opencode run --format json`).
@@ -47,8 +47,8 @@ func NewOpenCode(models []string) *CLIHarness {
 		// BuildArgs passes it back. Before, only the flag was here — the id was
 		// never discovered, so the branch was unreachable and every
 		// continuation quietly started a new conversation.
-		Capabilities: []domain.Capability{
-			domain.CapStreaming, domain.CapSessions, domain.CapTools,
+		Capabilities: []uhpgo.Capability{
+			uhpgo.CapStreaming, uhpgo.CapSessions, uhpgo.CapTools,
 		},
 		// `opencode models` prints the models this install's configured
 		// providers actually expose, which is the only honest source: there is

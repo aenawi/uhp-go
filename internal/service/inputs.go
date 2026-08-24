@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 	"github.com/google/uuid"
-
-	"github.com/aenawi/uhp-go/internal/domain"
 )
 
 var (
@@ -148,31 +148,34 @@ func attachmentNote(paths []string) string {
 }
 
 // StoreUpload answers POST /v1/files.
-func (s *TaskService) StoreUpload(ctx context.Context, filename, mimeType string, data []byte) (domain.Upload, error) {
+func (s *TaskService) StoreUpload(ctx context.Context, filename, mimeType string, data []byte) (uhpgo.Upload, error) {
 	if s.uploads == nil {
-		return domain.Upload{}, ErrFilesUnsupported
+		return uhpgo.Upload{}, ErrFilesUnsupported
 	}
-	up := domain.Upload{
-		ID:        "file_" + strings.ReplaceAll(uuid.NewString(), "-", ""),
-		Filename:  safeAttachmentName(filename, 0),
-		MimeType:  mimeType,
-		Data:      data,
-		CreatedAt: time.Now().UTC(),
+	up := uhpgo.Upload{
+		File: uhp.File{
+			ID:        "file_" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+			Object:    "file",
+			Filename:  safeAttachmentName(filename, 0),
+			CreatedAt: time.Now().UTC().Unix(),
+		},
+		MimeType: mimeType,
+		Data:     data,
 	}
 	if err := s.uploads.Put(ctx, up); err != nil {
-		return domain.Upload{}, err
+		return uhpgo.Upload{}, err
 	}
 	return up, nil
 }
 
 // upload resolves a file id a task referenced.
-func (s *TaskService) upload(ctx context.Context, fileID string) (domain.Upload, error) {
+func (s *TaskService) upload(ctx context.Context, fileID string) (uhpgo.Upload, error) {
 	if s.uploads == nil {
-		return domain.Upload{}, ErrFilesUnsupported
+		return uhpgo.Upload{}, ErrFilesUnsupported
 	}
 	up, err := s.uploads.Get(ctx, fileID)
 	if err != nil {
-		return domain.Upload{}, fmt.Errorf("%w: no uploaded file with id %q", ErrInvalidInput, fileID)
+		return uhpgo.Upload{}, fmt.Errorf("%w: no uploaded file with id %q", ErrInvalidInput, fileID)
 	}
 	return up, nil
 }

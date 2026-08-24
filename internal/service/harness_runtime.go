@@ -11,6 +11,7 @@ import (
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 // skillsSubdir is where a session's skill folders are written, under its own
@@ -108,8 +109,8 @@ func deliveryOf(a harness.Adapter) harness.Delivery {
 // enabledSkills drops the suppressed ones. `enabled: false` suppresses a
 // skill, and a suppressed skill must not be materialized at all — a folder on
 // disk is readable whether or not anyone pointed the agent at it.
-func enabledSkills(skills []domain.Skill) []domain.Skill {
-	out := make([]domain.Skill, 0, len(skills))
+func enabledSkills(skills []uhp.Skill) []uhp.Skill {
+	out := make([]uhp.Skill, 0, len(skills))
 	for _, sk := range skills {
 		if sk.Enabled == nil || *sk.Enabled {
 			out = append(out, sk)
@@ -125,8 +126,8 @@ func enabledSkills(skills []domain.Skill) []domain.Skill {
 // connected and then hidden, which would still leak the turn's existence to
 // whoever operates that endpoint." Filtering here is what makes that true:
 // the runtime never learns the entry exists.
-func enabledServers(servers []domain.McpServer) []domain.McpServer {
-	out := make([]domain.McpServer, 0, len(servers))
+func enabledServers(servers []uhp.McpServer) []uhp.McpServer {
+	out := make([]uhp.McpServer, 0, len(servers))
 	for _, m := range servers {
 		if m.Enabled == nil || *m.Enabled {
 			out = append(out, m)
@@ -141,7 +142,7 @@ func enabledServers(servers []domain.McpServer) []domain.McpServer {
 // The whole folder, not just the manifest: Harnesses §4.2 calls out that
 // materializing only SKILL.md "breaks every skill that carries references,
 // scripts or data — which is most non-trivial skills."
-func writeSkillFolders(workDir string, skills []domain.Skill) ([]string, error) {
+func writeSkillFolders(workDir string, skills []uhp.Skill) ([]string, error) {
 	if workDir == "" {
 		// Refused rather than skipped. A task that runs without the skills it
 		// was configured with produces a plausible answer from an agent that
@@ -176,17 +177,17 @@ func writeSkillFolders(workDir string, skills []domain.Skill) ([]string, error) 
 
 // filesOf returns a bundle's members, expanding the single-file `content`
 // shorthand into the SKILL.md it stands for.
-func filesOf(sk domain.Skill) []domain.SkillFile {
+func filesOf(sk uhp.Skill) []uhp.SkillFile {
 	if len(sk.Files) > 0 {
 		return sk.Files
 	}
 	if sk.Content != "" {
-		return []domain.SkillFile{{Path: "SKILL.md", Content: sk.Content}}
+		return []uhp.SkillFile{{Path: "SKILL.md", Content: sk.Content}}
 	}
 	return nil
 }
 
-func writeSkillFile(dir string, f domain.SkillFile) error {
+func writeSkillFile(dir string, f uhp.SkillFile) error {
 	// Validated at configuration time, and re-checked here because this is the
 	// line that turns a path into a write. A check that lives only at the far
 	// end of a store is one a later code path can walk around.
@@ -252,7 +253,7 @@ type mcpEntry struct {
 // file lands inside the session's working directory at 0600 — the agent runs
 // there, so this is not a secrecy boundary against the agent itself, but it is
 // one against everything else on the host.
-func writeMcpConfig(workDir string, servers []domain.McpServer) (string, error) {
+func writeMcpConfig(workDir string, servers []uhp.McpServer) (string, error) {
 	if workDir == "" {
 		return "", fmt.Errorf("%w: mcp servers need a session working directory; set UHP_WORKSPACE",
 			ErrFilesUnsupported)
@@ -286,7 +287,7 @@ func writeMcpConfig(workDir string, servers []domain.McpServer) (string, error) 
 	return path, nil
 }
 
-func transportOf(m domain.McpServer) string {
+func transportOf(m uhp.McpServer) string {
 	if m.Transport == "sse" {
 		return "sse"
 	}
@@ -296,7 +297,7 @@ func transportOf(m domain.McpServer) string {
 // skillInstruction names the folders for a runtime that cannot load them
 // itself. It lists the skills by name and says where they are, which is the
 // least a model needs to go and read one.
-func skillInstruction(skills []domain.Skill, dirs []string) string {
+func skillInstruction(skills []uhp.Skill, dirs []string) string {
 	names := make([]string, 0, len(skills))
 	for i, sk := range skills {
 		if i < len(dirs) {

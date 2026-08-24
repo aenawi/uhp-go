@@ -9,6 +9,7 @@ import (
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
 	"github.com/aenawi/uhp-go/internal/store"
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 // errDisk is what a store hands back when it cannot answer at all — not a row
@@ -130,7 +131,7 @@ func TestListFailuresAreStorage(t *testing.T) {
 	// The session read has to succeed for the listing beneath it to be the
 	// failure under test, so this store keeps MemoryStore's GetSession and a
 	// session is seeded for it to find.
-	if err := svc.store.CreateSession(ctx, &domain.Session{ID: "sess_1"}); err != nil {
+	if err := svc.store.CreateSession(ctx, &domain.Session{Session: uhp.Session{ID: "sess_1"}}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if _, err := svc.SessionTurns(ctx, "sess_1"); !errors.Is(err, ErrStorage) {

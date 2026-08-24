@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 // countingAdapter records how many runs were actually started and holds each
@@ -157,7 +157,7 @@ func TestRepeatedKeyWaitsForAnInFlightFirstRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if got.Status != domain.StatusCompleted {
+	if got.Status != uhp.StatusCompleted {
 		t.Fatalf("status = %q, want completed; the retry must get the finished result, not a partial", got.Status)
 	}
 	if n := a.count(); n != 1 {
@@ -278,7 +278,7 @@ func TestARefusedRequestDoesNotBindTheKey(t *testing.T) {
 	}
 	waitFor(t, run)
 	got, _ := svc.GetTask(ctx, task.ID)
-	if got.Status != domain.StatusCompleted {
+	if got.Status != uhp.StatusCompleted {
 		t.Fatalf("status = %q, want completed", got.Status)
 	}
 	if n := a.count(); n != 1 {

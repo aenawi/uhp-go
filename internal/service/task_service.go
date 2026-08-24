@@ -16,6 +16,8 @@ import (
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // Errors the transport layer classifies into UHP status codes and error codes.
@@ -229,7 +231,7 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 	// is permanent and those are not: "try again later" is the wrong advice for
 	// a request that will be refused identically forever.
 	if req.PreviousResponseID != "" {
-		if err := requireCapability(adapter.Info(), domain.CapSessions, whyNoSessions); err != nil {
+		if err := requireCapability(adapter.Info(), uhpgo.CapSessions, whyNoSessions); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -344,21 +346,28 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 
 	now := time.Now().UTC()
 	task := &domain.Task{
-		ID:                 "resp_" + uuid.NewString(),
-		Object:             "response",
-		Status:             domain.StatusInProgress,
-		Model:              model,
-		RequestedModel:     req.Model,
-		HarnessID:          req.HarnessID,
-		SessionID:          sessionID,
-		PreviousResponseID: req.PreviousResponseID,
-		Input:              input,
-		Metadata:           req.Metadata,
-		// Tasks §1.1: `store` defaults to true.
-		Store:     true,
-		CreatedAt: now,
-		UpdatedAt: now,
+		Response: uhp.Response{
+			ID:                 "resp_" + uuid.NewString(),
+			Object:             "response",
+			Status:             uhp.StatusInProgress,
+			Model:              model,
+			PreviousResponseID: previousResponseID(req.PreviousResponseID),
+			Metadata:           req.Metadata,
+			// Tasks §1.1: `store` defaults to true.
+			Store:     true,
+			CreatedAt: now.Unix(),
+		},
+		RequestedModel: req.Model,
+		HarnessID:      req.HarnessID,
+		SessionID:      sessionID,
+		Input:          input,
+		UpdatedAt:      now,
 	}
+	// The first of the two sync points ADR-0003 names. Everything the wire
+	// `metadata` object needs is known now except the model, and the response
+	// is persisted on the next line — so a task that never reaches the second
+	// sync point still carries its session id, which Tasks §3 makes a MUST.
+	task.SyncMetadata()
 	if err := s.store.CreateTask(ctx, task); err != nil {
 		return nil, nil, fmt.Errorf("service: persist task: %w", err)
 	}
@@ -388,14 +397,14 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 		DisabledTools:   runtime.DisabledTools,
 	})
 	if err != nil {
-		task.Status = domain.StatusFailed
+		task.Status = uhp.StatusFailed
 		// An adapter that would not start is this server's problem, not the
 		// caller's request being wrong, so the class is server_error. The code is
 		// vendor-prefixed because the specification has no entry for it and
 		// requires an additional code to be namespaced.
-		task.Error = &domain.TaskError{
-			Type:    domain.ErrorTypeServerError,
-			Code:    "uhpgo_adapter_start_failed",
+		task.Error = &uhp.Error{
+			Type:    uhp.ErrorTypeServerError,
+			Code:    uhpgo.CodeAdapterStartFailed,
 			Message: err.Error(),
 		}
 		task.UpdatedAt = time.Now().UTC()
@@ -434,12 +443,15 @@ func (s *TaskService) resolveSession(ctx context.Context, req CreateTaskRequest)
 			harnessID = canonical
 		}
 		sess := &domain.Session{
-			ID:        "sess_" + uuid.NewString(),
-			HarnessID: harnessID,
-			Title:     titleFor(req.Input),
-			Status:    domain.StatusInProgress,
-			CreatedAt: now,
-			UpdatedAt: now,
+			Session: uhp.Session{
+				ID:        "sess_" + uuid.NewString(),
+				Object:    "session",
+				HarnessID: harnessID,
+				Title:     titleFor(req.Input),
+				Status:    string(uhp.StatusInProgress),
+				CreatedAt: now.Unix(),
+				UpdatedAt: now.Unix(),
+			},
 		}
 		return sess.ID, "", sess, nil
 	}
@@ -484,7 +496,7 @@ func (s *TaskService) resolveSession(ctx context.Context, req CreateTaskRequest)
 // One update can produce several events, because UHP's vocabulary describes an
 // item's lifecycle: the first text delta of a run also opens an output item and
 // a content part, and a terminal update closes them.
-func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd harness.RunUpdate, seq *sequencer, rs *runState) ([]domain.Event, error) {
+func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd harness.RunUpdate, seq *sequencer, rs *runState) ([]uhpgo.Event, error) {
 	// Lifecycle §3: "A server MUST NOT transition out of a terminal state."
 	if isTerminalStatus(task.Status) {
 		return nil, nil
@@ -494,7 +506,7 @@ func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd ha
 
 	switch upd.Type {
 	case harness.UpdateDelta:
-		var evs []domain.Event
+		var evs []uhpgo.Event
 		_, existing := task.MessageItem()
 		idx, itemID := task.AppendText(upd.Delta)
 
@@ -505,13 +517,13 @@ func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd ha
 			shell := *item
 			shell.Content = nil
 			evs = append(evs,
-				seq.next(domain.Event{
+				seq.next(uhp.Event{
 					Type: "response.output_item.added",
 					Item: &shell, ItemID: itemID, OutputIndex: intp(idx),
 				}),
-				seq.next(domain.Event{
+				seq.next(uhp.Event{
 					Type:   "response.content_part.added",
-					Part:   &domain.ContentPart{Type: "output_text", Annotations: []domain.Annotation{}},
+					Part:   &uhp.ContentPart{Type: "output_text", Annotations: []uhp.Annotation{}},
 					ItemID: itemID, OutputIndex: intp(idx), ContentIndex: intp(0),
 				}),
 			)
@@ -520,7 +532,7 @@ func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd ha
 		if err := s.store.UpdateTask(ctx, task); err != nil {
 			return nil, err
 		}
-		evs = append(evs, seq.next(domain.Event{
+		evs = append(evs, seq.next(uhp.Event{
 			Type:  "response.output_text.delta",
 			Delta: upd.Delta,
 			// Without these three a client cannot tell which item, which
@@ -573,6 +585,11 @@ func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd ha
 			return nil, nil
 		}
 		task.Model = upd.Model
+		// The second sync point. Model is what requested_model and
+		// model_fallback are compared against, so the projection has to run
+		// again here or the response goes out declaring a substitution that
+		// the line above just undid — or failing to declare one it just made.
+		task.SyncMetadata()
 		if err := s.store.UpdateTask(ctx, task); err != nil {
 			return nil, err
 		}
@@ -588,14 +605,14 @@ func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd ha
 		return nil, nil
 
 	case harness.UpdateCompleted:
-		task.Status = domain.StatusCompleted
+		task.Status = uhp.StatusCompleted
 		return s.terminal(ctx, task, seq, "response.completed", rs)
 
 	case harness.UpdateCancelled:
 		// Lifecycle §3: a cancelled task MUST report "cancelled", never
 		// "failed" — the client that asked for a stop did not hit an error.
 		// Output produced before cancellation is retained.
-		task.Status = domain.StatusCancelled
+		task.Status = uhp.StatusCancelled
 		task.Error = nil
 		// Streaming §4: a cancelled task terminates with response.failed
 		// carrying status "cancelled"; the status field, not the event name,
@@ -603,12 +620,12 @@ func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd ha
 		return s.terminal(ctx, task, seq, "response.failed", rs)
 
 	case harness.UpdateFailed:
-		task.Status = domain.StatusFailed
+		task.Status = uhp.StatusFailed
 		msg := "the harness could not complete the work"
 		if upd.Err != nil {
 			msg = upd.Err.Error()
 		}
-		task.Error = &domain.TaskError{Type: domain.ErrorTypeHarness, Code: "harness_error", Message: msg, Retryable: true}
+		task.Error = &uhp.Error{Type: uhp.ErrorTypeHarness, Code: "harness_error", Message: msg}
 		return s.terminal(ctx, task, seq, "response.failed", rs)
 
 	default:
@@ -623,8 +640,8 @@ func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd ha
 // terminal state goes through it — including the one where an adapter closes
 // its channel without saying anything. A task that wrote a file and then
 // crashed still produced the file.
-func (s *TaskService) terminal(ctx context.Context, task *domain.Task, seq *sequencer, evType string, rs *runState) ([]domain.Event, error) {
-	var evs []domain.Event
+func (s *TaskService) terminal(ctx context.Context, task *domain.Task, seq *sequencer, evType string, rs *runState) ([]uhpgo.Event, error) {
+	var evs []uhpgo.Event
 
 	s.captureArtifacts(ctx, task, rs)
 	s.citeArtifacts(task)
@@ -635,24 +652,24 @@ func (s *TaskService) terminal(ctx context.Context, task *domain.Task, seq *sequ
 		// The closing part repeats the item's own annotations, so a client that
 		// followed the stream ends up with the same citations as one that read
 		// only the final response.
-		annotations := []domain.Annotation{}
+		annotations := []uhp.Annotation{}
 		if len(item.Content) > 0 {
 			text = item.Content[0].Text
 			if item.Content[0].Annotations != nil {
 				annotations = item.Content[0].Annotations
 			}
 		}
-		part := domain.ContentPart{Type: "output_text", Text: text, Annotations: annotations}
+		part := uhp.ContentPart{Type: "output_text", Text: text, Annotations: annotations}
 		evs = append(evs,
-			seq.next(domain.Event{
+			seq.next(uhp.Event{
 				Type: "response.output_text.done", Text: text,
 				ItemID: item.ID, OutputIndex: intp(idx), ContentIndex: intp(0),
 			}),
-			seq.next(domain.Event{
+			seq.next(uhp.Event{
 				Type: "response.content_part.done", Part: &part,
 				ItemID: item.ID, OutputIndex: intp(idx), ContentIndex: intp(0),
 			}),
-			seq.next(domain.Event{
+			seq.next(uhp.Event{
 				Type: "response.output_item.done", Item: cloneItem(item),
 				ItemID: item.ID, OutputIndex: intp(idx),
 			}),
@@ -666,7 +683,7 @@ func (s *TaskService) terminal(ctx context.Context, task *domain.Task, seq *sequ
 
 	// Streaming §4: the terminal event carries the complete final response, so
 	// a client that missed intermediate events can rely on it alone.
-	evs = append(evs, seq.next(domain.Event{Type: evType, Response: cloneTask(task)}))
+	evs = append(evs, seq.next(uhp.Event{Type: evType, Response: responseOf(task)}))
 	return evs, nil
 }
 
@@ -688,11 +705,25 @@ func (s *TaskService) persistNativeSessionID(ctx context.Context, task *domain.T
 	}
 	sess.NativeSessionID = task.NativeSessionID
 	sess.LastResponseID = task.ID
-	sess.UpdatedAt = time.Now().UTC()
+	sess.UpdatedAt = time.Now().UTC().Unix()
 	return s.store.UpdateSession(ctx, sess)
 }
 
 func intp(i int) *int { return &i }
+
+// previousResponseID renders an absent continuation as the explicit null the
+// wire object requires, rather than as an empty string.
+//
+// The distinction is the client's: `null` says this response continues nothing,
+// where `""` would be a response id of no characters. The service works in
+// plain strings because an empty one is unambiguous internally, so the
+// conversion happens here, once, at the boundary where the two meanings differ.
+func previousResponseID(id string) *string {
+	if id == "" {
+		return nil
+	}
+	return &id
+}
 
 // GetTask answers GET /v1/responses/{id}.
 //
@@ -744,13 +775,13 @@ func (s *TaskService) CancelTask(ctx context.Context, taskID string) error {
 		// No capability check: there is no harness process to stop, so nothing
 		// is being promised that cannot be delivered. Refusing would leave the
 		// task stuck in a non-terminal state that nothing else will ever write.
-		task.Status = domain.StatusCancelled
+		task.Status = uhp.StatusCancelled
 		task.Error = nil
 		task.UpdatedAt = time.Now().UTC()
 		return s.store.UpdateTask(ctx, task)
 	}
 
-	if err := s.requireHarnessCapability(ctx, task.HarnessID, domain.CapCancellation, whyNoCancellation); err != nil {
+	if err := s.requireHarnessCapability(ctx, task.HarnessID, uhpgo.CapCancellation, whyNoCancellation); err != nil {
 		return err
 	}
 
@@ -772,7 +803,7 @@ func (s *TaskService) CancelTask(ctx context.Context, taskID string) error {
 // request settled when what actually happened is that this server could not
 // read its own state.
 func (s *TaskService) requireHarnessCapability(
-	ctx context.Context, harnessID string, c domain.Capability, consequence string,
+	ctx context.Context, harnessID string, c uhpgo.Capability, consequence string,
 ) error {
 	h, ok, err := s.GetHarness(ctx, harnessID)
 	if err != nil {

@@ -3,6 +3,7 @@ package http
 import (
 	"bufio"
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -10,10 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
 	"github.com/aenawi/uhp-go/internal/service"
 	"github.com/aenawi/uhp-go/internal/store"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // openStream starts a streaming task against a real listener — httptest's
@@ -192,7 +194,7 @@ func TestDefaultKeepAliveBeatsTheProtocolBound(t *testing.T) {
 // stream this notice exists to keep alive.
 func TestGapNoticeClearsTheEventID(t *testing.T) {
 	var sb strings.Builder
-	if err := writeSSEClearingID(&sb, domain.Event{Type: "error", Seq: 12, Code: "uhpgo_event_gap"}); err != nil {
+	if err := writeSSEClearingID(&sb, uhpgo.Event{Event: uhp.Event{Type: "error", SequenceNumber: 12, Code: "uhpgo_event_gap"}}); err != nil {
 		t.Fatalf("writeSSEClearingID: %v", err)
 	}
 	if !strings.HasPrefix(sb.String(), "id: \nevent: error\n") {
@@ -210,5 +212,88 @@ func TestKeepAliveCarriesNoData(t *testing.T) {
 	}
 	if sb.String() != ": keep-alive\n\n" {
 		t.Fatalf("wrote %q, want %q", sb.String(), ": keep-alive\n\n")
+	}
+}
+
+// What this server writes is what the published decoder reads.
+//
+// The two halves are written in different packages against the same chapter,
+// and nothing else in the tree compares them: uhp's own tests decode streams
+// its tests wrote, and the tests above assert on bytes this package wrote. A
+// framing detail that drifted — a missing blank line, a keep-alive that stopped
+// being a comment, an id line in the wrong place — would leave both suites green
+// and every client using uhp.EventDecoder broken against this server.
+//
+// Both interleavings are checked, and the second is not redundant. A keep-alive
+// ends with a blank line of its own, so a stream that had one between every pair
+// of events would still frame correctly if writeSSE stopped emitting its own
+// terminator — the separator would be there by accident. Only back-to-back
+// events make that mistake visible, and back-to-back events are what a fast
+// harness produces.
+func TestServerStreamDecodesWithThePublishedDecoder(t *testing.T) {
+	zero := 0
+	written := []uhpgo.Event{
+		{Event: uhp.Event{Type: uhp.EventResponseCreated, SequenceNumber: 0,
+			Response: &uhp.Response{ID: "resp_1", Object: "response", Status: uhp.StatusInProgress, Model: "m"}}},
+		{Event: uhp.Event{Type: uhp.EventOutputTextDelta, SequenceNumber: 1,
+			Delta: "Sum", ItemID: "msg_1", OutputIndex: &zero, ContentIndex: &zero}},
+		{Event: uhp.Event{Type: uhp.EventResponseCompleted, SequenceNumber: 2,
+			Response: &uhp.Response{ID: "resp_1", Object: "response", Status: uhp.StatusCompleted, Model: "m"}}},
+	}
+
+	for _, tc := range []struct {
+		name      string
+		keepAlive bool
+	}{
+		{name: "with keep-alives", keepAlive: true},
+		{name: "back to back", keepAlive: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var sb strings.Builder
+			for i, ev := range written {
+				if tc.keepAlive && i > 0 {
+					if err := writeKeepAlive(&sb); err != nil {
+						t.Fatalf("writeKeepAlive: %v", err)
+					}
+				}
+				if err := writeSSE(&sb, ev); err != nil {
+					t.Fatalf("writeSSE: %v", err)
+				}
+			}
+
+			dec := uhp.NewEventDecoder(strings.NewReader(sb.String()))
+			var got []uhp.Event
+			for {
+				ev, err := dec.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatalf("decoding this server's own stream: %v", err)
+				}
+				got = append(got, ev)
+			}
+
+			if len(got) != len(written) {
+				t.Fatalf("decoded %d events from a stream of %d", len(got), len(written))
+			}
+			for i := range got {
+				if got[i].Type != written[i].Type || got[i].SequenceNumber != i {
+					t.Errorf("event %d = %s/%d, want %s/%d",
+						i, got[i].Type, got[i].SequenceNumber, written[i].Type, i)
+				}
+			}
+			if got[1].Delta != "Sum" || got[1].OutputIndex == nil || *got[1].OutputIndex != 0 {
+				t.Errorf("the delta lost its payload or its index: %+v", got[1])
+			}
+			if !got[len(got)-1].IsTerminal() {
+				t.Error("the last event did not survive as a terminal one")
+			}
+			// The id line is what a client sends back as Last-Event-ID, so it
+			// has to be the sequence number the resume path expects.
+			if dec.LastEventID() != "2" {
+				t.Errorf("LastEventID = %q, want %q", dec.LastEventID(), "2")
+			}
+		})
 	}
 }

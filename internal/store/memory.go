@@ -15,18 +15,32 @@ import (
 	"sync"
 
 	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 type MemoryStore struct {
 	mu       sync.RWMutex
 	tasks    map[string]*domain.Task
 	sessions map[string]*domain.Session
+
+	// arrived records the order tasks were created in, which a map does not
+	// keep and CreatedAt no longer supplies on its own.
+	//
+	// A response's created_at is Unix seconds — the protocol's resolution, not
+	// this store's choice — and two tasks in one session routinely start inside
+	// the same second. Ordering on the timestamp alone would then fall through
+	// to the tie-break, and a task id is a UUID: the transcript a client
+	// rebuilds from /turns would come back shuffled, deterministically and
+	// wrongly. SQLiteStore answers the same question with rowid.
+	arrived map[string]uint64
+	nextSeq uint64
 }
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		tasks:    make(map[string]*domain.Task),
 		sessions: make(map[string]*domain.Session),
+		arrived:  make(map[string]uint64),
 	}
 }
 
@@ -34,6 +48,12 @@ func (s *MemoryStore) CreateTask(_ context.Context, t *domain.Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tasks[t.ID] = copyTask(t)
+	// Only on create. An update must not move a task to the end of its own
+	// session's history.
+	if _, ok := s.arrived[t.ID]; !ok {
+		s.nextSeq++
+		s.arrived[t.ID] = s.nextSeq
+	}
 	return nil
 }
 
@@ -118,7 +138,7 @@ func copyTask(t *domain.Task) *domain.Task {
 	cp.Metadata = copyAnyMap(t.Metadata)
 	cp.IncompleteDetails = copyAnyMap(t.IncompleteDetails)
 	if t.Output != nil {
-		cp.Output = make([]domain.OutputItem, len(t.Output))
+		cp.Output = make([]uhp.OutputItem, len(t.Output))
 		for i, item := range t.Output {
 			cp.Output[i] = copyOutputItem(item)
 		}
@@ -137,16 +157,26 @@ func copyTask(t *domain.Task) *domain.Task {
 
 // copyOutputItem copies an item and the slices hanging off it. Content parts
 // carry their own annotation slice, so a one-level copy is not enough.
-func copyOutputItem(item domain.OutputItem) domain.OutputItem {
+func copyOutputItem(item uhp.OutputItem) uhp.OutputItem {
 	if item.Content != nil {
-		content := make([]domain.ContentPart, len(item.Content))
+		content := make([]uhp.ContentPart, len(item.Content))
 		for i, part := range item.Content {
 			part.Annotations = copySlice(part.Annotations)
 			content[i] = part
 		}
 		item.Content = content
 	}
-	item.Summary = copyAnySlice(item.Summary)
+	// A reasoning summary is an array of objects, so each entry needs the same
+	// deep copy an item's metadata gets: a shallow copy would hand two callers
+	// the same map, and this store's whole contract is that a reader cannot
+	// reach what it did not write.
+	if item.Summary != nil {
+		summary := make([]map[string]any, len(item.Summary))
+		for i, part := range item.Summary {
+			summary[i] = copyAnyMap(part)
+		}
+		item.Summary = summary
+	}
 	return item
 }
 
@@ -231,8 +261,8 @@ func (s *MemoryStore) ListSessions(_ context.Context, f domain.SessionFilter) (d
 		all = append(all, &cp)
 	}
 	sort.Slice(all, func(i, j int) bool {
-		if !all[i].CreatedAt.Equal(all[j].CreatedAt) {
-			return all[i].CreatedAt.After(all[j].CreatedAt)
+		if all[i].CreatedAt != all[j].CreatedAt {
+			return all[i].CreatedAt > all[j].CreatedAt
 		}
 		return all[i].ID < all[j].ID
 	})
@@ -276,8 +306,14 @@ func (s *MemoryStore) ListSessionTasks(_ context.Context, sessionID string) ([]*
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		if out[i].CreatedAt != out[j].CreatedAt {
+			return out[i].CreatedAt < out[j].CreatedAt
+		}
+		// Arrival, not id: see the field's comment. A task with no recorded
+		// arrival sorts first and then by id, which is the old behaviour and
+		// reachable only for a task this store did not create.
+		if a, b := s.arrived[out[i].ID], s.arrived[out[j].ID]; a != b {
+			return a < b
 		}
 		return out[i].ID < out[j].ID
 	})

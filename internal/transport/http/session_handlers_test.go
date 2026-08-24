@@ -4,20 +4,21 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/service"
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 func newSession(id string) *domain.Session {
-	return &domain.Session{
+	return &domain.Session{Session: uhp.Session{
 		ID:        id,
+		Object:    "session",
 		HarnessID: "chrn_echo",
-		Status:    domain.StatusCompleted,
-		CreatedAt: time.Unix(1700000000, 0).UTC(),
-		UpdatedAt: time.Unix(1700000001, 0).UTC(),
-	}
+		Status:    string(uhp.StatusCompleted),
+		CreatedAt: 1700000000,
+		UpdatedAt: 1700000001,
+	}}
 }
 
 // jsonArray asserts a field decoded as an array rather than as null.
@@ -167,7 +168,7 @@ func TestGetSessionNotFound(t *testing.T) {
 // "nothing has run yet" case its crash.
 func TestSessionTurnsEmptyIsAnArrayNotNull(t *testing.T) {
 	srv := newFakeServer(&fakeService{
-		sessionTurns: func(context.Context, string) ([]domain.Turn, error) { return nil, nil },
+		sessionTurns: func(context.Context, string) ([]uhp.Turn, error) { return nil, nil },
 	})
 
 	status, body := callJSON(t, srv, "GET", "/v1/sessions/sess_1/turns", "")
@@ -181,10 +182,10 @@ func TestSessionTurnsEmptyIsAnArrayNotNull(t *testing.T) {
 
 func TestSessionTurns(t *testing.T) {
 	srv := newFakeServer(&fakeService{
-		sessionTurns: func(context.Context, string) ([]domain.Turn, error) {
-			return []domain.Turn{{
+		sessionTurns: func(context.Context, string) ([]uhp.Turn, error) {
+			return []uhp.Turn{{
 				ResponseID: "resp_1",
-				Status:     domain.StatusCompleted,
+				Status:     uhp.StatusCompleted,
 				Model:      "m",
 				Input:      "hi",
 				Output:     "ok",
@@ -208,7 +209,7 @@ func TestSessionTurns(t *testing.T) {
 
 func TestSessionTurnsNotFound(t *testing.T) {
 	srv := newFakeServer(&fakeService{
-		sessionTurns: func(context.Context, string) ([]domain.Turn, error) {
+		sessionTurns: func(context.Context, string) ([]uhp.Turn, error) {
 			return nil, service.ErrSessionNotFound
 		},
 	})
@@ -233,7 +234,7 @@ func TestCancelSessionReturnsTheSession(t *testing.T) {
 		},
 		getSession: func(_ context.Context, id string) (*domain.Session, error) {
 			s := newSession(id)
-			s.Status = domain.StatusCancelled
+			s.Status = string(uhp.StatusCancelled)
 			return s, nil
 		},
 	})
@@ -245,7 +246,7 @@ func TestCancelSessionReturnsTheSession(t *testing.T) {
 	if cancelled != "sess_1" {
 		t.Fatalf("cancelled %q, want sess_1", cancelled)
 	}
-	if body["id"] != "sess_1" || body["status"] != string(domain.StatusCancelled) {
+	if body["id"] != "sess_1" || body["status"] != string(uhp.StatusCancelled) {
 		t.Fatalf("unexpected session: %v", body)
 	}
 }

@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // NewGrok declares the Grok CLI harness.
@@ -46,8 +47,8 @@ func NewGrok(models []string) *CLIHarness {
 		// export <id>` rather than the model's answer — see the probe, where a
 		// second turn *without* `--resume` also produced the first turn's word,
 		// having found it by reading the probe's own files off disk.
-		Capabilities: []domain.Capability{
-			domain.CapStreaming, domain.CapSessions, domain.CapTools,
+		Capabilities: []uhpgo.Capability{
+			uhpgo.CapStreaming, uhpgo.CapSessions, uhpgo.CapTools,
 		},
 		// `grok models` prints the models this login can actually use, so the
 		// advertised list is computed rather than guessed. Verified by
@@ -242,7 +243,7 @@ func parseGrokLine(line string) []RunUpdate {
 		// task's against a real total of 19838. UHP permits usage to be null;
 		// it does not permit it to be wrong.
 		if ev.Usage != nil {
-			updates = append(updates, RunUpdate{Type: UpdateUsage, Usage: &domain.Usage{
+			updates = append(updates, RunUpdate{Type: UpdateUsage, Usage: &uhp.Usage{
 				InputTokens:      ev.Usage.InputTokens,
 				OutputTokens:     ev.Usage.OutputTokens,
 				TotalTokens:      ev.Usage.InputTokens + ev.Usage.OutputTokens,

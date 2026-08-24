@@ -8,9 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
 	"github.com/aenawi/uhp-go/internal/store"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 func managedService(t *testing.T) (*TaskService, string) {
@@ -154,7 +155,7 @@ func TestCreateHarnessRefusesASkillWithoutAManifest(t *testing.T) {
 	svc, _ := managedService(t)
 	_, err := svc.CreateHarness(context.Background(), HarnessSpec{
 		Name: "x", Base: "echo",
-		Skills: []domain.Skill{{Name: "no-manifest", Files: []domain.SkillFile{
+		Skills: []uhp.Skill{{Name: "no-manifest", Files: []uhp.SkillFile{
 			{Path: "notes.md", Content: "no manifest here"},
 		}}},
 	})
@@ -168,7 +169,7 @@ func TestCreateHarnessRefusesASkillPathThatEscapes(t *testing.T) {
 	for _, bad := range []string{"../escape.md", "/etc/passwd", "nested/../../out.md", ""} {
 		_, err := svc.CreateHarness(context.Background(), HarnessSpec{
 			Name: "x", Base: "echo",
-			Skills: []domain.Skill{{Name: "escaper", Files: []domain.SkillFile{
+			Skills: []uhp.Skill{{Name: "escaper", Files: []uhp.SkillFile{
 				{Path: "SKILL.md", Content: "---\nname: escaper\n---\n"},
 				{Path: bad, Content: "x"},
 			}}},
@@ -183,7 +184,7 @@ func TestCreateHarnessRefusesUndecodableBinaryContent(t *testing.T) {
 	svc, _ := managedService(t)
 	_, err := svc.CreateHarness(context.Background(), HarnessSpec{
 		Name: "x", Base: "echo",
-		Skills: []domain.Skill{{Name: "blobby", Files: []domain.SkillFile{
+		Skills: []uhp.Skill{{Name: "blobby", Files: []uhp.SkillFile{
 			{Path: "SKILL.md", Content: "---\nname: blobby\n---\n"},
 			{Path: "assets/blob.bin", ContentB64: "not base64!!"},
 		}}},
@@ -197,7 +198,7 @@ func TestCreateHarnessAcceptsAWholeSkillFolder(t *testing.T) {
 	svc, _ := managedService(t)
 	h, err := svc.CreateHarness(context.Background(), HarnessSpec{
 		Name: "x", Base: "echo",
-		Skills: []domain.Skill{{Name: "manual", Files: []domain.SkillFile{
+		Skills: []uhp.Skill{{Name: "manual", Files: []uhp.SkillFile{
 			{Path: "SKILL.md", Content: "---\nname: manual\n---\n"},
 			{Path: "references/data.md", Content: "nested\n"},
 			{Path: "assets/blob.bin", ContentB64: "AAECAwQF"},
@@ -353,7 +354,7 @@ func TestTaskRunsOnAManagedHarness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if final.Status != domain.StatusCompleted {
+	if final.Status != uhp.StatusCompleted {
 		t.Fatalf("expected completed, got %s", final.Status)
 	}
 	// echoAdapter echoes its input, so this proves the system prompt reached it.
@@ -392,7 +393,7 @@ func TestMcpCredentialsAreNeverReturned(t *testing.T) {
 	ctx := context.Background()
 	created, err := svc.CreateHarness(ctx, HarnessSpec{
 		Name: "x", Base: "echo",
-		McpServers: []domain.McpServer{{Name: "vault", URL: "https://mcp.example.com/mcp", Auth: "secret-token"}},
+		McpServers: []uhp.McpServer{{Name: "vault", URL: "https://mcp.example.com/mcp", Auth: "secret-token"}},
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -418,7 +419,7 @@ func TestUpdateCarriesForwardAnMcpCredential(t *testing.T) {
 	ctx := context.Background()
 	created, err := svc.CreateHarness(ctx, HarnessSpec{
 		Name: "before", Base: "echo",
-		McpServers: []domain.McpServer{{Name: "vault", URL: "https://mcp.example.com/mcp", Auth: "secret-token"}},
+		McpServers: []uhp.McpServer{{Name: "vault", URL: "https://mcp.example.com/mcp", Auth: "secret-token"}},
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -426,7 +427,7 @@ func TestUpdateCarriesForwardAnMcpCredential(t *testing.T) {
 
 	if _, err := svc.UpdateHarness(ctx, created.ID, HarnessSpec{
 		Name: "after", Base: "echo",
-		McpServers: []domain.McpServer{{Name: "vault", URL: "https://mcp.example.com/mcp"}},
+		McpServers: []uhp.McpServer{{Name: "vault", URL: "https://mcp.example.com/mcp"}},
 	}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -443,12 +444,12 @@ func TestUpdateCarriesForwardAnMcpCredential(t *testing.T) {
 func TestCreateHarnessRefusesAnIncompleteMcpServer(t *testing.T) {
 	svc, _ := managedService(t)
 	ctx := context.Background()
-	for _, bad := range []domain.McpServer{
+	for _, bad := range []uhp.McpServer{
 		{URL: "https://mcp.example.com/mcp"},
 		{Name: "vault"},
 		{Name: "vault", URL: "https://mcp.example.com/mcp", Transport: "carrier-pigeon"},
 	} {
-		_, err := svc.CreateHarness(ctx, HarnessSpec{Name: "x", Base: "echo", McpServers: []domain.McpServer{bad}})
+		_, err := svc.CreateHarness(ctx, HarnessSpec{Name: "x", Base: "echo", McpServers: []uhp.McpServer{bad}})
 		if !errors.Is(err, ErrInvalidMcpServer) {
 			t.Fatalf("%+v was accepted: %v", bad, err)
 		}
@@ -508,7 +509,7 @@ func TestUpdateHarnessWhoseBaseIsGone(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("the harness stopped resolving: ok=%v err=%v", ok, err)
 	}
-	if got.Status != domain.HarnessUnavailable {
+	if got.Status != uhpgo.HarnessUnavailable {
 		t.Fatalf("expected the harness to report unavailable, got %q", got.Status)
 	}
 

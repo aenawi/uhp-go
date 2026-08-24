@@ -12,6 +12,8 @@ import (
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/service"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // waitForResult is the non-streaming path: it waits for the supervised run to
@@ -30,7 +32,7 @@ func (s *Server) waitForResult(ctx context.Context, task *domain.Task, run *serv
 // subscription is how a stream is read, whichever stream it is: a task's own
 // run or a harness's feed. Both take the same four arguments and mean the same
 // thing by them, so the transport writes SSE once rather than once per source.
-type subscription func(context.Context, int, service.IdleTick, func(domain.Event) error) error
+type subscription func(context.Context, int, service.IdleTick, func(uhpgo.Event) error) error
 
 // streamSSE subscribes to an event log and writes it as Server-Sent Events,
 // starting at sequence number `from`. Disconnecting merely unsubscribes.
@@ -62,7 +64,7 @@ func (s *Server) streamSSE(w http.ResponseWriter, r *http.Request, from int, eve
 			return nil
 		},
 	}
-	err := events(r.Context(), from, idle, func(ev domain.Event) error {
+	err := events(r.Context(), from, idle, func(ev uhpgo.Event) error {
 		if err := writeSSE(w, ev); err != nil {
 			return err
 		}
@@ -93,12 +95,12 @@ func (s *Server) streamSSE(w http.ResponseWriter, r *http.Request, from int, eve
 		// deduplicates on it — losing the one event that explains what
 		// happened. The recovery point is in the message, where it can be read
 		// without being mistaken for a position in the stream.
-		_ = writeSSEClearingID(w, domain.Event{
-			Type: "error", Seq: gap.From,
-			Code: vendorCodeEventGap,
+		_ = writeSSEClearingID(w, uhpgo.Event{Event: uhp.Event{
+			Type: "error", SequenceNumber: gap.From,
+			Code: uhpgo.CodeEventGap,
 			Message: fmt.Sprintf("this stream has moved on; events before %d are no longer "+
 				"retained — reconnect without a Last-Event-ID to resume from there", gap.Oldest),
-		})
+		}})
 		flusher.Flush()
 		return
 	}
@@ -210,12 +212,12 @@ func writeKeepAlive(w io.Writer) error {
 // reconnects, which is the mechanism issue #8 asks for. Emitting it is also
 // how a client discovers resumption is on offer — a stream with no ids has
 // nothing to resume from.
-func writeSSE(w io.Writer, ev domain.Event) error {
+func writeSSE(w io.Writer, ev uhpgo.Event) error {
 	b, err := json.Marshal(ev)
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.Seq, ev.Type, b)
+	_, err = fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.SequenceNumber, ev.Type, b)
 	return err
 }
 
@@ -231,7 +233,7 @@ func writeSSE(w io.Writer, ev domain.Event) error {
 // so the automatic reconnection carries no `Last-Event-ID` at all and is
 // served from the oldest event still retained, which is exactly what this
 // notice tells the client to do.
-func writeSSEClearingID(w io.Writer, ev domain.Event) error {
+func writeSSEClearingID(w io.Writer, ev uhpgo.Event) error {
 	b, err := json.Marshal(ev)
 	if err != nil {
 		return err

@@ -6,8 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/store"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // capsAdapter is an echo harness that advertises exactly the capabilities it is
@@ -17,28 +18,24 @@ type capsAdapter struct {
 	echoAdapter
 	id   string
 	base string
-	caps []domain.Capability
+	caps []uhpgo.Capability
 }
 
-func (a *capsAdapter) Info() domain.Harness {
-	return domain.Harness{
-		ID: a.id, Base: a.base, Object: "harness", Name: a.base,
-		Capabilities: a.caps,
-	}
+func (a *capsAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: a.id, Base: a.base, Object: "harness", Name: a.base},
+		Capabilities: a.caps}
 }
 
 // capsSlowAdapter is the cancellable double with a capability list, for the
 // cancel path: a run has to still be in flight for a refusal to mean anything.
 type capsSlowAdapter struct {
 	*slowAdapter
-	caps []domain.Capability
+	caps []uhpgo.Capability
 }
 
-func (a *capsSlowAdapter) Info() domain.Harness {
-	return domain.Harness{
-		ID: "chrn_slow", Base: "slow", Object: "harness", Name: "Slow",
-		Capabilities: a.caps,
-	}
+func (a *capsSlowAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: "chrn_slow", Base: "slow", Object: "harness", Name: "Slow"},
+		Capabilities: a.caps}
 }
 
 // `files_in` and `files_out` are delivered by this router for every harness —
@@ -58,7 +55,7 @@ func (a *capsSlowAdapter) Info() domain.Harness {
 // careful of them: a capability added on the listing but not on the fetch is a
 // client that sees a different harness depending on which endpoint it asked.
 func TestFileCapabilitiesFollowTheConfiguredWorkspace(t *testing.T) {
-	fileCaps := []domain.Capability{domain.CapFilesIn, domain.CapFilesOut}
+	fileCaps := []uhpgo.Capability{uhpgo.CapFilesIn, uhpgo.CapFilesOut}
 	for _, tc := range []struct {
 		name      string
 		workspace bool
@@ -70,7 +67,7 @@ func TestFileCapabilitiesFollowTheConfiguredWorkspace(t *testing.T) {
 			ctx := context.Background()
 			// Declares neither, exactly as the five shipped bases do.
 			a := &capsAdapter{id: "chrn_plain", base: "plain",
-				caps: []domain.Capability{domain.CapStreaming}}
+				caps: []uhpgo.Capability{uhpgo.CapStreaming}}
 			hs, err := store.NewFileHarnesses(filepath.Join(t.TempDir(), "harnesses.json"))
 			if err != nil {
 				t.Fatalf("harness store: %v", err)
@@ -121,7 +118,7 @@ func TestFileCapabilitiesFollowTheConfiguredWorkspace(t *testing.T) {
 func TestContinuationIsRefusedWhenTheHarnessDoesNotAdvertiseSessions(t *testing.T) {
 	ctx := context.Background()
 	a := &capsAdapter{id: "chrn_amnesiac", base: "amnesiac",
-		caps: []domain.Capability{domain.CapStreaming}}
+		caps: []uhpgo.Capability{uhpgo.CapStreaming}}
 	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger())
 
 	first, run, err := svc.StartTask(ctx, CreateTaskRequest{Input: "one", HarnessID: "amnesiac"})
@@ -139,8 +136,8 @@ func TestContinuationIsRefusedWhenTheHarnessDoesNotAdvertiseSessions(t *testing.
 	if !errors.As(err, &capErr) {
 		t.Fatalf("continuation error = %v, want a *CapabilityError", err)
 	}
-	if capErr.Capability != domain.CapSessions {
-		t.Errorf("refused capability = %q, want %q", capErr.Capability, domain.CapSessions)
+	if capErr.Capability != uhpgo.CapSessions {
+		t.Errorf("refused capability = %q, want %q", capErr.Capability, uhpgo.CapSessions)
 	}
 	if capErr.HarnessID != "chrn_amnesiac" {
 		t.Errorf("refusal names harness %q, want the canonical id", capErr.HarnessID)
@@ -150,7 +147,7 @@ func TestContinuationIsRefusedWhenTheHarnessDoesNotAdvertiseSessions(t *testing.
 func TestContinuationIsAllowedWhenTheHarnessAdvertisesSessions(t *testing.T) {
 	ctx := context.Background()
 	a := &capsAdapter{id: "chrn_recalls", base: "recalls",
-		caps: []domain.Capability{domain.CapStreaming, domain.CapSessions}}
+		caps: []uhpgo.Capability{uhpgo.CapStreaming, uhpgo.CapSessions}}
 	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger())
 
 	first, run, err := svc.StartTask(ctx, CreateTaskRequest{Input: "one", HarnessID: "recalls"})
@@ -181,7 +178,7 @@ func TestContinuationIsAllowedWhenTheHarnessAdvertisesSessions(t *testing.T) {
 func TestCancelTaskIsRefusedWhenTheHarnessDoesNotAdvertiseCancellation(t *testing.T) {
 	ctx := context.Background()
 	a := &capsSlowAdapter{slowAdapter: newSlowAdapter(),
-		caps: []domain.Capability{domain.CapStreaming}}
+		caps: []uhpgo.Capability{uhpgo.CapStreaming}}
 	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger())
 
 	task, _, err := svc.StartTask(ctx, CreateTaskRequest{Input: "work", HarnessID: "slow"})
@@ -195,8 +192,8 @@ func TestCancelTaskIsRefusedWhenTheHarnessDoesNotAdvertiseCancellation(t *testin
 	if !errors.As(err, &capErr) {
 		t.Fatalf("cancel error = %v, want a *CapabilityError", err)
 	}
-	if capErr.Capability != domain.CapCancellation {
-		t.Errorf("refused capability = %q, want %q", capErr.Capability, domain.CapCancellation)
+	if capErr.Capability != uhpgo.CapCancellation {
+		t.Errorf("refused capability = %q, want %q", capErr.Capability, uhpgo.CapCancellation)
 	}
 
 	// Refused means unchanged, not half-cancelled.
@@ -204,9 +201,9 @@ func TestCancelTaskIsRefusedWhenTheHarnessDoesNotAdvertiseCancellation(t *testin
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if stored.Status != domain.StatusInProgress {
+	if stored.Status != uhp.StatusInProgress {
 		t.Errorf("task status after a refused cancel = %q, want %q",
-			stored.Status, domain.StatusInProgress)
+			stored.Status, uhp.StatusInProgress)
 	}
 	// Leave nothing running behind the test.
 	_ = a.slowAdapter.Cancel(ctx, task.ID)
@@ -218,7 +215,7 @@ func TestCancelTaskIsRefusedWhenTheHarnessDoesNotAdvertiseCancellation(t *testin
 func TestCancellingATerminalTaskSucceedsWithoutTheCapability(t *testing.T) {
 	ctx := context.Background()
 	a := &capsAdapter{id: "chrn_amnesiac", base: "amnesiac",
-		caps: []domain.Capability{domain.CapStreaming}}
+		caps: []uhpgo.Capability{uhpgo.CapStreaming}}
 	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger())
 
 	task, run, err := svc.StartTask(ctx, CreateTaskRequest{Input: "one", HarnessID: "amnesiac"})
@@ -236,7 +233,7 @@ func TestCancellingATerminalTaskSucceedsWithoutTheCapability(t *testing.T) {
 func TestCancelSessionIsRefusedWhenTheHarnessDoesNotAdvertiseCancellation(t *testing.T) {
 	ctx := context.Background()
 	a := &capsSlowAdapter{slowAdapter: newSlowAdapter(),
-		caps: []domain.Capability{domain.CapStreaming}}
+		caps: []uhpgo.Capability{uhpgo.CapStreaming}}
 	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger())
 
 	task, _, err := svc.StartTask(ctx, CreateTaskRequest{Input: "work", HarnessID: "slow"})
@@ -250,8 +247,8 @@ func TestCancelSessionIsRefusedWhenTheHarnessDoesNotAdvertiseCancellation(t *tes
 	if !errors.As(err, &capErr) {
 		t.Fatalf("cancel session error = %v, want a *CapabilityError", err)
 	}
-	if capErr.Capability != domain.CapCancellation {
-		t.Errorf("refused capability = %q, want %q", capErr.Capability, domain.CapCancellation)
+	if capErr.Capability != uhpgo.CapCancellation {
+		t.Errorf("refused capability = %q, want %q", capErr.Capability, uhpgo.CapCancellation)
 	}
 	_ = a.slowAdapter.Cancel(ctx, task.ID)
 }
@@ -261,7 +258,7 @@ func TestCancelSessionIsRefusedWhenTheHarnessDoesNotAdvertiseCancellation(t *tes
 func TestCancellingAnIdleSessionSucceedsWithoutTheCapability(t *testing.T) {
 	ctx := context.Background()
 	a := &capsAdapter{id: "chrn_amnesiac", base: "amnesiac",
-		caps: []domain.Capability{domain.CapStreaming}}
+		caps: []uhpgo.Capability{uhpgo.CapStreaming}}
 	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger())
 
 	task, run, err := svc.StartTask(ctx, CreateTaskRequest{Input: "one", HarnessID: "amnesiac"})

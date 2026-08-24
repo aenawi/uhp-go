@@ -3,7 +3,8 @@ package domain
 import (
 	"encoding/json"
 	"strings"
-	"time"
+
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 // The Files chapter names three identifier spaces, and this file is where they
@@ -65,29 +66,34 @@ func ValidSessionID(id string) bool {
 	return true
 }
 
-// Artifact is a file produced by a harness run (UHP "Files" chapter).
+// Artifact is a file produced by a harness run: the internal word for one of
+// the [uhp.File] objects a run reports. Every Artifact is reported as a File;
+// not every File is an Artifact.
 //
-// Path is the artifact's location relative to its container's directory. It is
-// server-derived — the result of walking the session's own working directory —
-// and it is never taken from a client, which is what lets the download handler
-// treat it as trusted after checking the id.
+// Filename is the artifact's location relative to its container's directory,
+// not just its base name — two files called report.md in different directories
+// are different files, and a client shown only the base name could not tell
+// them apart. It is server-derived, the result of walking the session's own
+// working directory, and it is never taken from a client, which is what lets
+// the download handler treat it as trusted after checking the id.
 type Artifact struct {
-	ID          string
-	ContainerID string
-	Path        string
-	MimeType    string
-	SizeBytes   int64
-	CreatedAt   time.Time
+	uhp.File
+
+	// MimeType is an extension: the schema's file object has six properties
+	// and this is not one of them. It is legal (every object there is
+	// additionalProperties: true) and useful to a client deciding whether to
+	// render or download, but a client must not expect it elsewhere.
+	MimeType string `json:"mime_type,omitempty"`
 }
 
 // BaseName is the last element of the artifact's path, for the one place that
 // needs a single element rather than a location: a download's
 // Content-Disposition.
 func (a Artifact) BaseName() string {
-	if i := strings.LastIndex(a.Path, "/"); i >= 0 {
-		return a.Path[i+1:]
+	if i := strings.LastIndex(a.Filename, "/"); i >= 0 {
+		return a.Filename[i+1:]
 	}
-	return a.Path
+	return a.Filename
 }
 
 // DownloadPath is where this artifact's bytes are served from (Files §3).
@@ -95,86 +101,37 @@ func (a Artifact) DownloadPath() string {
 	return "/v1/containers/" + a.ContainerID + "/files/" + a.ID + "/content"
 }
 
-// MarshalJSON emits the wire `file` object (Files §2.2). `filename` carries the
-// path within the container, not just the base name: two artifacts called
-// report.md in different directories are different files, and a client that saw
-// only the base name could not tell them apart.
-func (a Artifact) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		ID          string `json:"id"`
-		Object      string `json:"object"`
-		ContainerID string `json:"container_id"`
-		Filename    string `json:"filename"`
-		MimeType    string `json:"mime_type"`
-		Bytes       int64  `json:"bytes"`
-		CreatedAt   int64  `json:"created_at"`
-		DownloadURL string `json:"download_url"`
-	}{
-		ID:          a.ID,
-		Object:      "file",
-		ContainerID: a.ContainerID,
-		Filename:    a.Path,
-		MimeType:    a.MimeType,
-		Bytes:       a.SizeBytes,
-		CreatedAt:   a.CreatedAt.Unix(),
-		DownloadURL: a.DownloadPath(),
-	})
-}
-
-// Annotation cites an artifact from within assistant text (Files §2.1).
+// MarshalJSON emits the wire file object plus this server's two additions.
 //
-// Type is `container_file_citation`, which the schema pins as a constant: an
-// annotation exists to point a client at a file it can then download, so it
-// carries the container and file ids and the URL that serves the bytes.
-type Annotation struct {
-	Type        string `json:"type"`
-	ContainerID string `json:"container_id,omitempty"`
-	FileID      string `json:"file_id,omitempty"`
-	Filename    string `json:"filename,omitempty"`
-	DownloadURL string `json:"download_url,omitempty"`
+// download_url is derived from the two ids rather than stored, so it cannot
+// disagree with them, and `object` is defaulted here rather than at every
+// construction site for the same reason: a constant that every caller has to
+// remember is a constant one caller will forget.
+func (a Artifact) MarshalJSON() ([]byte, error) {
+	// A distinct type so that marshalling the copy does not re-enter this
+	// method. uhp.File carries no marshaller of its own, so nothing is
+	// promoted onto it and the struct tags do the work.
+	type artifact Artifact
+	out := artifact(a)
+	if out.Object == "" {
+		out.Object = "file"
+	}
+	return json.Marshal(struct {
+		artifact
+		DownloadURL string `json:"download_url"`
+	}{out, a.DownloadPath()})
 }
-
-// AnnotationTypeFileCitation is the only annotation type this server emits.
-const AnnotationTypeFileCitation = "container_file_citation"
 
 // Cite builds the annotation that points at this artifact. baseURL is the
 // server's externally reachable origin; empty means "serve a relative URL",
 // which is correct whenever the client and the API share an origin and is the
 // only honest answer when the operator has not told us what the origin is.
-func (a Artifact) Cite(baseURL string) Annotation {
-	return Annotation{
-		Type:        AnnotationTypeFileCitation,
+func (a Artifact) Cite(baseURL string) uhp.Annotation {
+	return uhp.Annotation{
+		Type:        uhp.AnnotationTypeFileCitation,
 		ContainerID: a.ContainerID,
 		FileID:      a.ID,
-		Filename:    a.Path,
+		Filename:    a.Filename,
 		DownloadURL: strings.TrimSuffix(baseURL, "/") + a.DownloadPath(),
 	}
-}
-
-// Upload is a file a client sent ahead of a task (Files §1.2), held until a
-// task references it by id.
-type Upload struct {
-	ID        string
-	Filename  string
-	MimeType  string
-	Data      []byte
-	CreatedAt time.Time
-}
-
-func (u Upload) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		ID        string `json:"id"`
-		Object    string `json:"object"`
-		Filename  string `json:"filename"`
-		MimeType  string `json:"mime_type"`
-		Bytes     int    `json:"bytes"`
-		CreatedAt int64  `json:"created_at"`
-	}{
-		ID:        u.ID,
-		Object:    "file",
-		Filename:  u.Filename,
-		MimeType:  u.MimeType,
-		Bytes:     len(u.Data),
-		CreatedAt: u.CreatedAt.Unix(),
-	})
 }

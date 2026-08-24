@@ -3,7 +3,8 @@ package domain
 import (
 	"encoding/json"
 	"testing"
-	"time"
+
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 func TestContainerIDRoundTrips(t *testing.T) {
@@ -34,12 +35,14 @@ func TestContainerIDRejectsAnythingNotMinted(t *testing.T) {
 
 func TestArtifactMarshalsAsAFileObject(t *testing.T) {
 	a := Artifact{
-		ID:          "file_abc",
-		ContainerID: "cntr_1",
-		Path:        "reports/q3.md",
-		MimeType:    "text/markdown",
-		SizeBytes:   12,
-		CreatedAt:   time.Unix(1786400240, 0),
+		File: uhp.File{
+			ID:          "file_abc",
+			ContainerID: "cntr_1",
+			Filename:    "reports/q3.md",
+			Bytes:       12,
+			CreatedAt:   1786400240,
+		},
+		MimeType: "text/markdown",
 	}
 	var got map[string]any
 	b, err := json.Marshal(a)
@@ -49,17 +52,29 @@ func TestArtifactMarshalsAsAFileObject(t *testing.T) {
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for k, want := range map[string]any{
+	want := map[string]any{
 		"id":           "file_abc",
 		"object":       "file",
 		"container_id": "cntr_1",
 		"filename":     "reports/q3.md",
+		"mime_type":    "text/markdown",
 		"bytes":        float64(12),
 		"created_at":   float64(1786400240),
 		"download_url": "/v1/containers/cntr_1/files/file_abc/content",
-	} {
-		if got[k] != want {
-			t.Errorf("%s = %v, want %v", k, got[k], want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %v, want %v", k, got[k], v)
+		}
+	}
+	// The whole key set, not just the keys wanted. Artifact marshals through a
+	// struct that carries every field it has, so an internal one added later
+	// reaches a client under its Go name — the same way it would have on
+	// [Session], and with the same silence from a test that only asked whether
+	// the fields it knew about were present.
+	for k := range got {
+		if _, ok := want[k]; !ok {
+			t.Errorf("artifact published %q, which is not part of the file object", k)
 		}
 	}
 	if a.BaseName() != "q3.md" {
@@ -68,14 +83,14 @@ func TestArtifactMarshalsAsAFileObject(t *testing.T) {
 }
 
 func TestCiteUsesTheConfiguredOrigin(t *testing.T) {
-	a := Artifact{ID: "file_abc", ContainerID: "cntr_1", Path: "q3.md"}
+	a := Artifact{File: uhp.File{ID: "file_abc", ContainerID: "cntr_1", Filename: "q3.md"}}
 	if got := a.Cite("https://uhp.example.com/").DownloadURL; got != "https://uhp.example.com/v1/containers/cntr_1/files/file_abc/content" {
 		t.Errorf("absolute download url = %q", got)
 	}
 	if got := a.Cite("").DownloadURL; got != "/v1/containers/cntr_1/files/file_abc/content" {
 		t.Errorf("relative download url = %q", got)
 	}
-	if got := a.Cite("").Type; got != AnnotationTypeFileCitation {
-		t.Errorf("annotation type = %q, want %q", got, AnnotationTypeFileCitation)
+	if got := a.Cite("").Type; got != uhp.AnnotationTypeFileCitation {
+		t.Errorf("annotation type = %q, want %q", got, uhp.AnnotationTypeFileCitation)
 	}
 }

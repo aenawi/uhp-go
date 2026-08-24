@@ -41,8 +41,9 @@ concept, no converters, no parallel tree.
 `uhp.Response.Metadata` is the wire truth and marshals verbatim. The projection into it —
 `session_id`, `harness_id`, and the `requested_model` / `model_fallback` pair from
 `tasks.md` §1.3 — happens when the values are known, not when the response is marshalled.
-There are two such points: task creation (`internal/service/task_service.go:351`) and
-mid-run model resolution (`:567`).
+There are two such points: task creation and mid-run model resolution. Both now call
+`domain.Task.SyncMetadata` — `internal/service/task_service.go:370` and `:592` as
+implemented, and `grep -n SyncMetadata` is the durable way to find them.
 
 `domain.Task`'s genuinely internal fields are three, not six: `Input`, `Artifacts` and
 `NativeSessionID`. `SessionID`, `HarnessID` and `RequestedModel` remain on the internal

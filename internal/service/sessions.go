@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // maxTitleRunes bounds a generated session title.
@@ -59,20 +61,20 @@ func (s *TaskService) GetSession(ctx context.Context, id string) (*domain.Sessio
 
 // SessionTurns answers GET /v1/sessions/{id}/turns: the ordered task history of
 // a session, so a client can rebuild a transcript it did not store.
-func (s *TaskService) SessionTurns(ctx context.Context, id string) ([]domain.Turn, error) {
+func (s *TaskService) SessionTurns(ctx context.Context, id string) ([]uhp.Turn, error) {
 	tasks, err := s.sessionTasks(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	turns := make([]domain.Turn, 0, len(tasks))
+	turns := make([]uhp.Turn, 0, len(tasks))
 	for _, t := range tasks {
-		turns = append(turns, domain.Turn{
+		turns = append(turns, uhp.Turn{
 			ResponseID: t.ID,
 			Status:     t.Status,
 			Model:      t.Model,
 			Input:      t.Input,
 			Output:     t.Text(),
-			CreatedAt:  t.CreatedAt.Unix(),
+			CreatedAt:  t.CreatedAt,
 		})
 	}
 	return turns, nil
@@ -117,7 +119,7 @@ func (s *TaskService) CancelSession(ctx context.Context, id string) error {
 		// capabilities: there is no work being promised a stop.
 		return nil
 	}
-	if err := s.requireHarnessCapability(ctx, sess.HarnessID, domain.CapCancellation, whyNoCancellation); err != nil {
+	if err := s.requireHarnessCapability(ctx, sess.HarnessID, uhpgo.CapCancellation, whyNoCancellation); err != nil {
 		return err
 	}
 	run.cancel()
@@ -126,7 +128,7 @@ func (s *TaskService) CancelSession(ctx context.Context, id string) error {
 
 // markSessionStatus records a session's status as its latest task settles, so a
 // listing can show what happened without reading every task.
-func (s *TaskService) markSessionStatus(ctx context.Context, sessionID string, status domain.TaskStatus, responseID string) {
+func (s *TaskService) markSessionStatus(ctx context.Context, sessionID string, status uhp.ResponseStatus, responseID string) {
 	if sessionID == "" {
 		return
 	}
@@ -137,9 +139,13 @@ func (s *TaskService) markSessionStatus(ctx context.Context, sessionID string, s
 	if err != nil || !found {
 		return
 	}
-	sess.Status = status
+	// The schema types a session's status as an unconstrained string, so the
+	// conversion is explicit here rather than hidden in the field's type: this
+	// server happens to reuse the response vocabulary, and a different
+	// conformant server need not.
+	sess.Status = string(status)
 	sess.LastResponseID = responseID
-	sess.UpdatedAt = time.Now().UTC()
+	sess.UpdatedAt = time.Now().UTC().Unix()
 	if err := s.store.UpdateSession(ctx, sess); err != nil {
 		s.log.Error("persist session status", "error", err, "session_id", sessionID)
 	}

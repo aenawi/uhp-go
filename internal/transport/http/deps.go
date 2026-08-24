@@ -6,6 +6,8 @@ import (
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/service"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // TaskService is the application core as this transport needs it: every method
@@ -35,18 +37,18 @@ type TaskService interface {
 	// Harnesses §1-3). FilesEnabled and HarnessManagementEnabled are what the
 	// discovery document reports, so a capability is never advertised by a
 	// deployment that cannot honour it.
-	ListHarnesses(ctx context.Context) ([]domain.Harness, error)
-	GetHarness(ctx context.Context, id string) (domain.Harness, bool, error)
+	ListHarnesses(ctx context.Context) ([]uhpgo.Harness, error)
+	GetHarness(ctx context.Context, id string) (uhpgo.Harness, bool, error)
 	ModelAvailable(ctx context.Context, harnessID, model string) bool
 	FilesEnabled() bool
 	HarnessManagementEnabled() bool
 
 	// Harness management (Harnesses §4-5).
-	CreateHarness(ctx context.Context, spec service.HarnessSpec) (domain.Harness, error)
-	UpdateHarness(ctx context.Context, id string, spec service.HarnessSpec) (domain.Harness, error)
-	PatchHarness(ctx context.Context, id string, p service.HarnessPatch) (domain.Harness, error)
+	CreateHarness(ctx context.Context, spec service.HarnessSpec) (uhpgo.Harness, error)
+	UpdateHarness(ctx context.Context, id string, spec service.HarnessSpec) (uhpgo.Harness, error)
+	PatchHarness(ctx context.Context, id string, p service.HarnessPatch) (uhpgo.Harness, error)
 	DeleteHarness(ctx context.Context, id string) error
-	HarnessSkillFiles(ctx context.Context, harnessID, skillID string) ([]domain.SkillFile, bool, error)
+	HarnessSkillFiles(ctx context.Context, harnessID, skillID string) ([]uhp.SkillFile, bool, error)
 	HarnessFeed(ctx context.Context, id string) (*service.Feed, bool, error)
 
 	// Tasks (Tasks §1-6, Streaming). ResumableStream is what decides whether a
@@ -60,11 +62,11 @@ type TaskService interface {
 	// Sessions (Sessions §1-4).
 	ListSessions(ctx context.Context, f domain.SessionFilter) (domain.SessionPage, error)
 	GetSession(ctx context.Context, id string) (*domain.Session, error)
-	SessionTurns(ctx context.Context, id string) ([]domain.Turn, error)
+	SessionTurns(ctx context.Context, id string) ([]uhp.Turn, error)
 	CancelSession(ctx context.Context, id string) error
 
 	// Files (Files §1-5).
-	StoreUpload(ctx context.Context, filename, mimeType string, data []byte) (domain.Upload, error)
+	StoreUpload(ctx context.Context, filename, mimeType string, data []byte) (uhpgo.Upload, error)
 	SessionFiles(ctx context.Context, sessionID string) ([]domain.Artifact, error)
 	OpenArtifact(ctx context.Context, containerID, fileID string) (domain.Artifact, *os.File, error)
 }

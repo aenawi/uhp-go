@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 func runOnce(t *testing.T, svc *TaskService, req CreateTaskRequest) *domain.Task {
@@ -54,7 +55,7 @@ func TestSessionCarriesTitleAndStatus(t *testing.T) {
 	if sess.Title != "Summarise the README" {
 		t.Errorf("title = %q, want whitespace collapsed onto one line", sess.Title)
 	}
-	if sess.Status != domain.StatusCompleted {
+	if sess.Status != string(uhp.StatusCompleted) {
 		t.Errorf("session status = %q, want it to follow its latest task", sess.Status)
 	}
 	if sess.HarnessID != "chrn_echo" {

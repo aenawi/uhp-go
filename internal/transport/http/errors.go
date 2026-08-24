@@ -5,9 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
 	"github.com/aenawi/uhp-go/internal/service"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // UHP error types (Errors §2). The broad class; `code` carries the specific
@@ -18,9 +19,9 @@ import (
 // independent spellings of one vocabulary is what let this object's two
 // renderings disagree.
 const (
-	typeInvalidRequest = domain.ErrorTypeInvalidRequest
-	typeAuthentication = domain.ErrorTypeAuthentication
-	typeServerError    = domain.ErrorTypeServerError
+	typeInvalidRequest = uhp.ErrorTypeInvalidRequest
+	typeAuthentication = uhp.ErrorTypeAuthentication
+	typeServerError    = uhp.ErrorTypeServerError
 )
 
 // retryAfterNoCapacity is the floor this server asks a refused client to wait,
@@ -146,8 +147,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 // client looking for something it cannot find, which is worse than naming
 // nothing. The wire names live here rather than in the service layer, which
 // knows Go fields and not JSON paths.
-func paramForCapability(c domain.Capability) string {
-	if c == domain.CapSessions {
+func paramForCapability(c uhpgo.Capability) string {
+	if c == uhpgo.CapSessions {
 		return "previous_response_id"
 	}
 	return ""

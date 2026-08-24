@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-	"time"
 )
 
 // The reason this engine exists: a client holds a response id and comes back.
@@ -46,7 +45,7 @@ func TestSQLiteStoreSurvivesRestart(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("get session after restart: found=%v err=%v", found, err)
 	}
-	if sess.HarnessID != "claude-code" || !sess.CreatedAt.Equal(storeEpoch) {
+	if sess.HarnessID != "claude-code" || sess.CreatedAt != storeEpoch.Unix() {
 		t.Fatalf("session did not survive intact: %+v", sess)
 	}
 
@@ -203,31 +202,13 @@ func TestSQLiteStoreWritesReadableRows(t *testing.T) {
 	if sessionID != "sess_a" {
 		t.Fatalf("session_id column is %q", sessionID)
 	}
-	if createdAt != storeEpoch.UnixNano() {
-		t.Fatalf("created_at column is %d, want %d", createdAt, storeEpoch.UnixNano())
+	if createdAt != storeEpoch.Unix() {
+		t.Fatalf("created_at column is %d, want %d", createdAt, storeEpoch.Unix())
 	}
 	// TEXT, not BLOB: the document is meant to be legible to `sqlite3` and to
 	// SQLite's own json functions.
 	if kind != "text" {
 		t.Fatalf("data column holds %s, want text", kind)
-	}
-}
-
-// sortKey saturates rather than wrapping. UnixNano is undefined outside
-// 1678–2262, and the zero time — the earliest instant there is — comes back
-// from it as a large positive number, which would sort as the newest row in
-// the table.
-func TestSQLiteSortKeySaturates(t *testing.T) {
-	var zero time.Time
-	if got := sortKey(zero); got >= 0 {
-		t.Fatalf("the zero time sorts as %d, which is not before everything else", got)
-	}
-	far := time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC)
-	if got := sortKey(far); got <= 0 {
-		t.Fatalf("a year-3000 time sorts as %d, which is not after everything else", got)
-	}
-	if got := sortKey(storeEpoch); got != storeEpoch.UnixNano() {
-		t.Fatalf("an ordinary time sorts as %d, want %d", got, storeEpoch.UnixNano())
 	}
 }
 

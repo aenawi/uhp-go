@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"sort"
 
-	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // NewCodex declares the Codex CLI harness.
@@ -48,8 +49,8 @@ func NewCodex(models []string) *CLIHarness {
 		Vendor: "OpenAI",
 		Binary: "codex",
 		Models: models,
-		Capabilities: []domain.Capability{
-			domain.CapStreaming, domain.CapSessions, domain.CapTools,
+		Capabilities: []uhpgo.Capability{
+			uhpgo.CapStreaming, uhpgo.CapSessions, uhpgo.CapTools,
 		},
 		// `codex debug models` renders the raw model catalogue as JSON, which
 		// is the only place the real slugs appear — `codex --help` names none,
@@ -198,7 +199,7 @@ func parseCodexLine(line string) []RunUpdate {
 		return []RunUpdate{{Type: UpdateDelta, Delta: ev.Item.Text + "\n"}}
 
 	case ev.Type == "turn.completed" && ev.Usage != nil:
-		return []RunUpdate{{Type: UpdateUsage, Usage: &domain.Usage{
+		return []RunUpdate{{Type: UpdateUsage, Usage: &uhp.Usage{
 			InputTokens:      ev.Usage.InputTokens,
 			OutputTokens:     ev.Usage.OutputTokens,
 			TotalTokens:      ev.Usage.InputTokens + ev.Usage.OutputTokens,

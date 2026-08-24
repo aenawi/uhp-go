@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"mime"
+
 	// net/http is here for DetectContentType alone — the sniffing table, not
 	// the transport. The service still knows nothing about requests.
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/aenawi/uhp-go/internal/domain"
+	"github.com/aenawi/uhp-go/uhp"
 )
 
 // Artifact capture works by diffing the session's own working directory across
@@ -201,12 +203,18 @@ func (s *TaskService) captureArtifacts(ctx context.Context, task *domain.Task, r
 			continue
 		}
 		a := domain.Artifact{
-			ID:          artifactID(containerID, rel),
-			ContainerID: containerID,
-			Path:        rel,
-			MimeType:    detectMimeType(rs.workDir, rel),
-			SizeBytes:   info.Size(),
-			CreatedAt:   now,
+			File: uhp.File{
+				ID:          artifactID(containerID, rel),
+				Object:      "file",
+				ContainerID: containerID,
+				// The path within the container, not the base name: two files
+				// called report.md in different directories are different
+				// files.
+				Filename:  rel,
+				Bytes:     info.Size(),
+				CreatedAt: now.Unix(),
+			},
+			MimeType: detectMimeType(rs.workDir, rel),
 		}
 		if err := s.store.AppendArtifact(ctx, task.ID, a); err != nil {
 			s.log.Error("persist artifact", "error", err, "task_id", task.ID)
@@ -347,7 +355,7 @@ func (s *TaskService) OpenArtifact(ctx context.Context, containerID, fileID stri
 	if err != nil || root == "" {
 		return domain.Artifact{}, nil, ErrArtifactNotFound
 	}
-	full := filepath.Join(root, filepath.FromSlash(found.Path))
+	full := filepath.Join(root, filepath.FromSlash(found.Filename))
 	if !withinDir(root, full) {
 		s.log.Error("refusing to serve an artifact from outside its container", "container_id", containerID)
 		return domain.Artifact{}, nil, ErrArtifactNotFound
@@ -364,7 +372,7 @@ func (s *TaskService) OpenArtifact(ctx context.Context, containerID, fileID stri
 	// Serve the size the bytes actually have now, not the size they had when
 	// the artifact was recorded.
 	a := *found
-	a.SizeBytes = info.Size()
+	a.Bytes = info.Size()
 	return a, f, nil
 }
 

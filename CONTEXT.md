@@ -11,6 +11,12 @@ internal thing whenever the internal thing is genuinely different — a unit of 
 the same as the object describing it, and a file a run produced is not the same as any
 file. Where both words exist, the wire word is the protocol's and is not ours to change.
 
+Every wire word below is a type in `uhp/`, and lives nowhere else in the tree. The internal
+type embeds it rather than restating it, so the two words name one shape and cannot drift
+apart. What this server adds to the protocol is in `uhp/uhpgo` and is not part of this
+vocabulary — see [ADR-0002](docs/adr/0002-uhp-package-models-the-protocol.md) and
+[ADR-0003](docs/adr/0003-internal-types-embed-the-wire-types.md).
+
 **Response**:
 The wire object UHP returns for a unit of work. Its shape is fixed by the protocol schema
 for the version being served.

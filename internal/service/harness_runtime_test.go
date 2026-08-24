@@ -13,6 +13,8 @@ import (
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
 	"github.com/aenawi/uhp-go/internal/store"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // plainAdapter is a runtime that enforces nothing natively — no MCP mechanism,
@@ -20,8 +22,8 @@ import (
 // fallback exists for.
 type plainAdapter struct{ echoAdapter }
 
-func (plainAdapter) Info() domain.Harness {
-	return domain.Harness{ID: "chrn_plain", Base: "plain", Object: "harness", Name: "Plain"}
+func (plainAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: "chrn_plain", Base: "plain", Object: "harness", Name: "Plain"}}
 }
 
 // Overriding the embedded echoAdapter's answer, which is the capable one.
@@ -44,8 +46,8 @@ func deliveringService(t *testing.T) (*TaskService, string) {
 	return svc, workspace
 }
 
-func skillBundle() domain.Skill {
-	return domain.Skill{Name: "uhp-conformance-skill", Files: []domain.SkillFile{
+func skillBundle() uhp.Skill {
+	return uhp.Skill{Name: "uhp-conformance-skill", Files: []uhp.SkillFile{
 		{Path: "SKILL.md", Content: "---\nname: uhp-conformance-skill\n---\n\nSee references/data.md.\n"},
 		{Path: "references/data.md", Content: "nested reference file\n"},
 		{Path: "assets/blob.bin", ContentB64: "AAECAwQF"},
@@ -76,7 +78,7 @@ func TestSkillFolderIsMaterialized(t *testing.T) {
 	svc, workspace := deliveringService(t)
 	ctx := context.Background()
 	h, err := svc.CreateHarness(ctx, HarnessSpec{
-		Name: "x", Base: "echo", Skills: []domain.Skill{skillBundle()}})
+		Name: "x", Base: "echo", Skills: []uhp.Skill{skillBundle()}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -118,7 +120,7 @@ func TestDisabledSkillIsNotMaterialized(t *testing.T) {
 	off := false
 	bundle := skillBundle()
 	bundle.Enabled = &off
-	h, err := svc.CreateHarness(ctx, HarnessSpec{Name: "x", Base: "echo", Skills: []domain.Skill{bundle}})
+	h, err := svc.CreateHarness(ctx, HarnessSpec{Name: "x", Base: "echo", Skills: []uhp.Skill{bundle}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -136,7 +138,7 @@ func TestSkillsAreAnnouncedWhenTheRuntimeCannotLoadThem(t *testing.T) {
 	svc, _ := deliveringService(t)
 	ctx := context.Background()
 	h, err := svc.CreateHarness(ctx, HarnessSpec{
-		Name: "x", Base: "plain", Skills: []domain.Skill{skillBundle()}})
+		Name: "x", Base: "plain", Skills: []uhp.Skill{skillBundle()}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -149,7 +151,7 @@ func TestSkillsAreAnnouncedWhenTheRuntimeCannotLoadThem(t *testing.T) {
 
 	// A runtime that loads them natively is not also told in the prompt.
 	native, err := svc.CreateHarness(ctx, HarnessSpec{
-		Name: "y", Base: "echo", Skills: []domain.Skill{skillBundle()}})
+		Name: "y", Base: "echo", Skills: []uhp.Skill{skillBundle()}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -199,7 +201,7 @@ func TestOnlyEnabledMcpServersReachTheConfig(t *testing.T) {
 	svc, workspace := deliveringService(t)
 	ctx := context.Background()
 	off, on := false, true
-	h, err := svc.CreateHarness(ctx, HarnessSpec{Name: "x", Base: "echo", McpServers: []domain.McpServer{
+	h, err := svc.CreateHarness(ctx, HarnessSpec{Name: "x", Base: "echo", McpServers: []uhp.McpServer{
 		{Name: "live", URL: "https://live.example.invalid/mcp", Enabled: &on, Auth: "secret-token"},
 		{Name: "shelved", URL: "https://shelved.example.invalid/mcp", Enabled: &off},
 	}})
@@ -244,7 +246,7 @@ func TestMcpIsRefusedOnABaseThatCannotDeliverIt(t *testing.T) {
 	svc, _ := deliveringService(t)
 	_, err := svc.CreateHarness(context.Background(), HarnessSpec{
 		Name: "x", Base: "plain",
-		McpServers: []domain.McpServer{{Name: "vault", URL: "https://mcp.example.invalid/mcp"}}})
+		McpServers: []uhp.McpServer{{Name: "vault", URL: "https://mcp.example.invalid/mcp"}}})
 	if !errors.Is(err, ErrMcpUndeliverable) {
 		t.Fatalf("expected ErrMcpUndeliverable, got %v", err)
 	}
@@ -258,16 +260,16 @@ func TestRouterScaffoldingIsNotAnArtifact(t *testing.T) {
 	ctx := context.Background()
 	h, err := svc.CreateHarness(ctx, HarnessSpec{
 		Name: "x", Base: "echo",
-		Skills:     []domain.Skill{skillBundle()},
-		McpServers: []domain.McpServer{{Name: "vault", URL: "https://mcp.example.invalid/mcp"}}})
+		Skills:     []uhp.Skill{skillBundle()},
+		McpServers: []uhp.McpServer{{Name: "vault", URL: "https://mcp.example.invalid/mcp"}}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
 	for _, a := range runOn(t, svc, h.ID, "go").Artifacts {
-		if strings.Contains(a.Path, "SKILL.md") || strings.Contains(a.Path, "mcp.json") ||
-			strings.Contains(a.Path, ".uhp") {
-			t.Fatalf("the router's own scaffolding came back as an artifact: %q", a.Path)
+		if strings.Contains(a.Filename, "SKILL.md") || strings.Contains(a.Filename, "mcp.json") ||
+			strings.Contains(a.Filename, ".uhp") {
+			t.Fatalf("the router's own scaffolding came back as an artifact: %q", a.Filename)
 		}
 	}
 }
@@ -285,7 +287,7 @@ func TestSkillsWithoutAWorkspaceAreRefused(t *testing.T) {
 
 	ctx := context.Background()
 	h, err := svc.CreateHarness(ctx, HarnessSpec{
-		Name: "x", Base: "echo", Skills: []domain.Skill{skillBundle()}})
+		Name: "x", Base: "echo", Skills: []uhp.Skill{skillBundle()}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

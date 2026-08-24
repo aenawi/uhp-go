@@ -8,18 +8,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
 	"github.com/aenawi/uhp-go/internal/service"
 	"github.com/aenawi/uhp-go/internal/store"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // plainAdapter is a runtime that enforces none of a harness's configuration
 // natively, which is what the MCP refusal turns on.
 type plainAdapter struct{ echoAdapter }
 
-func (plainAdapter) Info() domain.Harness {
-	return domain.Harness{ID: "chrn_plain", Base: "plain", Object: "harness", Name: "Plain"}
+func (plainAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: "chrn_plain", Base: "plain", Object: "harness", Name: "Plain"}}
 }
 func (plainAdapter) Delivery() harness.Delivery { return harness.Delivery{} }
 

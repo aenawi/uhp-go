@@ -7,6 +7,8 @@ import (
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/service"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // errStorage is what a store hands back when it cannot be read, wrapped the way
@@ -41,11 +43,11 @@ func errStorage() error { return fmt.Errorf("disk gone: %w", service.ErrStorage)
 func TestStorageFailureIsAlways500(t *testing.T) {
 	failing := func() *fakeService {
 		return &fakeService{
-			listHarnesses: func(context.Context) ([]domain.Harness, error) {
+			listHarnesses: func(context.Context) ([]uhpgo.Harness, error) {
 				return nil, errStorage()
 			},
-			getHarness: func(context.Context, string) (domain.Harness, bool, error) {
-				return domain.Harness{}, false, errStorage()
+			getHarness: func(context.Context, string) (uhpgo.Harness, bool, error) {
+				return uhpgo.Harness{}, false, errStorage()
 			},
 			listSessions: func(context.Context, domain.SessionFilter) (domain.SessionPage, error) {
 				return domain.SessionPage{}, errStorage()
@@ -53,7 +55,7 @@ func TestStorageFailureIsAlways500(t *testing.T) {
 			getSession: func(context.Context, string) (*domain.Session, error) {
 				return nil, errStorage()
 			},
-			sessionTurns: func(context.Context, string) ([]domain.Turn, error) {
+			sessionTurns: func(context.Context, string) ([]uhp.Turn, error) {
 				return nil, errStorage()
 			},
 			getTask: func(context.Context, string) (*domain.Task, error) {
@@ -105,7 +107,7 @@ func TestStorageFailureIsAlways500(t *testing.T) {
 // no body — naming a field the request does not contain sends a client looking
 // for something it cannot find.
 func TestUnsupportedCapabilityIs422WithTheCapabilityNamed(t *testing.T) {
-	refusal := func(c domain.Capability) *service.CapabilityError {
+	refusal := func(c uhpgo.Capability) *service.CapabilityError {
 		return &service.CapabilityError{
 			HarnessID: "chrn_grok", Capability: c, Consequence: "it cannot",
 		}
@@ -117,40 +119,40 @@ func TestUnsupportedCapabilityIs422WithTheCapabilityNamed(t *testing.T) {
 		method    string
 		path      string
 		body      string
-		capabilit domain.Capability
+		capabilit uhpgo.Capability
 		wantParam any // a string, or nil for "no such field in this request"
 	}{
 		{
 			name: "continuation on a harness without sessions",
 			srv: newFakeServer(&fakeService{
 				startTask: func(context.Context, service.CreateTaskRequest) (*domain.Task, *service.Run, error) {
-					return nil, nil, refusal(domain.CapSessions)
+					return nil, nil, refusal(uhpgo.CapSessions)
 				},
 			}),
 			method:    "POST",
 			path:      "/v1/responses",
 			body:      `{"input":"hi","previous_response_id":"resp_0","metadata":{"harness_id":"grok-cli"}}`,
-			capabilit: domain.CapSessions,
+			capabilit: uhpgo.CapSessions,
 			wantParam: "previous_response_id",
 		},
 		{
 			name: "cancel on a harness without cancellation",
 			srv: newFakeServer(&fakeService{
-				cancelTask: func(context.Context, string) error { return refusal(domain.CapCancellation) },
+				cancelTask: func(context.Context, string) error { return refusal(uhpgo.CapCancellation) },
 			}),
 			method:    "POST",
 			path:      "/v1/responses/resp_1/cancel",
-			capabilit: domain.CapCancellation,
+			capabilit: uhpgo.CapCancellation,
 			wantParam: nil,
 		},
 		{
 			name: "session cancel on a harness without cancellation",
 			srv: newFakeServer(&fakeService{
-				cancelSession: func(context.Context, string) error { return refusal(domain.CapCancellation) },
+				cancelSession: func(context.Context, string) error { return refusal(uhpgo.CapCancellation) },
 			}),
 			method:    "POST",
 			path:      "/v1/sessions/sess_1/cancel",
-			capabilit: domain.CapCancellation,
+			capabilit: uhpgo.CapCancellation,
 			wantParam: nil,
 		},
 	} {

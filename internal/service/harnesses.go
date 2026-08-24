@@ -14,6 +14,8 @@ import (
 
 	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
+	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // Errors the transport maps onto UHP status codes.
@@ -68,8 +70,8 @@ type HarnessSpec struct {
 	Base           string
 	DefaultModel   string
 	SystemPrompt   string
-	McpServers     []domain.McpServer
-	Skills         []domain.Skill
+	McpServers     []uhp.McpServer
+	Skills         []uhp.Skill
 	DisabledTools  []string
 	MaxStep        *int
 	TimeoutSeconds *int
@@ -108,8 +110,8 @@ type HarnessPatch struct {
 	Base           Optional[string]
 	DefaultModel   Optional[string]
 	SystemPrompt   Optional[string]
-	McpServers     Optional[[]domain.McpServer]
-	Skills         Optional[[]domain.Skill]
+	McpServers     Optional[[]uhp.McpServer]
+	Skills         Optional[[]uhp.Skill]
 	DisabledTools  Optional[[]string]
 	MaxStep        Optional[*int]
 	TimeoutSeconds Optional[*int]
@@ -141,7 +143,7 @@ func (s *TaskService) SupportedBases() []string {
 
 // ListHarnesses answers GET /v1/harnesses with both the harnesses compiled
 // into this server and the ones a client created.
-func (s *TaskService) ListHarnesses(ctx context.Context) ([]domain.Harness, error) {
+func (s *TaskService) ListHarnesses(ctx context.Context) ([]uhpgo.Harness, error) {
 	out := s.registry.List()
 	for i := range out {
 		out[i] = s.withRouterCapabilities(out[i])
@@ -161,13 +163,13 @@ func (s *TaskService) ListHarnesses(ctx context.Context) ([]domain.Harness, erro
 }
 
 // GetHarness answers GET /v1/harnesses/{id}, accepting an id or an alias.
-func (s *TaskService) GetHarness(ctx context.Context, id string) (domain.Harness, bool, error) {
+func (s *TaskService) GetHarness(ctx context.Context, id string) (uhpgo.Harness, bool, error) {
 	if a, ok := s.registry.Get(id); ok {
 		return s.withRouterCapabilities(a.Info()), true, nil
 	}
 	cfg, ok, err := s.managedConfig(ctx, id)
 	if err != nil || !ok {
-		return domain.Harness{}, false, err
+		return uhpgo.Harness{}, false, err
 	}
 	return s.harnessView(cfg), true, nil
 }
@@ -214,7 +216,7 @@ func canonicalHarnessID(cfg domain.HarnessConfig, requested string, reg Registry
 // handles and has no separate skill id to hand out.
 func (s *TaskService) HarnessSkillFiles(
 	ctx context.Context, harnessID, skillID string,
-) ([]domain.SkillFile, bool, error) {
+) ([]uhp.SkillFile, bool, error) {
 	cfg, ok, err := s.managedConfig(ctx, harnessID)
 	if err != nil || !ok {
 		return nil, false, err
@@ -225,7 +227,7 @@ func (s *TaskService) HarnessSkillFiles(
 		}
 		files := filesOf(sk)
 		if files == nil {
-			files = []domain.SkillFile{}
+			files = []uhp.SkillFile{}
 		}
 		return files, true, nil
 	}
@@ -245,16 +247,16 @@ func (s *TaskService) ModelAvailable(ctx context.Context, harnessID, model strin
 }
 
 // CreateHarness implements POST /v1/harnesses (Harnesses §5.1).
-func (s *TaskService) CreateHarness(ctx context.Context, spec HarnessSpec) (domain.Harness, error) {
+func (s *TaskService) CreateHarness(ctx context.Context, spec HarnessSpec) (uhpgo.Harness, error) {
 	if s.harnesses == nil {
-		return domain.Harness{}, ErrHarnessManagementUnsupported
+		return uhpgo.Harness{}, ErrHarnessManagementUnsupported
 	}
 	if spec.Base == "" {
-		return domain.Harness{}, fmt.Errorf("%w: `base` is required", ErrInvalidInput)
+		return uhpgo.Harness{}, fmt.Errorf("%w: `base` is required", ErrInvalidInput)
 	}
 	base, ok := s.baseAdapter(spec.Base)
 	if !ok {
-		return domain.Harness{}, &UnsupportedBaseError{Base: spec.Base, Supported: s.SupportedBases()}
+		return uhpgo.Harness{}, &UnsupportedBaseError{Base: spec.Base, Supported: s.SupportedBases()}
 	}
 	cfg, err := s.applySpec(spec, domain.HarnessConfig{
 		ID:        newHarnessID(),
@@ -262,26 +264,26 @@ func (s *TaskService) CreateHarness(ctx context.Context, spec HarnessSpec) (doma
 		CreatedAt: time.Now().UnixMilli(),
 	}, base)
 	if err != nil {
-		return domain.Harness{}, err
+		return uhpgo.Harness{}, err
 	}
 	if err := s.harnesses.PutHarness(ctx, cfg); err != nil {
-		return domain.Harness{}, fmt.Errorf("%w: persist harness: %v", ErrStorage, err)
+		return uhpgo.Harness{}, fmt.Errorf("%w: persist harness: %v", ErrStorage, err)
 	}
 	return s.harnessView(cfg), nil
 }
 
 // UpdateHarness implements PUT /v1/harnesses/{id} (Harnesses §5.2): it
 // replaces the mutable configuration and leaves id, base and createdAt alone.
-func (s *TaskService) UpdateHarness(ctx context.Context, id string, spec HarnessSpec) (domain.Harness, error) {
+func (s *TaskService) UpdateHarness(ctx context.Context, id string, spec HarnessSpec) (uhpgo.Harness, error) {
 	existing, err := s.managedForWrite(ctx, id)
 	if err != nil {
-		return domain.Harness{}, err
+		return uhpgo.Harness{}, err
 	}
 	// Refused rather than silently ignored. Changing a base would change the
 	// behaviour of every session already attached to the harness, and a client
 	// that asked for it and was answered 200 would believe it happened.
 	if spec.Base != "" && spec.Base != existing.Base {
-		return domain.Harness{}, fmt.Errorf("%w: %q is on base %q; create a separate harness for %q",
+		return uhpgo.Harness{}, fmt.Errorf("%w: %q is on base %q; create a separate harness for %q",
 			ErrBaseImmutable, id, existing.Base, spec.Base)
 	}
 	// The base is looked up but its absence is not fatal here. §5.2 forbids
@@ -295,13 +297,13 @@ func (s *TaskService) UpdateHarness(ctx context.Context, id string, spec Harness
 
 // PatchHarness implements PATCH /v1/harnesses/{id}: the same write as
 // UpdateHarness, over a spec built from what the harness already is.
-func (s *TaskService) PatchHarness(ctx context.Context, id string, p HarnessPatch) (domain.Harness, error) {
+func (s *TaskService) PatchHarness(ctx context.Context, id string, p HarnessPatch) (uhpgo.Harness, error) {
 	existing, err := s.managedForWrite(ctx, id)
 	if err != nil {
-		return domain.Harness{}, err
+		return uhpgo.Harness{}, err
 	}
 	if p.Base.Set && p.Base.Value != "" && p.Base.Value != existing.Base {
-		return domain.Harness{}, fmt.Errorf("%w: %q is on base %q; create a separate harness for %q",
+		return uhpgo.Harness{}, fmt.Errorf("%w: %q is on base %q; create a separate harness for %q",
 			ErrBaseImmutable, id, existing.Base, p.Base.Value)
 	}
 	base, _ := s.baseAdapter(existing.Base)
@@ -313,18 +315,18 @@ func (s *TaskService) PatchHarness(ctx context.Context, id string, p HarnessPatc
 // the other is missing.
 func (s *TaskService) writeHarness(
 	ctx context.Context, existing domain.HarnessConfig, spec HarnessSpec, base harness.Adapter,
-) (domain.Harness, error) {
+) (uhpgo.Harness, error) {
 	cfg, err := s.applySpec(spec, domain.HarnessConfig{
 		ID:        existing.ID,
 		Base:      existing.Base,
 		CreatedAt: existing.CreatedAt,
 	}, base)
 	if err != nil {
-		return domain.Harness{}, err
+		return uhpgo.Harness{}, err
 	}
 	cfg.McpServers = carryForwardCredentials(cfg.McpServers, existing.McpServers)
 	if err := s.harnesses.PutHarness(ctx, cfg); err != nil {
-		return domain.Harness{}, fmt.Errorf("%w: persist harness: %v", ErrStorage, err)
+		return uhpgo.Harness{}, fmt.Errorf("%w: persist harness: %v", ErrStorage, err)
 	}
 	return s.harnessView(cfg), nil
 }
@@ -482,7 +484,7 @@ func (s *TaskService) baseAdapter(base string) (harness.Adapter, bool) {
 // credentials; withRouterCapabilities adds what this router delivers rather
 // than the base, so a managed harness answers the file question the same way
 // the base it was built on does.
-func (s *TaskService) harnessView(cfg domain.HarnessConfig) domain.Harness {
+func (s *TaskService) harnessView(cfg domain.HarnessConfig) uhpgo.Harness {
 	base, _ := s.baseAdapter(cfg.Base)
 	return s.withRouterCapabilities(harness.NewManaged(cfg, base).Info())
 }
@@ -559,11 +561,11 @@ func validateDefaultModel(base harness.Adapter, model string) error {
 
 // normalizeMcpServers validates the MCP entries and makes their defaults
 // explicit, so a client never has to infer whether an entry is enabled.
-func normalizeMcpServers(servers []domain.McpServer) ([]domain.McpServer, error) {
+func normalizeMcpServers(servers []uhp.McpServer) ([]uhp.McpServer, error) {
 	if len(servers) == 0 {
 		return nil, nil
 	}
-	out := make([]domain.McpServer, 0, len(servers))
+	out := make([]uhp.McpServer, 0, len(servers))
 	for i, m := range servers {
 		if strings.TrimSpace(m.Name) == "" {
 			return nil, fmt.Errorf("%w: mcp_servers[%d] has no name", ErrInvalidMcpServer, i)
@@ -594,11 +596,11 @@ func normalizeMcpServers(servers []domain.McpServer) ([]domain.McpServer, error)
 // the whole point. A bundle refused here is a mistake the client can still
 // fix; one accepted and ignored later looks like the agent behaving oddly,
 // weeks afterwards, to someone who has no reason to suspect the skill.
-func normalizeSkills(skills []domain.Skill) ([]domain.Skill, error) {
+func normalizeSkills(skills []uhp.Skill) ([]uhp.Skill, error) {
 	if len(skills) == 0 {
 		return nil, nil
 	}
-	out := make([]domain.Skill, 0, len(skills))
+	out := make([]uhp.Skill, 0, len(skills))
 	for i, sk := range skills {
 		if strings.TrimSpace(sk.Name) == "" {
 			return nil, fmt.Errorf("%w: skills[%d] has no name", ErrInvalidSkill, i)
@@ -610,13 +612,13 @@ func normalizeSkills(skills []domain.Skill) ([]domain.Skill, error) {
 			enabled := true
 			sk.Enabled = &enabled
 		}
-		sk.Files = append([]domain.SkillFile(nil), sk.Files...)
+		sk.Files = append([]uhp.SkillFile(nil), sk.Files...)
 		out = append(out, sk)
 	}
 	return out, nil
 }
 
-func validateSkillFiles(idx int, sk domain.Skill) error {
+func validateSkillFiles(idx int, sk uhp.Skill) error {
 	// `content` is the shorthand for a bundle whose only member is SKILL.md,
 	// so it satisfies the manifest requirement by itself.
 	if len(sk.Files) == 0 {
@@ -681,7 +683,7 @@ func validSkillPath(p string) error {
 // out for skills, landing on the one field a client is structurally unable to
 // echo. So an absent `auth` keeps the stored one; an entry that does send one
 // replaces it, and deleting the entry removes it with the entry.
-func carryForwardCredentials(next, previous []domain.McpServer) []domain.McpServer {
+func carryForwardCredentials(next, previous []uhp.McpServer) []uhp.McpServer {
 	if len(next) == 0 || len(previous) == 0 {
 		return next
 	}

@@ -98,7 +98,7 @@ a MUST *if honoured*: stop at or after the budget, report `incomplete`, and neve
 **The conformance suite measures none of those eight fields.** Its 52 checks contain no
 reference to `max_step`, `timeout_seconds`, `max_output_tokens`, `instructions` or
 `include`. The 52/52 `full` result is silent about all of them, and the same is true of
-`store`, which is hardcoded `true` at `internal/service/task_service.go:358` with the
+`store`, which is hardcoded `true` at `internal/service/task_service.go:357` with the
 request field never read. That is permitted — `tasks.md` §4 says a server MAY return `404`
 for a `store: false` response, not that it must honour the flag — but it is unmeasured
 rather than verified, which is the distinction `docs/conformance.md` exists to draw.
