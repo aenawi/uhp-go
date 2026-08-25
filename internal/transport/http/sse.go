@@ -34,12 +34,22 @@ func (s *Server) waitForResult(ctx context.Context, task *domain.Task, run *serv
 // thing by them, so the transport writes SSE once rather than once per source.
 type subscription func(context.Context, int, service.IdleTick, func(uhpgo.Event) error) error
 
+// vendorCodeStreamingUnsupported is namespaced because Errors §3 has no entry
+// for "this server's own response writer cannot flush", and requires an
+// additional code to carry a vendor prefix so a future version of the
+// specification cannot collide with it.
+//
+// The near miss is `harness_unavailable`, and it does not fit: no harness is
+// involved, and answering it would send a client retrying against a backend
+// that was never the problem.
+const vendorCodeStreamingUnsupported = "uhpgo_streaming_unsupported"
+
 // streamSSE subscribes to an event log and writes it as Server-Sent Events,
 // starting at sequence number `from`. Disconnecting merely unsubscribes.
 func (s *Server) streamSSE(w http.ResponseWriter, r *http.Request, from int, events subscription) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "server_error", "streaming_unsupported",
+		writeError(w, http.StatusInternalServerError, typeServerError, vendorCodeStreamingUnsupported,
 			"response writer does not support flushing")
 		return
 	}

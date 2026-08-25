@@ -221,6 +221,19 @@ type Upload struct {
 // a harness this server does not have, where those two are about a path no
 // route claims and a method no route accepts, on any route at all.
 //
+// CodePrefix is the namespace every code this server adds to the protocol's
+// list carries.
+//
+// Errors §3 permits a server to define codes for conditions the specification
+// does not cover and requires it to namespace them, so that a future version of
+// UHP can add a code of its own without colliding with one of these. The prefix
+// is therefore part of the code and not decoration: an unprefixed addition is a
+// name this repository does not own.
+//
+// It is exported so that a check for "is this one of ours" reads the same
+// string the constants below are built from, rather than a second copy of it.
+const CodePrefix = "uhpgo_"
+
 // A client that does not recognise one of these follows UHP's fourth client
 // rule and falls back to the error's type, which is why every one of them is
 // always sent with a type set.
