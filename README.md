@@ -50,6 +50,57 @@ disagree, treat it as a bug in this implementation and please open an issue —
 if the specification itself looks wrong or ambiguous, the issue is still the
 right place to start, and we will raise it upstream.
 
+## Talking to a UHP server
+
+`uhp.Client` speaks the protocol to any conformant server, and `uhpc` is a command that
+drives it:
+
+```bash
+go install github.com/aenawi/uhp-go/cmd/uhpc@latest
+
+export UHP_BASE_URL=http://localhost:8080 UHP_API_KEY=devkey
+uhpc discover                                   # what this server can do
+uhpc harnesses                                  # what it can run
+uhpc run --stream "summarise the README"        # a task, rendered as it arrives
+uhpc watch chrn_…                               # every task on a harness, live
+```
+
+In Go:
+
+```go
+c := uhp.NewClient("http://localhost:8080", os.Getenv("UHP_API_KEY"))
+
+resp, err := c.Create(ctx, uhp.CreateResponseRequest{
+    Input:    "summarise the README",
+    Metadata: map[string]any{"harness_id": "claude-code"},
+}, idempotencyKey)
+
+if e, ok := uhp.AsError(err); ok && e.Code == uhp.CodeSessionBusy {
+    // …the session already has a task in flight
+}
+```
+
+What it does that a hand-rolled `net/http` call will not, unless you read the whole
+specification first:
+
+- **The error envelope is decoded.** A failure is an `*uhp.Error` with a `Code` you can
+  switch on, not a status and a blob. A body that is not the envelope — a proxy's 502 —
+  still becomes one, built from the status, so a caller has no second case to handle.
+- **`UHP-Version` is sent and the answer is checked.** Lifecycle §1 forbids a server
+  serving a different version silently; a client that ignores the reply decodes one
+  version's shapes out of another's bytes.
+- **Retries follow Errors §4 by class rather than by code**, so an unrecognised code is
+  safe. `quota_exhausted` is the exception: it arrives as a 429 and means the opposite of
+  "come back shortly".
+- **A task creation is retried only when it carries an `Idempotency-Key`.** Without one, a
+  retry after a timeout runs expensive, side-effecting work a second time while the first
+  may still be going, which is what the header exists to prevent.
+- **Streams check sequence numbers as they read.** Streaming §2 makes a dropped event
+  detectable on purpose; this reports it as a `GapError` rather than rendering the hole.
+
+`uhpc` is also how this repository knows the protocol works over a socket rather than
+against its own handlers — see [Testing](#testing).
+
 ## Using the wire types
 
 The protocol's objects are importable, so a client does not have to hand-roll them from the
@@ -156,12 +207,15 @@ is the harness measured, when to run the gate, and what `S-09` can and cannot se
 Layered, dependency-inverted design (Clean/Hexagonal architecture):
 
 ```
-uhp/                       the published wire types: all 23 objects of UHP 2026-08-11, plus an
-                           SSE event decoder and a vendored copy of the schema. Imports only
+uhp/                       the protocol: all 23 objects of UHP 2026-08-11, an SSE event decoder,
+                           a client (uhp.Client) and a vendored copy of the schema. Imports only
                            the standard library; this repository consumes it like any client
 uhp/uhpgo/                 what this server adds to UHP, kept out of uhp so the boundary
                            between protocol and implementation is compiler-visible
 cmd/uhpd/                  composition root (main.go) — the only file wiring concrete types together
+cmd/uhpc/                  a client for any UHP server, built on uhp.Client. Imports uhp and the
+                           standard library and nothing else — a client that special-cased the
+                           server next door would stop being evidence about the protocol
 internal/domain/           entities: Task, Session, Artifact — no external deps. Each embeds
                            the uhp type it is reported as, so there is one shape per concept
 internal/harness/          the adapter contract, the shared subprocess runner, the
@@ -214,13 +268,18 @@ internal/config/           environment-variable configuration loader
 | `POST /v1/sessions/{id}/cancel` | Stop whatever is running in a session |
 | `POST /v1/responses` | Create a task (`stream:true` for SSE, else blocks until terminal). Honours `Idempotency-Key` |
 | `GET /v1/responses/{id}` | Retrieve a task's current state and output |
+| `GET /v1/responses/{id}/input_items` | The input a task was created with, verbatim |
+| `DELETE /v1/responses/{id}` | Forget a task. Does **not** stop one that is running |
 | `POST /v1/responses/{id}/cancel` | Cancel an in-flight task |
 | `POST /v1/files` | Upload a file for use as task input (`multipart/form-data`) |
 | `GET /v1/containers/{cid}/files/{fid}/content` | Download an artifact as raw bytes |
 | `GET /v1/containers/{cid}/files/{fid}/pdf` | Rendered preview — always `501 preview_unavailable` |
 | `GET /healthz` | Liveness probe |
 
-Not implemented, and reported as `false` in the discovery document: session sharing.
+Not implemented, and reported as `false` in the discovery document: session sharing
+([#57](https://github.com/aenawi/uhp-go/issues/57)). `DELETE /v1/traces/{id}` is also absent
+([#58](https://github.com/aenawi/uhp-go/issues/58)). Both are conformance class `full`, and
+between them they are why `conformance_class` reads `core`.
 `files_input` and `files_output` are computed from configuration rather than asserted —
 `true` only when `UHP_WORKSPACE` is set, because both need a per-session working
 directory. See [Files](#files) and [Harness management](#harness-management).
@@ -233,7 +292,11 @@ The friendly base name is accepted as an alias wherever a harness id is expected
 
 Request body is intentionally OpenAI-Responses-shaped (`input`, `model`, `stream`,
 `previous_response_id`, `metadata`), with `metadata.harness_id` as the UHP extension that
-selects which harness runs the task. Continuing a conversation is done by setting
+selects which harness runs the task. It is optional: Tasks §1.2 requires a server to pick a
+default when it is absent and to report which one it picked, so `{"input":"hi"}` is a
+complete request and the response names the harness that served it. The default is
+`UHP_DEFAULT_HARNESS` if set, otherwise the sole *ready* harness. With several ready and
+none configured there is no honest guess, and the refusal lists the ids to choose from. Continuing a conversation is done by setting
 `previous_response_id` to a prior task's `id` — the router resolves the underlying session
 and, where the harness supports it, its native session/thread id (`--resume`, `--session`, etc.).
 
@@ -631,6 +694,7 @@ properties of `service.Store`, not of whichever engine a deployment configured.
 | `UHP_MAX_BODY_BYTES` | `8388608` | Maximum accepted request body, and the upload limit |
 | `UHP_MAX_CONCURRENT_RUNS` | `8` | Harness processes allowed to run at once; beyond it, `503 harness_unavailable` |
 | `UHP_PUBLIC_URL` | (unset = relative URLs) | Origin used to build absolute artifact download URLs |
+| `UHP_DEFAULT_HARNESS` | (unset = the sole ready harness, if there is exactly one) | Harness a task that names none runs on. `uhpd` refuses to start if it names nothing |
 | `UHP_CLAUDE_MODELS` | `claude-sonnet-5,claude-opus-5` | Claude Code models — see [Where the model list comes from](#where-the-model-list-comes-from) |
 | `UHP_CODEX_MODELS` | `gpt-5.6-sol` | Codex fallback models |
 | `UHP_GROK_MODELS` | `grok-4.6,grok-4.5` | Grok fallback models |
@@ -831,6 +895,15 @@ make hooks   # git config core.hooksPath .githooks
 `.githooks/pre-push` builds, vets, checks formatting and runs the tests — about twenty
 seconds, no tokens. It is the same set CI runs, so a failure here is a red build you did not
 have to wait for. Bypass a single push with `git push --no-verify`.
+
+`go test ./...` also includes the end-to-end tests in
+`internal/transport/http/client_end_to_end_test.go`, which are the only ones here that speak
+UHP **over a socket**. Everything else calls a handler directly, so both halves of the wire
+format are otherwise only ever checked against bytes their own package wrote —
+`docs/conformance.md` names that gap for SSE framing, and it was just as real for headers,
+status codes, the error envelope and the version handshake. These drive a real listener with
+the published `uhp.Client`: the same code an external consumer imports, not a test-local HTTP
+client that would prove nothing about what ships.
 
 `go test ./...` includes `uhp/schema_test.go`, which marshals every published type and
 validates it against the vendored copy of `uhp-2026-08-11.schema.json` — and fails if the

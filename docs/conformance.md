@@ -72,6 +72,14 @@ choice on the day, so these two checks are non-deterministic by construction. **
 reports 52/52 with X-07 skipped is not a 52/52.** Read `skipped_not_verified` in the JSON
 report, not just the summary line; the suite says so itself.
 
+**The recorded runs were made with `UHP_API_KEYS=devkey`, which the default configuration
+does not produce.** With the variable unset, `withAuth` returns early and every endpoint is
+open — Security §1 says "A server MUST authenticate every endpoint except `GET /v1/uhp`",
+so the default configuration is not a conformant one and no check can see the difference,
+because the suite always passes a key. Issue #55. Related, and equally invisible to a run:
+every configured key is the same principal, so the scoping MUSTs in Architecture and
+Files §5 are satisfied vacuously rather than enforced (#56).
+
 `conformance_class` in the discovery document still reads `core`, and raising it to `full`
 is a deliberate follow-up rather than part of recording this. The class is what the server
 *guarantees*, and one green run on one machine with one CLI installed is thinner evidence
@@ -289,6 +297,9 @@ cannot reach.
 | Re-measure after three unmeasured landings (#42) | **52/52, full 52/52** | the ten checks above, all at once |
 | Same run, no `--model` (the gate's configuration) | 36/37 core | T-03 regressed into view — see #43 |
 | A model-less task reports the model that ran (#43) | **37/37 core, model-less** | T-03, re-measured 2026-08-24 — the gate's split with the pinned runs is closed |
+| Audit of the published surface against `routes()` | no change expected | four endpoints found missing, two of them core — #51, #52, #57, #58; no check sends any of them |
+| A default harness for a task that names none (#53) | no change expected | no check omits `harness_id` — see below |
+| A client, and the first tests to use a socket (#62) | no change expected | the suite never touches the Go types; these never touch the suite |
 
 The #42 re-measure is the largest single jump in this table, and none of it was new work. Ten
 checks moved because the code that satisfies them had been sitting there unmeasured since
@@ -303,6 +314,13 @@ not pick a harness and every task, stream, session and cancellation check skippe
 Fixing that one envelope is what made three steps of prior work measurable.
 
 ## The remaining gap
+
+**The score below has not been re-measured since #51, #52, #53, #59 and #62 landed.** Those
+changes add two endpoints, change the answer to a request the suite always makes (a task
+now falls back to a default harness rather than being refused when `harness_id` is absent —
+though the suite always sends one, so no check should move), and change
+`DELETE /v1/harnesses/{id}` from 204 to 200 with a body, which F-05 exercises. Run
+`make conformance-gate` before quoting the number again.
 
 No check in the suite is now unmeasured or failing. The table that stood here listed
 X-05…X-07, F-01…F-07 as "implemented, unmeasured" against issues #2, #3 and #4; the
@@ -346,6 +364,49 @@ repository's tests alone — `internal/service/feed_test.go` and
 `internal/transport/http/harness_events_test.go`. The thing those assert is the thing a
 single connection cannot show: that a second subscriber attaching at sequence *n* is handed
 exactly the events from *n* onward and none of the ones before it.
+
+**Four endpoints of the published surface were missing, and no check asked for
+any of them.** The 52 checks contain no request to `GET /v1/responses/{id}/input_items`
+or `DELETE /v1/responses/{id}` — both Tasks-chapter endpoints of class *core* in
+`uhp-2026-08-11.openapi.yaml` — so 37/37 core was measured against a server that had
+no route for either. Both landed in issues #51 and #52. `POST`/`GET /v1/sessions/{id}/share`
+(#57) and `DELETE /v1/traces/{id}` (#58) are still absent and are class *full*; they are
+what stops `conformance_class` truthfully reading `full`, whatever a run scores.
+
+This is the same lesson as #42 one level out. There, the code existed and no check
+measured it; here, the check does not exist either, so a green suite said nothing at
+all. Both were found by reading rather than by running — the second by comparing the
+OpenAPI's paths against `Server.routes()`, which is a diff a person can do in a minute
+and nothing in this repository does automatically.
+
+**A task that named no harness was refused.** Tasks §1.2 requires the opposite — "If
+`harness_id` is absent, the server MUST use a default harness and MUST report which one
+it used in the response `metadata`" — and this server answered `400 invalid_input`, so
+`{"input":"hi"}`, the smallest body the schema permits, did not work. The suite always
+passes `--harness-id` and puts it in `metadata` on every task, so no check has ever sent
+a request without one. Fixed in #53. This is exactly the shape of #43: the configuration
+that would have found the defect is the one nothing ran.
+
+**Seven codes of the published vocabulary cannot be produced by this server.**
+`uhp/error.go` publishes the specification's full list because the package models the
+protocol; which of those a *given server* can emit is a property of that server, and
+this is the table that says which:
+
+| Code | Why it is unreachable here | Reachable if |
+|---|---|---|
+| `session_expired` | no retention or expiry exists; a session lives until the database is deleted | a retention policy is implemented |
+| `insufficient_scope` | one principal, so nothing is ever out of scope | #56 takes option (b) |
+| `rate_limited` | no rate limiting | a limiter is added |
+| `quota_exhausted` | no quota accounting | quotas exist |
+| `timeout` | nothing bounds a task's wall clock | #54 lands |
+| `provider_error` | adapter failures are all reported as `harness_error` | adapters distinguish an upstream refusal |
+| `preview_failed` | `/pdf` always answers `501 preview_unavailable`; no conversion is attempted | conversion is implemented |
+
+Most of these are not defects — `rate_limited` and `quota_exhausted` are not MUSTs, and
+`preview_failed` is the honest answer for a server that does not convert. What was wrong
+was that nothing said so, which left a client author writing a `switch` over `uhp.Code*`
+with seven arms that never fire and no way to learn it from either the package or these
+docs. Issue #61.
 
 **Nothing in the suite sends eight of the thirteen request fields.**
 `CreateResponseRequest` has 13 properties in the schema; `createTaskBody` reads five. The 52

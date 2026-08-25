@@ -1,7 +1,10 @@
 .PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probes
 
+# Both binaries, because a server nobody can call is half a delivery: uhpc is
+# how the surface gets exercised over a socket rather than against a handler.
 build:
 	go build -o bin/uhpd ./cmd/uhpd
+	go build -o bin/uhpc ./cmd/uhpc
 
 run: build
 	./bin/uhpd
