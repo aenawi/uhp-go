@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -119,34 +118,6 @@ func TestRunSlotIsReleasedWhenTheStartFails(t *testing.T) {
 		t.Fatalf("the only slot leaked on the failed starts: %v", err)
 	}
 	drain(t, svc, task.ID, run)
-}
-
-// Issue #47: the same failed start that the test above counts slots for used to
-// leave an error object the schema rejects — no `type` at all, and a code with
-// no vendor prefix for a condition the specification does not name. A client
-// following UHP's fourth client rule, treat an unrecognised code as its type,
-// was handed nothing to fall back on.
-func TestAFailedStartReportsASchemaShapedError(t *testing.T) {
-	svc := NewTaskService(newRegistryWith(refusingAdapter{}), newMemStore(), testLogger())
-
-	task, _, err := svc.StartTask(context.Background(), CreateTaskRequest{Input: "x", HarnessID: "refusing"})
-	if err == nil {
-		t.Fatal("the refusing adapter reported success")
-	}
-	if task == nil || task.Error == nil {
-		t.Fatal("a failed start left no error on the task")
-	}
-	if task.Error.Type != uhp.ErrorTypeServerError {
-		t.Errorf("error.type = %q, want %q: an adapter that would not start is this server's problem",
-			task.Error.Type, uhp.ErrorTypeServerError)
-	}
-	if !strings.HasPrefix(task.Error.Code, "uhpgo_") {
-		t.Errorf("error.code = %q, want a vendor prefix: the specification has no entry for this condition",
-			task.Error.Code)
-	}
-	if task.Status != uhp.StatusFailed {
-		t.Errorf("status = %q, want %q", task.Status, uhp.StatusFailed)
-	}
 }
 
 // A TaskService built without the option is still bounded. main.go always

@@ -172,11 +172,16 @@ func writeHarnessManagementUnsupported(w http.ResponseWriter) {
 // The two routing codes miss for their own reason: `harness_not_found` is
 // about a harness this server does not have, where these are about a path no
 // route claims and a method no route accepts, on any route at all.
+//
+// `uhpgo_invalid_path` is a third case again: the dot-segment guard runs ahead
+// of routing on every route, so the refusal is about the shape of the path
+// itself rather than about anything the path names.
 const (
 	vendorCodeCapabilityUnsupported        = "uhpgo_capability_unsupported"
 	vendorCodeHarnessManagementUnsupported = "uhpgo_harness_management_unsupported"
 	vendorCodeHarnessNotManaged            = "uhpgo_harness_not_managed"
 	vendorCodeImmutableField               = "uhpgo_immutable_field"
+	vendorCodeInvalidPath                  = "uhpgo_invalid_path"
 	vendorCodeInvalidSkill                 = "uhpgo_invalid_skill"
 	vendorCodeInvalidMcpServer             = "uhpgo_invalid_mcp_server"
 	vendorCodeMcpUndeliverable             = "uhpgo_mcp_undeliverable"

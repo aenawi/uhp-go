@@ -625,7 +625,7 @@ func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd ha
 		if upd.Err != nil {
 			msg = upd.Err.Error()
 		}
-		task.Error = &uhp.Error{Type: uhp.ErrorTypeHarness, Code: "harness_error", Message: msg}
+		task.Error = &uhp.Error{Type: uhp.ErrorTypeHarness, Code: uhp.CodeHarnessError, Message: msg}
 		return s.terminal(ctx, task, seq, "response.failed", rs)
 
 	default:

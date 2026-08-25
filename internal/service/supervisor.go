@@ -346,7 +346,7 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 		task.Status = uhp.StatusFailed
 		task.Error = &uhp.Error{
 			Type:    uhp.ErrorTypeHarness,
-			Code:    "harness_error",
+			Code:    uhp.CodeHarnessError,
 			Message: "the harness closed its update stream without reporting a terminal state",
 		}
 		task.UpdatedAt = time.Now().UTC()

@@ -133,7 +133,7 @@ func refuseDotSegments(next http.Handler) http.Handler {
 				// The guard covers every route, so the code cannot claim the
 				// request was about a file. Errors §3 has no entry for "that
 				// path shape is refused", hence the vendor prefix.
-				writeError(w, http.StatusNotFound, typeInvalidRequest, "uhpgo_invalid_path",
+				writeError(w, http.StatusNotFound, typeInvalidRequest, vendorCodeInvalidPath,
 					"the request path contains a dot or empty segment")
 				return
 			}
