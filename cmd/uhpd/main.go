@@ -74,6 +74,40 @@ func openTaskStore(cfg config.Config, log *slog.Logger) (service.Store, func()) 
 	}
 }
 
+// requireDefaultHarness refuses to start when UHP_DEFAULT_HARNESS names a
+// harness this server does not have.
+//
+// Fatal rather than deferred to the first task, because the failure it prevents
+// is silent in the worst way: a typo'd default is only discovered by a client
+// that omitted `harness_id`, which is the request Tasks §1.2 most encourages,
+// and the answer it gets names a field it deliberately left out.
+//
+// Nothing is checked when the variable is unset. The default is then inferred
+// per request from whichever harnesses are ready, and readiness at boot is not
+// readiness later — a CLI can be logged in after the server starts.
+func requireDefaultHarness(cfg config.Config, tasks *service.TaskService, log *slog.Logger) {
+	if cfg.DefaultHarness == "" {
+		return
+	}
+	h, ok, err := tasks.GetHarness(context.Background(), cfg.DefaultHarness)
+	if err != nil {
+		log.Error("resolve default harness", "error", err, "harness", cfg.DefaultHarness)
+		os.Exit(1)
+	}
+	if !ok {
+		log.Error("UHP_DEFAULT_HARNESS names no harness on this server",
+			"harness", cfg.DefaultHarness)
+		os.Exit(1)
+	}
+	// Not fatal. A harness that is configured but not logged in is a normal
+	// state that fixes itself without restarting the server, so this is the
+	// one half of the check that belongs in the log rather than in the exit
+	// code.
+	if h.Status != "ready" {
+		log.Warn("default harness is not ready", "harness", h.ID, "status", h.Status)
+	}
+}
+
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg := config.Load()
@@ -103,7 +137,11 @@ func main() {
 	if cfg.PublicBaseURL != "" {
 		opts = append(opts, service.WithPublicBaseURL(cfg.PublicBaseURL))
 	}
+	if cfg.DefaultHarness != "" {
+		opts = append(opts, service.WithDefaultHarness(cfg.DefaultHarness))
+	}
 	taskService := service.NewTaskService(registry, taskStore, log, opts...)
+	requireDefaultHarness(cfg, taskService, log)
 
 	server := transporthttp.NewServer(taskService, log, cfg.APIKeys, cfg.MaxBodyBytes)
 

@@ -32,6 +32,11 @@ type Config struct {
 	// and not a silent default.
 	Database string
 
+	// DefaultHarness is the harness a task that names none runs on. Empty
+	// means the server infers it, which it can only do when exactly one
+	// harness is ready; see service.DefaultHarness.
+	DefaultHarness string
+
 	// PublicBaseURL is the origin clients reach this server on. It is used to
 	// make artifact download URLs absolute; unset means they are emitted
 	// relative, which is correct whenever the client shares the API's origin.
@@ -61,6 +66,7 @@ func Load() Config {
 		// own default. Config does not carry a second copy of that number.
 		MaxConcurrentRuns: int(getEnvInt("UHP_MAX_CONCURRENT_RUNS", 0)),
 		PublicBaseURL:     strings.TrimSuffix(os.Getenv("UHP_PUBLIC_URL"), "/"),
+		DefaultHarness:    strings.TrimSpace(os.Getenv("UHP_DEFAULT_HARNESS")),
 		// Claude Code cannot be asked what it serves, so this list is the only
 		// answer there will be. Both ids were checked against the real CLI on
 		// 2026-08-21: the previous `claude-sonnet-4.6` / `claude-opus-4.6`

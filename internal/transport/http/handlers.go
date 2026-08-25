@@ -293,11 +293,13 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input", err.Error())
 		return
 	}
+	// Absent is not invalid. Tasks §1.2: "If `harness_id` is absent, the server
+	// MUST use a default harness and MUST report which one it used in the
+	// response `metadata`." This used to refuse with `invalid_input`, which
+	// made `{"input":"hi"}` — the smallest body the schema permits — a 400
+	// (issue #53). The choosing is service.DefaultHarness's, because the
+	// transport cannot see which harnesses are ready.
 	harnessID, _ := body.Metadata["harness_id"].(string)
-	if harnessID == "" {
-		writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input", "metadata.harness_id is required")
-		return
-	}
 
 	task, run, err := s.tasks.StartTask(r.Context(), service.CreateTaskRequest{
 		Input:              input.Text,

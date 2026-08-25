@@ -70,6 +70,20 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		return
 	}
 
+	// A task that named no harness on a server that cannot choose one. 400
+	// rather than 422: the request is well-formed and permitted — Tasks §1.2
+	// entitles a client to omit the field — so what is wrong is this
+	// deployment's inability to answer it, and `invalid_input` is the closest
+	// the vocabulary comes. The param is what makes it actionable, and
+	// `detail.harnesses` is the list the client should have chosen from.
+	var noDefault *service.NoDefaultHarnessError
+	if errors.As(err, &noDefault) {
+		writeErrorFull(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input",
+			noDefault.Error(), "metadata.harness_id",
+			map[string]any{"harnesses": noDefault.Candidates})
+		return
+	}
+
 	// 503, not a 4xx. Errors §4 makes the class the retry signal, and nothing
 	// about this request is wrong — it arrived while the server was already
 	// running as many harness processes as it is configured for, and retrying

@@ -78,6 +78,11 @@ type TaskService struct {
 
 	// idempotency remembers which Idempotency-Key started which run (Tasks §6).
 	idempotency *idempotencyKeys
+
+	// defaultHarnessID is the harness a task that names none runs on. Empty
+	// means nothing was configured, and DefaultHarness falls back to the sole
+	// ready harness — see there for why "sole" is the only safe guess.
+	defaultHarnessID string
 }
 
 func NewTaskService(reg Registry, store Store, log *slog.Logger, opts ...Option) *TaskService {
@@ -139,6 +144,17 @@ func WithMaxConcurrentRuns(n int) Option {
 		}
 		s.maxConcurrentRuns = n
 	}
+}
+
+// WithDefaultHarness names the harness a task that names none runs on.
+//
+// It is an id or an alias and is not validated here: whether it resolves
+// depends on the registry and the harness store, and neither is necessarily
+// wired up at the moment an option runs. cmd/uhpd checks it at startup instead,
+// which is the right place — a configured default that names nothing is a
+// deployment mistake, and every per-request answer to it comes too late.
+func WithDefaultHarness(id string) Option {
+	return func(s *TaskService) { s.defaultHarnessID = id }
 }
 
 // CreateTaskRequest mirrors the fields UHP requires from the OpenAI
@@ -206,6 +222,23 @@ func (s *TaskService) ResumableStream(key string) bool {
 // the returned Run stays valid — and the task keeps running — regardless of
 // what the caller does with it.
 func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*domain.Task, *Run, error) {
+	// Tasks §1.2: a task that names no harness is not a malformed task. The
+	// server chooses one and reports which — it does not refuse, which is what
+	// this used to do at the transport (issue #53).
+	//
+	// Resolved here rather than in the handler so that every caller of
+	// StartTask gets the same rule, and so the chosen id is on req.HarnessID
+	// before anything below reads it: the session, the task record and the
+	// metadata projection all take it from there, and a default applied later
+	// would be a harness that ran the work without appearing on the response.
+	if req.HarnessID == "" {
+		chosen, err := s.DefaultHarness(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		req.HarnessID = chosen
+	}
+
 	adapter, harnessCfg, ok, err := s.adapterFor(ctx, req.HarnessID)
 	if err != nil {
 		return nil, nil, err
