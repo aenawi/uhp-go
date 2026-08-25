@@ -42,6 +42,27 @@ Measured 2026-08-24 by `make conformance-gate` against the same pinned suite and
 task that named no model came back naming the one that served it. The 36/37 split above is
 closed; the model-less core score is now the same 37/37 the pinned runs reported.
 
+**The gate has since been run at class `full`, with session sharing enabled (#57).**
+
+```
+52/52 full · 0 failed · 0 skipped · 0 errored
+CONFORMANT — UHP 2026-08-11 (full)
+```
+
+Measured 2026-08-25 by `make conformance-gate CONFORMANCE_FLOOR=52` with `UHP_CLASS=full`,
+against the same pinned suite revision and the same `claude-code` harness, on a server
+started with `UHP_WORKSPACE`, a harness store and `UHP_SESSION_SHARING=1`. Still no
+`--model`: T-03 read `claude-opus-5[1m]` off a task that named none. **Zero skips**, which
+is the part worth reading — the 2026-08-23 `extended` run skipped X-07 because the agent
+happened not to write a file, and this run passed X-06 and X-07 on a real artifact.
+
+That is the strongest number this server has recorded, and it is worth being exact about
+what it does not cover. **None of the 52 checks touches session sharing.** `/share` appears
+nowhere in the suite at the pinned revision, so the feature #57 added was carried through
+this run without a single check looking at it. What the run proves is that adding it broke
+nothing else — a real question, since it changed the `Store` interface, the discovery
+document and the routing table — and nothing more than that.
+
 **What the fix does, and where it still guesses.** A task that names no model is created
 carrying the harness's effective default, and three of the five adapters — `claude-code`,
 `grok-cli` and `pi` — replace that default mid-run with the model their own output names, so
@@ -393,7 +414,22 @@ that reports `session_sharing: false`**, and the class question is then open aga
 same reason it was before #57 landed. A `full` claim has to be measured with sharing on.
 This is the shape of #43 and #53 a third time — the configuration that exercises the
 feature is the one nothing runs by default — and it is written down here rather than
-discovered later.
+discovered later. The 2026-08-25 run above was taken with it on, so the recorded 52/52 is a
+number from a server that was serving shares; it is simply not a number *about* them.
+
+One further thing that run settled, by reading the check rather than by scoring it. D-05
+("conformance_class agrees with capabilities") tests the class against a fixed list, and
+that list is `streaming, sessions, cancellation, files_input, files_output,
+session_listing, harness_management` — **`session_sharing` is not in it.** So the suite
+would accept a `full` claim from a server with sharing switched off, and would refuse one
+from a server started without `UHP_WORKSPACE`, because that server honestly reports
+`files_input: false`.
+
+That is why raising `ConformanceClass` is not a matter of editing a constant. Three of this
+server's capabilities are computed from configuration, so a hardcoded `full` would be a
+claim `uhpd` contradicts the moment it is started without a workspace — and D-05 would
+catch it. A class this server can defend has to be computed from the same booleans the
+capability list is.
 
 The trace deletion is worth a note of its own, because nothing in the suite would catch
 getting it backwards. `DELETE /v1/traces/{id}` cancels first and `DELETE /v1/responses/{id}`

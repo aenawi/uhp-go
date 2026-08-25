@@ -157,11 +157,12 @@ pip install -e protocol/conformance
 uhp-conformance --base-url http://localhost:8080 --api-key "$UHP_API_KEY" --class full
 ```
 
-**Last measured score: `full` 52/52 — CONFORMANT (UHP 2026-08-11, class full).**
+**Last measured score: `full` 52/52 — CONFORMANT (UHP 2026-08-11, class full), 0 skipped.**
 Details, reproduction steps and what a green suite still cannot see:
 [docs/conformance.md](docs/conformance.md).
-Measured 2026-08-23 against a pinned suite revision: **37/37 core**, **44/45 extended**,
-**52/52 full**, 0 failed.
+Measured 2026-08-25 by `make conformance-gate` at `UHP_CLASS=full` against a pinned suite
+revision, on a server with a workspace, a harness store and `UHP_SESSION_SHARING=1`, and
+with no `--model` pinned. Zero skips, which the earlier runs could not say.
 
 File support (issue #2) and harness management with skills, MCP and tool restrictions
 (issues #3 and #4) had all landed after the previous run and were carried as "implemented,
@@ -182,15 +183,19 @@ re-run on 2026-08-24 — **37/37 core, 0 skipped**, `T-03` reading `claude-opus-
 task that named no model. The two configurations now agree. The gate stays the one place the
 suite runs unpinned, because that is the configuration that found the defect.
 
-This server still reports `conformance_class: core` in its discovery document, and now for
-one reason instead of two. The missing feature is no longer one of them: session sharing
-(issue #57) is implemented, so nothing in class `full` is absent. What is left is the
-evidence — the class is what the server *guarantees*, and one run on one machine with one
-CLI logged in is thinner than a guarantee wants. Raising it stays a deliberate follow-up
-behind a fresh gate run with `UHP_SESSION_SHARING=1`, which is the configuration a `full`
-claim now has to be measured in. Capabilities a deployment does not offer are reported as
-`false` rather than omitted, and three of them are computed from configuration rather than
-asserted — see [UHP surface implemented](#uhp-surface-implemented).
+This server still reports `conformance_class: core` in its discovery document, and the
+reason has changed twice. The missing feature is no longer one: session sharing (issue #57)
+is implemented, so nothing in class `full` is absent. The missing evidence is no longer one
+either: the 52/52 above was measured with sharing on and no model pinned.
+
+What is left is that **the class cannot honestly be a constant.** Three capabilities here
+are computed from configuration — `files_input`, `files_output` and `harness_management` —
+and the suite's own D-05 check tests the class against a list that includes the first two.
+A hardcoded `full` would therefore be a claim `uhpd` contradicts the moment it is started
+without `UHP_WORKSPACE`, and D-05 would catch it. Raising the class means computing it from
+the same booleans the capability list is built from, which is a change in its own right
+rather than a one-line edit. Capabilities a deployment does not offer stay reported as
+`false` rather than omitted — see [UHP surface implemented](#uhp-surface-implemented).
 
 A skip is counted as a failure here, not as a pass.
 
