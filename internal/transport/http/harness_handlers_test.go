@@ -91,12 +91,48 @@ func TestHarnessLifecycle(t *testing.T) {
 		t.Fatalf("update changed the harness base: %v", updated)
 	}
 
-	status, _ = callJSON(t, srv, "DELETE", "/v1/harnesses/"+id, "")
-	if status != 204 {
-		t.Fatalf("delete returned %d", status)
+	// 200 and a body, not 204: the OpenAPI specifies `{id, deleted}` for both
+	// deletion endpoints, and a client written against it decodes one (#59).
+	status, deleted := callJSON(t, srv, "DELETE", "/v1/harnesses/"+id, "")
+	if status != 200 {
+		t.Fatalf("delete returned %d: %v", status, deleted)
+	}
+	if deleted["id"] != id || deleted["deleted"] != true {
+		t.Fatalf("delete envelope = %v, want {id: %s, deleted: true}", deleted, id)
 	}
 	if status, _ := callJSON(t, srv, "GET", "/v1/harnesses/"+id, ""); status != 404 {
 		t.Fatalf("a deleted harness still resolves (%d)", status)
+	}
+}
+
+// The alias path. A harness is reachable by its friendly base name as well as
+// its chrn_ id, and the deletion envelope must name the canonical one: that is
+// the id the client is holding and will now get a 404 for, and echoing back
+// "echo" would leave it unable to match the answer to what it lost.
+func TestDeletingAHarnessByAliasNamesTheCanonicalID(t *testing.T) {
+	srv := newManagedTestServer(t)
+
+	status, deleted := callJSON(t, srv, "DELETE", "/v1/harnesses/echo", "")
+	// A compiled-in harness is not the API's to delete, so this refusal is the
+	// expected one — what is being checked is that the alias resolved at all
+	// rather than being treated as an unknown id.
+	if status == 404 {
+		t.Fatalf("the alias did not resolve: %v", deleted)
+	}
+	if code := errorCode(t, deleted); code != vendorCodeHarnessNotManaged {
+		t.Fatalf("code = %q, want %s", code, vendorCodeHarnessNotManaged)
+	}
+
+	// Now the same thing on a harness that *is* the API's to delete, created
+	// with a name of its own.
+	_, created := callJSON(t, srv, "POST", "/v1/harnesses", `{"name":"mine","base":"echo"}`)
+	id, _ := created["id"].(string)
+	if id == "" {
+		t.Fatalf("create did not return an id: %v", created)
+	}
+	status, body := callJSON(t, srv, "DELETE", "/v1/harnesses/"+id, "")
+	if status != 200 || body["id"] != id {
+		t.Fatalf("delete = %d %v, want 200 naming %s", status, body, id)
 	}
 }
 

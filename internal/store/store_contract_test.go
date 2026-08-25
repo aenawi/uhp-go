@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -94,10 +95,14 @@ func sampleTask(id, sessionID string, created time.Time) *domain.Task {
 			Metadata:           map[string]any{"tenant": "acme", "attempt": 2.0, "tags": []any{"a", "b"}},
 			CreatedAt:          created.Unix(),
 		},
-		UpdatedAt:      created.Add(time.Second),
-		HarnessID:      "claude-code",
-		SessionID:      sessionID,
-		Input:          "do the thing",
+		UpdatedAt: created.Add(time.Second),
+		HarnessID: "claude-code",
+		SessionID: sessionID,
+		Input:     "do the thing",
+		InputItems: []json.RawMessage{
+			json.RawMessage(`{"type":"input_text","text":"do the thing"}`),
+			json.RawMessage(`{"type":"input_file","file_id":"file_1"}`),
+		},
 		RequestedModel: "claude-opus-5",
 		Artifacts: []domain.Artifact{{
 			File: uhp.File{
@@ -263,6 +268,45 @@ func TestStoreTaskNotFound(t *testing.T) {
 		}
 		if err := s.AppendArtifact(ctx, "resp_missing", domain.Artifact{File: uhp.File{ID: "file_x"}}); err == nil {
 			t.Fatal("AppendArtifact on an unknown task must fail")
+		}
+		// Deleting is the exception among the writes: an id that is not there
+		// is found=false and not an error. A DELETE for a response that is
+		// already gone did what the caller wanted, and the transport turns
+		// found=false into the 404 that says so.
+		found, err = s.DeleteTask(ctx, "resp_missing")
+		if err != nil {
+			t.Fatalf("deleting an absent task is not a failed write: %v", err)
+		}
+		if found {
+			t.Fatal("DeleteTask reported deleting a task that was never created")
+		}
+	})
+}
+
+// Tasks §4. The engines have to agree on this one too: a task that is deleted
+// is unreadable afterwards, and deleting it again reports that it was not there.
+func TestStoreDeleteTask(t *testing.T) {
+	eachStore(t, func(t *testing.T, s service.Store) {
+		ctx := context.Background()
+		if err := s.CreateTask(ctx, sampleTask("resp_a", "sess_a", storeEpoch)); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		found, err := s.DeleteTask(ctx, "resp_a")
+		if err != nil || !found {
+			t.Fatalf("delete: found=%v err=%v", found, err)
+		}
+
+		got, found, err := s.GetTask(ctx, "resp_a")
+		if err != nil {
+			t.Fatalf("read after delete: %v", err)
+		}
+		if found || got != nil {
+			t.Fatalf("a deleted task is still readable: found=%v task=%+v", found, got)
+		}
+
+		if found, err := s.DeleteTask(ctx, "resp_a"); err != nil || found {
+			t.Fatalf("second delete: found=%v err=%v, want false and no error", found, err)
 		}
 	})
 }

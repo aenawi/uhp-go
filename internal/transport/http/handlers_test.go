@@ -21,7 +21,15 @@ import (
 type echoAdapter struct{}
 
 func (echoAdapter) Info() uhpgo.Harness {
-	return uhpgo.Harness{Harness: uhp.Harness{ID: "chrn_echo", Base: "echo", Name: "Echo", Object: "harness"}}
+	return uhpgo.Harness{
+		Harness: uhp.Harness{ID: "chrn_echo", Base: "echo", Name: "Echo", Object: "harness"},
+		// Reported, because a real adapter computes it from a health check and
+		// never leaves it empty. It became load-bearing with issue #53:
+		// DefaultHarness counts the *ready* harnesses, so a double with no
+		// status is a server with nothing to run — which is not the thing any
+		// test here means to set up.
+		Status: uhpgo.HarnessReady,
+	}
 }
 func (echoAdapter) HealthCheck(ctx context.Context) error { return nil }
 func (echoAdapter) Run(ctx context.Context, req harness.RunRequest) (<-chan harness.RunUpdate, error) {
@@ -95,15 +103,70 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
-func TestCreateTaskMissingHarness(t *testing.T) {
+// Tasks §1.2: a task that names no harness is not a malformed task. This used
+// to assert the 400 the server answered, which was the defect rather than the
+// contract (issue #53) — `{"input":"hi"}` is the smallest body the schema
+// permits and the first thing anyone reading the specification will send.
+func TestATaskNamingNoHarnessIsServedByTheDefault(t *testing.T) {
 	srv := newTestServer()
 	body := `{"input":"hi"}`
 	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
-	if w.Code != 400 {
-		t.Fatalf("expected 400, got %d", w.Code)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
+	var resp uhp.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// The half of the MUST that is easy to drop: a server that chooses
+	// silently leaves the client unable to tell what ran.
+	if got := resp.Metadata["harness_id"]; got != "chrn_echo" {
+		t.Fatalf("metadata.harness_id = %v, want chrn_echo", got)
+	}
+}
+
+// The refusal that remains legitimate: two ready harnesses and no configured
+// default. It must name the field the client omitted and list what it should
+// have chosen from, because the client is being refused for exercising a
+// permission the specification gave it.
+func TestAnAmbiguousDefaultIsRefusedWithTheCandidates(t *testing.T) {
+	reg := harness.NewRegistry()
+	reg.Register(echoAdapter{})
+	reg.Register(secondEchoAdapter{})
+	svc := service.NewTaskService(reg, store.NewMemoryStore(), slog.Default())
+	srv := NewServer(svc, slog.Default(), nil, 0)
+
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"input":"hi"}`))
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	var env uhp.ErrorEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Error.Param == nil || *env.Error.Param != "metadata.harness_id" {
+		t.Fatalf("param = %v, want metadata.harness_id", env.Error.Param)
+	}
+	harnesses, _ := env.Error.Detail["harnesses"].([]any)
+	if len(harnesses) != 2 {
+		t.Fatalf("detail.harnesses = %v, want both ids so the client can choose", env.Error.Detail["harnesses"])
+	}
+}
+
+// secondEchoAdapter is a second ready harness, distinct only in id.
+type secondEchoAdapter struct{ echoAdapter }
+
+func (secondEchoAdapter) Info() uhpgo.Harness {
+	info := echoAdapter{}.Info()
+	info.ID = "chrn_echo2"
+	info.Base = "echo2"
+	return info
 }
 
 // blockingAdapter keeps its run in flight until the test releases it, so the
@@ -113,10 +176,30 @@ type blockingAdapter struct {
 	once    sync.Once
 	started chan struct{}
 	release chan struct{}
+
+	// stopped records whether Cancel was ever called. It is the only way to
+	// tell "this run was asked to stop" from "this run ended on its own": both
+	// look the same from the wire, which is what makes an endpoint that
+	// wrongly cancels so easy to ship. See TestDeletingAResponseDoesNotStopTheRun.
+	mu      sync.Mutex
+	stopped bool
 }
 
 func newBlockingAdapter() *blockingAdapter {
 	return &blockingAdapter{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (a *blockingAdapter) Cancel(context.Context, string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.stopped = true
+	return nil
+}
+
+func (a *blockingAdapter) cancelled() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stopped
 }
 
 func (a *blockingAdapter) Run(ctx context.Context, _ harness.RunRequest) (<-chan harness.RunUpdate, error) {

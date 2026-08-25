@@ -39,14 +39,15 @@ type taskRecord struct {
 	// UpdatedAt is a time.Time because it is internal and has no wire format to
 	// match. The mismatch is the honest one: only one of the two is a
 	// protocol field.
-	CreatedAt       int64            `json:"created_at"`
-	UpdatedAt       time.Time        `json:"updated_at"`
-	HarnessID       string           `json:"harness_id"`
-	SessionID       string           `json:"session_id"`
-	Input           string           `json:"input"`
-	RequestedModel  string           `json:"requested_model"`
-	Artifacts       []artifactRecord `json:"artifacts"`
-	NativeSessionID string           `json:"native_session_id"`
+	CreatedAt       int64             `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
+	HarnessID       string            `json:"harness_id"`
+	SessionID       string            `json:"session_id"`
+	Input           string            `json:"input"`
+	InputItems      []json.RawMessage `json:"input_items"`
+	RequestedModel  string            `json:"requested_model"`
+	Artifacts       []artifactRecord  `json:"artifacts"`
+	NativeSessionID string            `json:"native_session_id"`
 }
 
 // artifactRecord is domain.Artifact's fields rather than its wire object, which
@@ -131,6 +132,7 @@ func encodeTask(t *domain.Task) (string, error) {
 		HarnessID:          t.HarnessID,
 		SessionID:          t.SessionID,
 		Input:              t.Input,
+		InputItems:         t.InputItems,
 		RequestedModel:     t.RequestedModel,
 		NativeSessionID:    t.NativeSessionID,
 	}
@@ -177,6 +179,7 @@ func decodeTask(id, data string) (*domain.Task, error) {
 		HarnessID:       rec.HarnessID,
 		SessionID:       rec.SessionID,
 		Input:           rec.Input,
+		InputItems:      rec.InputItems,
 		RequestedModel:  rec.RequestedModel,
 		NativeSessionID: rec.NativeSessionID,
 	}

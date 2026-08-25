@@ -323,6 +323,17 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 	for upd := range updates {
 		evs, err := s.applyUpdate(ctx, task, upd, seq, rs)
 		if err != nil {
+			// A client may delete a response while its run is still going —
+			// Tasks §4 requires that not to stop the work — and every write
+			// from here on then fails against a row that is no longer there.
+			// That is the client getting what it asked for, not this server
+			// failing, and logging it at ERROR would fill an operator's logs
+			// with alarms for a supported operation.
+			if s.taskGone(ctx, task.ID) {
+				s.log.Debug("response deleted mid-run; the run continues unreported",
+					"task_id", task.ID)
+				continue
+			}
 			s.log.Error("apply update failed", "error", err, "task_id", task.ID)
 			continue
 		}
@@ -375,6 +386,18 @@ func cloneItem(it *uhp.OutputItem) *uhp.OutputItem {
 	cp := *it
 	cp.Content = append([]uhp.ContentPart(nil), it.Content...)
 	return &cp
+}
+
+// taskGone reports whether a task's record has been deleted out from under a
+// run that is still going.
+//
+// It exists to keep one supported client action out of the error log. A read
+// that itself fails answers false: a store that cannot be read is a real
+// failure and must not be excused as a deletion, so the ambiguous case falls
+// through to the ERROR it would have produced anyway.
+func (s *TaskService) taskGone(ctx context.Context, id string) bool {
+	_, found, err := s.store.GetTask(ctx, id)
+	return err == nil && !found
 }
 
 // responseOf snapshots the wire response a task will be reported as.

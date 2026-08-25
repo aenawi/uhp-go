@@ -10,6 +10,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"sync"
@@ -80,6 +81,22 @@ func (s *MemoryStore) GetTask(_ context.Context, id string) (*domain.Task, bool,
 	return copyTask(t), true, nil
 }
 
+// DeleteTask removes a task. A missing id is found=false and not an error, for
+// the reason GetTask gives.
+func (s *MemoryStore) DeleteTask(_ context.Context, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tasks[id]; !ok {
+		return false, nil
+	}
+	delete(s.tasks, id)
+	// The arrival order goes with it. Leaving the entry behind would keep a
+	// deleted task's position in its session's history reserved for ever, and
+	// nextSeq only ever counts up, so nothing would reuse it.
+	delete(s.arrived, id)
+	return true, nil
+}
+
 func (s *MemoryStore) AppendArtifact(_ context.Context, taskID string, a domain.Artifact) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -144,6 +161,17 @@ func copyTask(t *domain.Task) *domain.Task {
 		}
 	}
 	cp.Artifacts = copySlice(t.Artifacts)
+	// Each item is a byte slice, so copying the outer slice alone would still
+	// hand a reader the writer's bytes. Nothing mutates a stored item today —
+	// they are written once at creation — but this store's contract is that a
+	// reader cannot reach what it did not write, and an exception that holds
+	// only while nobody mutates is one nobody will remember.
+	if t.InputItems != nil {
+		cp.InputItems = make([]json.RawMessage, len(t.InputItems))
+		for i, item := range t.InputItems {
+			cp.InputItems[i] = append(json.RawMessage(nil), item...)
+		}
+	}
 	if t.Error != nil {
 		e := *t.Error
 		cp.Error = &e

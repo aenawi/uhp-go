@@ -38,6 +38,17 @@ const (
 // repository's own are in
 // [github.com/aenawi/uhp-go/uhp/uhpgo], not here, because a vendor code sitting
 // in this file would be indistinguishable from a protocol one.
+//
+// # These are the protocol's codes, not one server's
+//
+// Every code the specification defines is here, because this package models the
+// protocol. Which of them a *given* server can actually emit is a property of
+// that server: one with no quotas never sends `quota_exhausted`, and one that
+// does not convert documents never sends `preview_failed`. So a client should
+// switch on the codes it cares about and fall back to [Error].Type for the rest,
+// rather than assuming the whole set is live — writing an arm per constant
+// produces code that mostly never runs. The server in this repository is
+// narrower than this list in seven places, and docs/conformance.md says which.
 const (
 	CodeUnsupportedProtocolVersion = "unsupported_protocol_version"
 	CodeInvalidInput               = "invalid_input"

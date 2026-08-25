@@ -162,6 +162,90 @@ func (s *TaskService) ListHarnesses(ctx context.Context) ([]uhpgo.Harness, error
 	return out, nil
 }
 
+// NoDefaultHarnessError is a task that named no harness on a server that
+// cannot choose one for it.
+//
+// It carries the ids that were candidates, because this refusal is the one a
+// client can act on immediately: Tasks §1.2 entitles it to omit `harness_id`,
+// so being refused is a surprise, and the only useful answer is the list it
+// should have picked from. Errors §1 asks for structured context whenever there
+// is one, and here there always is.
+type NoDefaultHarnessError struct {
+	// Candidates is every harness on this server, ready or not. An unavailable
+	// one is still worth naming: "unavailable" is a state that changes when
+	// somebody logs the CLI in, so a client told only about the ready ones
+	// would be told a harness it can see in GET /v1/harnesses does not exist.
+	Candidates []string
+
+	// Ready is how many of them could actually run a task, and it is what
+	// decides which of three quite different problems this is. Reporting the
+	// wrong one sends the operator to the wrong fix: "name a harness" is
+	// useless advice when the real answer is "log one of them in".
+	Ready int
+}
+
+func (e *NoDefaultHarnessError) Error() string {
+	switch {
+	case len(e.Candidates) == 0:
+		return "service: this server has no harnesses configured, so it cannot run a task"
+	case e.Ready == 0:
+		return "service: no harness on this server is ready, so there is no default to fall back to; " +
+			"name one in metadata.harness_id or make one available"
+	default:
+		return "service: more than one harness is ready and no default is configured, " +
+			"so a task must name one in metadata.harness_id"
+	}
+}
+
+// DefaultHarness is the harness a task that names none runs on (Tasks §1.2:
+// "If `harness_id` is absent, the server MUST use a default harness and MUST
+// report which one it used in the response `metadata`.")
+//
+// Two rules, in order:
+//
+//  1. A configured default wins. An operator who named one has answered the
+//     question, and no inference should be able to override that answer.
+//  2. Otherwise, the sole ready harness. This is the case that matters for a
+//     first run — one CLI installed, nothing configured, `{"input":"hi"}` works
+//     — and "sole" is doing the load-bearing work: with two ready harnesses
+//     there is no way to guess which the client meant, and guessing would run
+//     an agent the caller did not ask for and bill them for it.
+//
+// Unavailable harnesses are excluded from the count rather than from the
+// candidate list. A server with one ready CLI and four that are merely
+// configured should still start; a client that has to choose should still be
+// told all five exist, because "unavailable" is a state that changes when
+// somebody logs in.
+//
+// The reporting half of the MUST is already handled: startTask writes the
+// resolved id onto the task, and [domain.Task.SyncMetadata] projects it into
+// wire `metadata.harness_id` on every response.
+func (s *TaskService) DefaultHarness(ctx context.Context) (string, error) {
+	if s.defaultHarnessID != "" {
+		return s.defaultHarnessID, nil
+	}
+
+	all, err := s.ListHarnesses(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	ids := make([]string, 0, len(all))
+	ready := ""
+	found := 0
+	for _, h := range all {
+		ids = append(ids, h.ID)
+		if h.Status == uhpgo.HarnessReady {
+			ready = h.ID
+			found++
+		}
+	}
+	if found == 1 {
+		return ready, nil
+	}
+	return "", &NoDefaultHarnessError{Candidates: ids, Ready: found}
+}
+
 // GetHarness answers GET /v1/harnesses/{id}, accepting an id or an alias.
 func (s *TaskService) GetHarness(ctx context.Context, id string) (uhpgo.Harness, bool, error) {
 	if a, ok := s.registry.Get(id); ok {

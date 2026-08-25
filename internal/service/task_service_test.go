@@ -35,6 +35,12 @@ func (echoAdapter) Info() uhpgo.Harness {
 		Capabilities: []uhpgo.Capability{
 			uhpgo.CapStreaming, uhpgo.CapSessions, uhpgo.CapCancellation,
 		},
+		// A real adapter computes this from a health check and reports one of
+		// the two states; leaving it empty made this double the only "harness"
+		// in the tree that is neither ready nor unavailable, which is not a
+		// state any client can be shown. It matters now that DefaultHarness
+		// counts ready harnesses (issue #53).
+		Status: uhpgo.HarnessReady,
 	}
 }
 

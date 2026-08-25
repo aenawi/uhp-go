@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 
 	"github.com/aenawi/uhp-go/internal/domain"
@@ -56,6 +57,8 @@ type TaskService interface {
 	// whose opening events would be skipped.
 	StartTask(ctx context.Context, req service.CreateTaskRequest) (*domain.Task, *service.Run, error)
 	GetTask(ctx context.Context, id string) (*domain.Task, error)
+	TaskInputItems(ctx context.Context, id string) ([]json.RawMessage, error)
+	DeleteTask(ctx context.Context, id string) error
 	CancelTask(ctx context.Context, taskID string) error
 	ResumableStream(key string) bool
 

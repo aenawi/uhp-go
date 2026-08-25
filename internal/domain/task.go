@@ -10,6 +10,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/aenawi/uhp-go/uhp"
@@ -50,8 +51,25 @@ type Task struct {
 	HarnessID      string
 	RequestedModel string
 
-	// The genuinely internal three: nothing below reaches a client.
-	Input           string
+	// The genuinely internal four: nothing below reaches a client on the
+	// response object. InputItems reaches one on its own endpoint.
+	Input string
+
+	// InputItems is the `input` the client sent, normalised to an array and
+	// otherwise untouched, so GET /v1/responses/{id}/input_items can answer
+	// with what was sent rather than with this server's paraphrase of it.
+	//
+	// Input, beside it, is the flattened prompt the harness was given. The two
+	// are deliberately both kept: a client asking what it sent is not asking
+	// what the CLI received, and answering the first with the second loses
+	// every file item — which is most of what the endpoint exists for.
+	//
+	// json.RawMessage rather than a decoded shape, because the schema declines
+	// to type an input item (`additionalProperties: true`) and a decode-encode
+	// round trip would reorder keys and drop the ones this server has no field
+	// for. Verbatim is the only faithful answer.
+	InputItems []json.RawMessage
+
 	Artifacts       []Artifact
 	NativeSessionID string
 

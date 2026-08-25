@@ -34,13 +34,17 @@ func TestRouterDefaultsCarryTheErrorEnvelope(t *testing.T) {
 			// without parsing, and `detail` repeats it for one that only reads
 			// the envelope. Both come from net/http's own method match, so
 			// neither can drift from what the router would actually accept.
-			name:        "the path matches only under another method",
-			method:      "PATCH",
-			path:        "/v1/responses/resp_x",
-			wantStatus:  http.StatusMethodNotAllowed,
-			wantCode:    vendorCodeMethodNotAllowed,
-			wantAllow:   "GET, HEAD",
-			wantMethods: []string{"GET", "HEAD"},
+			name:       "the path matches only under another method",
+			method:     "PATCH",
+			path:       "/v1/responses/resp_x",
+			wantStatus: http.StatusMethodNotAllowed,
+			wantCode:   vendorCodeMethodNotAllowed,
+			// DELETE joined GET on this path with issue #52, and this
+			// expectation moving with it is the check doing its job: both
+			// halves are read off net/http's own method match, so a route
+			// added without the client being told would show up here.
+			wantAllow:   "DELETE, GET, HEAD",
+			wantMethods: []string{"DELETE", "GET", "HEAD"},
 		},
 		{
 			name:       "a trailing slash matches nothing",
