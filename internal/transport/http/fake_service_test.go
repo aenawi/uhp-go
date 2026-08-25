@@ -36,6 +36,7 @@ type fakeService struct {
 	getSession    func(context.Context, string) (*domain.Session, error)
 	sessionTurns  func(context.Context, string) ([]uhp.Turn, error)
 	cancelSession func(context.Context, string) error
+	deleteSession func(context.Context, string) error
 }
 
 func (f *fakeService) ListHarnesses(ctx context.Context) ([]uhpgo.Harness, error) {
@@ -80,6 +81,10 @@ func (f *fakeService) SessionTurns(ctx context.Context, id string) ([]uhp.Turn, 
 
 func (f *fakeService) CancelSession(ctx context.Context, id string) error {
 	return f.cancelSession(ctx, id)
+}
+
+func (f *fakeService) DeleteSession(ctx context.Context, id string) error {
+	return f.deleteSession(ctx, id)
 }
 
 // newFakeServer wires a server onto a stand-in service, with auth off so a test

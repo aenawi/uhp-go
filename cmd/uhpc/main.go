@@ -45,6 +45,7 @@ Commands:
   session <session-id>            one session
   turns <session-id>              a session's ordered history
   cancel-session <session-id>     stop whatever is running in a session
+  delete-session <session-id>     dispose of a session: its turns, its files, and any run
   files <session-id>              a session's artifacts
   download <container-id> <file-id>   an artifact's bytes, to stdout
   upload <path>                   store a file for later use as input
@@ -138,6 +139,8 @@ func (c *cli) dispatch(ctx context.Context, command string, args []string) error
 		return c.turns(ctx, args)
 	case "cancel-session":
 		return c.cancelSession(ctx, args)
+	case "delete-session":
+		return c.deleteSession(ctx, args)
 	case "files":
 		return c.files(ctx, args)
 	case "download":

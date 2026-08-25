@@ -412,6 +412,41 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, sess *domain.Session) e
 	return nil
 }
 
+// DeleteSession removes a session's row and every task row that names it.
+//
+// Two statements and therefore a transaction, unlike DeleteTask: the two tables
+// have no foreign key between them — the schema has never declared one, and
+// adding one now would be a migration for a rule this method already enforces —
+// so nothing but this transaction stops a crash between the statements from
+// leaving a session unreadable and its history behind. The tasks go first, so a
+// reader that finds the session still there also finds its turns.
+//
+// The `found` flag is the session's own row, not the tasks': a session with no
+// tasks yet is still a session, and deleting it is still a delete.
+func (s *SQLiteStore) DeleteSession(ctx context.Context, id string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("store: delete session %s: %w", id, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tasks WHERE session_id = ?`, id); err != nil {
+		return false, fmt.Errorf("store: delete session %s: %w", id, err)
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id)
+	if err != nil {
+		return false, fmt.Errorf("store: delete session %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: delete session %s: %w", id, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("store: delete session %s: %w", id, err)
+	}
+	return n > 0, nil
+}
+
 // ListSessions returns one page of sessions, newest first.
 //
 // The order is total — newest created_at first, ties broken by id ascending —

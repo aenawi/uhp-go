@@ -67,6 +67,7 @@ type TaskService interface {
 	GetSession(ctx context.Context, id string) (*domain.Session, error)
 	SessionTurns(ctx context.Context, id string) ([]uhp.Turn, error)
 	CancelSession(ctx context.Context, id string) error
+	DeleteSession(ctx context.Context, id string) error
 
 	// Files (Files §1-5).
 	StoreUpload(ctx context.Context, filename, mimeType string, data []byte) (uhpgo.Upload, error)

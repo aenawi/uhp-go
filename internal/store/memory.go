@@ -140,6 +140,32 @@ func (s *MemoryStore) UpdateSession(_ context.Context, sess *domain.Session) err
 	return nil
 }
 
+// DeleteSession removes a session and every task that ran in it. A missing id
+// is found=false and not an error, for the reason GetSession gives.
+//
+// The sweep is over every task rather than over a per-session index, because
+// this engine keeps none: the tasks map is the only record of which session a
+// task belongs to. A store holding a conversation's worth of tasks is small
+// enough that the scan costs nothing worth an index that every other write
+// would then have to maintain.
+func (s *MemoryStore) DeleteSession(_ context.Context, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.sessions[id]; !ok {
+		return false, nil
+	}
+	delete(s.sessions, id)
+	for taskID, t := range s.tasks {
+		if t.SessionID != id {
+			continue
+		}
+		delete(s.tasks, taskID)
+		// The arrival order goes with the task, for the reason DeleteTask gives.
+		delete(s.arrived, taskID)
+	}
+	return true, nil
+}
+
 // copyTask deep-copies the reference-typed fields as well as the struct.
 // A shallow `cp := *t` leaves Metadata, Output and Artifacts aliasing the
 // caller's memory, so a caller could mutate stored state after handing it over.

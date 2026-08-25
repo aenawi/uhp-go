@@ -79,6 +79,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/sessions/{id}", withVersion(s.withAuth(s.handleGetSession)))
 	s.mux.HandleFunc("GET /v1/sessions/{id}/turns", withVersion(s.withAuth(s.handleSessionTurns)))
 	s.mux.HandleFunc("POST /v1/sessions/{id}/cancel", withVersion(s.withAuth(s.handleCancelSession)))
+	// Deletion lives under /v1/traces/{session_id}, not /v1/sessions/{id}.
+	// That is the specification's path (Sessions §6) and not a second resource:
+	// the id is the one every route above reads with, and what disappears is
+	// what they were reading. The two spellings are UHP's, not this server's to
+	// reconcile.
+	s.mux.HandleFunc("DELETE /v1/traces/{id}", withVersion(s.withAuth(s.handleDeleteSession)))
 
 	s.mux.HandleFunc("GET /v1/sessions/{id}/files", withVersion(s.withAuth(s.handleSessionFiles)))
 	s.mux.HandleFunc("GET /v1/sessions/{id}/files/archive", withVersion(s.withAuth(s.handleSessionArchive)))

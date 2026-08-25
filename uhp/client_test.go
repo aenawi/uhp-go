@@ -255,6 +255,36 @@ func TestClientPreservesABaseURLPathPrefix(t *testing.T) {
 	}
 }
 
+// The two deletions differ in method target as well as in meaning, and the
+// difference is the thing a client gets wrong. A session is read at
+// /v1/sessions/{id} and deleted at /v1/traces/{id} (Sessions §6), so a client
+// that reused the path it reads with would send a DELETE no conformant server
+// routes — and a client that sent /v1/responses/{id} instead would delete one
+// turn and believe it had disposed of the conversation.
+func TestClientDeletionsTargetTheirOwnPaths(t *testing.T) {
+	var method, path string
+	c, _ := stubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		w.Header().Set("UHP-Version", Version)
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "x", "deleted": true})
+	})
+	ctx := context.Background()
+
+	if err := c.DeleteSession(ctx, "sess_a"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if method != http.MethodDelete || path != "/v1/traces/sess_a" {
+		t.Errorf("DeleteSession sent %s %s, want DELETE /v1/traces/sess_a", method, path)
+	}
+
+	if err := c.Delete(ctx, "resp_a"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if method != http.MethodDelete || path != "/v1/responses/resp_a" {
+		t.Errorf("Delete sent %s %s, want DELETE /v1/responses/resp_a", method, path)
+	}
+}
+
 // Streaming §2: sequence numbers start at 0 and increase by exactly 1, "so a
 // client can detect a dropped event rather than silently rendering a gap".
 // Detecting it is worth nothing unless the client reports it.

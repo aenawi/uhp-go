@@ -66,6 +66,17 @@ type Store interface {
 	UpdateSession(ctx context.Context, s *domain.Session) error
 	ListSessions(ctx context.Context, f domain.SessionFilter) (domain.SessionPage, error)
 
+	// DeleteSession removes a session and every task that ran in it, reporting
+	// found=false for an id the store does not hold, as DeleteTask does.
+	//
+	// The tasks go with it, and that is a decision rather than a convenience.
+	// The turns *are* the conversation, so a session deleted with its history
+	// left behind would leave every turn readable at GET /v1/responses/{id} —
+	// its output, its artifact list — for a conversation whose owner has just
+	// disposed of it. An engine implements this as one atomic operation: a
+	// partial delete is a session that is unreadable and a history that is not.
+	DeleteSession(ctx context.Context, id string) (found bool, err error)
+
 	// ListSessionTasks returns a session's tasks in the order they ran.
 	ListSessionTasks(ctx context.Context, sessionID string) ([]*domain.Task, error)
 }

@@ -323,14 +323,16 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 	for upd := range updates {
 		evs, err := s.applyUpdate(ctx, task, upd, seq, rs)
 		if err != nil {
-			// A client may delete a response while its run is still going —
-			// Tasks §4 requires that not to stop the work — and every write
+			// A client may delete this task's record while the run is still
+			// going — DELETE /v1/responses/{id}, which Tasks §4 requires not to
+			// stop the work, or DELETE /v1/traces/{id}, which takes the whole
+			// session's rows and cancels rather than orphans — and every write
 			// from here on then fails against a row that is no longer there.
 			// That is the client getting what it asked for, not this server
 			// failing, and logging it at ERROR would fill an operator's logs
 			// with alarms for a supported operation.
 			if s.taskGone(ctx, task.ID) {
-				s.log.Debug("response deleted mid-run; the run continues unreported",
+				s.log.Debug("this task's record was deleted mid-run; the run continues unreported",
 					"task_id", task.ID)
 				continue
 			}
@@ -362,7 +364,11 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 		}
 		task.UpdatedAt = time.Now().UTC()
 		evs, err := s.terminal(ctx, task, seq, "response.failed", rs)
-		if err != nil {
+		// Same excuse as the loop above, and it needs stating twice because
+		// this is the other place a write meets a deleted row: a task whose
+		// record went while its adapter was misbehaving fails here rather than
+		// there, and an ERROR would report the deletion as a storage fault.
+		if err != nil && !s.taskGone(ctx, task.ID) {
 			s.log.Error("persist terminal state failed", "error", err, "task_id", task.ID)
 		}
 		for _, ev := range evs {

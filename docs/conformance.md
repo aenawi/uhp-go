@@ -369,9 +369,20 @@ exactly the events from *n* onward and none of the ones before it.
 any of them.** The 52 checks contain no request to `GET /v1/responses/{id}/input_items`
 or `DELETE /v1/responses/{id}` — both Tasks-chapter endpoints of class *core* in
 `uhp-2026-08-11.openapi.yaml` — so 37/37 core was measured against a server that had
-no route for either. Both landed in issues #51 and #52. `POST`/`GET /v1/sessions/{id}/share`
-(#57) and `DELETE /v1/traces/{id}` (#58) are still absent and are class *full*; they are
-what stops `conformance_class` truthfully reading `full`, whatever a run scores.
+no route for either. Both landed in issues #51 and #52. `DELETE /v1/traces/{id}` (#58) was
+the third and has now landed too — the suite asks for none of the three, so all three were
+found by reading. `POST`/`GET /v1/sessions/{id}/share` (#57) is the one still absent, and
+is class *full*; it is now the only thing stopping `conformance_class` from truthfully
+reading `full`, whatever a run scores.
+
+The trace deletion is worth a note of its own, because nothing in the suite would catch
+getting it backwards. `DELETE /v1/traces/{id}` cancels first and `DELETE /v1/responses/{id}`
+MUST NOT, and an implementation with the two the wrong way round answers 200 to both. What
+separates them is asserted in this repository's tests and nowhere else:
+`TestDeletingAResponseDoesNotStopTheRun` and
+`TestDeleteSessionCancelsTheRunAndReapsAfterwards`. The second also pins the part that is
+invisible from the wire entirely — that the session's working directory is removed once the
+run is dead, so "deleted" describes the disk and not only the database.
 
 This is the same lesson as #42 one level out. There, the code existed and no check
 measured it; here, the check does not exist either, so a green suite said nothing at

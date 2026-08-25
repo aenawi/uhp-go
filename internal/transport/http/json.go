@@ -16,6 +16,19 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeDeleted answers the two DELETE endpoints — a response and a trace —
+// with the envelope the OpenAPI gives both: 200 and `{id, deleted}`, not 204.
+//
+// One function for both, because the two endpoints agree on exactly this and on
+// nothing else. What they delete and whether they cancel are opposites, and a
+// client that reads the body to find out which one it got would find the same
+// two fields either way; the shape is shared precisely because it carries none
+// of the difference. `deleted` is a report of what this request did, which is
+// why neither endpoint reaches here for an id that was already gone.
+func writeDeleted(w http.ResponseWriter, id string) {
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
+}
+
 // The envelope this package used to declare privately — an errorEnvelope and
 // an errorPayload — is [uhp.ErrorEnvelope] and [uhp.Error].
 //

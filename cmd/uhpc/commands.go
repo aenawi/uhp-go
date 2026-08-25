@@ -480,6 +480,23 @@ func (c *cli) cancelSession(ctx context.Context, args []string) error {
 	return nil
 }
 
+func (c *cli) deleteSession(ctx context.Context, args []string) error {
+	id, err := arg(args, 0, "session id")
+	if err != nil {
+		return err
+	}
+	if err := c.client.DeleteSession(ctx, id); err != nil {
+		return err
+	}
+	// The opposite half of what `delete` prints, and stated for the same
+	// reason: these two commands read alike and do the reverse of each other on
+	// the only question that matters. `delete` forgets one turn and leaves the
+	// work running; this stops the work and takes the conversation's files with
+	// it.
+	c.printf("deleted %s: its turns, its files, and any run it had in flight\n", id)
+	return nil
+}
+
 func (c *cli) files(ctx context.Context, args []string) error {
 	id, err := arg(args, 0, "session id")
 	if err != nil {

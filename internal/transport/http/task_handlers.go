@@ -47,9 +47,7 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	// 200 with a body, not 204: the OpenAPI specifies `{id, deleted}` for both
-	// deletion endpoints, and a client written against it decodes the response.
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
+	writeDeleted(w, id)
 }
 
 func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {

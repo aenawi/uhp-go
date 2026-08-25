@@ -311,6 +311,55 @@ func TestStoreDeleteTask(t *testing.T) {
 	})
 }
 
+// Sessions §6. A session and the tasks that ran in it are deleted together, and
+// that coupling is the contract rather than a convenience: a task row left
+// behind stays readable at GET /v1/responses/{id}, artifacts and all, for a
+// conversation whose owner has just disposed of it. The turns are the
+// conversation, so "the session is gone" and "its turns are gone" are one fact.
+//
+// The neighbouring session is the other half. Deleting by session_id is one
+// statement away from deleting every task in the table, and nothing else in
+// this suite would notice.
+func TestStoreDeleteSession(t *testing.T) {
+	eachStore(t, func(t *testing.T, s service.Store) {
+		ctx := context.Background()
+		seed(t, s, sampleSession("sess_a", "chrn_a", storeEpoch))
+		seed(t, s, sampleSession("sess_b", "chrn_a", storeEpoch))
+		mustCreate(t, s, sampleTask("resp_a1", "sess_a", storeEpoch))
+		mustCreate(t, s, sampleTask("resp_a2", "sess_a", storeEpoch))
+		mustCreate(t, s, sampleTask("resp_b1", "sess_b", storeEpoch))
+
+		found, err := s.DeleteSession(ctx, "sess_a")
+		if err != nil || !found {
+			t.Fatalf("delete: found=%v err=%v", found, err)
+		}
+
+		if got, found, err := s.GetSession(ctx, "sess_a"); err != nil || found {
+			t.Fatalf("a deleted session is still readable: found=%v sess=%+v err=%v", found, got, err)
+		}
+		for _, id := range []string{"resp_a1", "resp_a2"} {
+			if _, found, err := s.GetTask(ctx, id); err != nil || found {
+				t.Fatalf("task %s outlived its session: found=%v err=%v", id, found, err)
+			}
+		}
+		tasks, err := s.ListSessionTasks(ctx, "sess_a")
+		if err != nil || len(tasks) != 0 {
+			t.Fatalf("ListSessionTasks after delete: %d tasks, err=%v, want none", len(tasks), err)
+		}
+
+		if _, found, err := s.GetSession(ctx, "sess_b"); err != nil || !found {
+			t.Fatalf("deleting sess_a took sess_b with it: found=%v err=%v", found, err)
+		}
+		if _, found, err := s.GetTask(ctx, "resp_b1"); err != nil || !found {
+			t.Fatalf("deleting sess_a took sess_b's task with it: found=%v err=%v", found, err)
+		}
+
+		if found, err := s.DeleteSession(ctx, "sess_a"); err != nil || found {
+			t.Fatalf("second delete: found=%v err=%v, want false and no error", found, err)
+		}
+	})
+}
+
 func TestStoreUpdateTask(t *testing.T) {
 	eachStore(t, func(t *testing.T, s service.Store) {
 		ctx := context.Background()

@@ -60,6 +60,7 @@ func TestStorageFailureReaches500ThroughTheRealService(t *testing.T) {
 		{name: "get session", method: "GET", path: "/v1/sessions/sess_1"},
 		{name: "session turns", method: "GET", path: "/v1/sessions/sess_1/turns"},
 		{name: "cancel session", method: "POST", path: "/v1/sessions/sess_1/cancel"},
+		{name: "delete session", method: "DELETE", path: "/v1/traces/sess_1"},
 		{name: "session files", method: "GET", path: "/v1/sessions/sess_1/files"},
 		{name: "session archive", method: "GET", path: "/v1/sessions/sess_1/files/archive"},
 		// The artifact endpoints answer file_not_found for everything they
@@ -102,6 +103,7 @@ func TestGenuineMissStillReaches404ThroughTheRealService(t *testing.T) {
 		{name: "get session", method: "GET", path: "/v1/sessions/sess_missing", code: "session_not_found"},
 		{name: "session turns", method: "GET", path: "/v1/sessions/sess_missing/turns", code: "session_not_found"},
 		{name: "cancel session", method: "POST", path: "/v1/sessions/sess_missing/cancel", code: "session_not_found"},
+		{name: "delete session", method: "DELETE", path: "/v1/traces/sess_missing", code: "session_not_found"},
 		// Still the one answer for "no such container", "no such file" and "not
 		// yours" — routing these through writeServiceError widened what an
 		// unreadable store says, not what a miss says (Files §5).

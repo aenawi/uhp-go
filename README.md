@@ -266,6 +266,7 @@ internal/config/           environment-variable configuration loader
 | `GET /v1/sessions/{id}/files` | Every artifact of a session, including earlier tasks' |
 | `GET /v1/sessions/{id}/files/archive` | The same artifacts as one zip |
 | `POST /v1/sessions/{id}/cancel` | Stop whatever is running in a session |
+| `DELETE /v1/traces/{id}` | Dispose of a session: its turns, its working directory, and any run in flight. **Does** stop the work |
 | `POST /v1/responses` | Create a task (`stream:true` for SSE, else blocks until terminal). Honours `Idempotency-Key` |
 | `GET /v1/responses/{id}` | Retrieve a task's current state and output |
 | `GET /v1/responses/{id}/input_items` | The input a task was created with, verbatim |
@@ -277,9 +278,8 @@ internal/config/           environment-variable configuration loader
 | `GET /healthz` | Liveness probe |
 
 Not implemented, and reported as `false` in the discovery document: session sharing
-([#57](https://github.com/aenawi/uhp-go/issues/57)). `DELETE /v1/traces/{id}` is also absent
-([#58](https://github.com/aenawi/uhp-go/issues/58)). Both are conformance class `full`, and
-between them they are why `conformance_class` reads `core`.
+([#57](https://github.com/aenawi/uhp-go/issues/57)). It is conformance class `full`, and it is
+now the only thing left standing between this server and a `conformance_class` of `full`.
 `files_input` and `files_output` are computed from configuration rather than asserted —
 `true` only when `UHP_WORKSPACE` is set, because both need a per-session working
 directory. See [Files](#files) and [Harness management](#harness-management).

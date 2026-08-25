@@ -81,3 +81,21 @@ func (s *Server) handleCancelSession(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, sess)
 }
+
+// handleDeleteSession answers DELETE /v1/traces/{id} (Sessions §6): the whole
+// conversation, its turns and its files.
+//
+// It cancels first, and that is the opposite of DELETE /v1/responses/{id},
+// which MUST NOT. Getting the two the wrong way round is the obvious failure
+// mode: deleting one response is history cleanup, and deleting the trace is
+// disposing of the conversation the run belongs to — Sessions §6 couples
+// cancellation to it "due to ownership concerns", because there is no owner
+// left to report the run to. See [service.TaskService.DeleteSession].
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.tasks.DeleteSession(r.Context(), id); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeDeleted(w, id)
+}
