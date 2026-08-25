@@ -371,9 +371,29 @@ or `DELETE /v1/responses/{id}` — both Tasks-chapter endpoints of class *core* 
 `uhp-2026-08-11.openapi.yaml` — so 37/37 core was measured against a server that had
 no route for either. Both landed in issues #51 and #52. `DELETE /v1/traces/{id}` (#58) was
 the third and has now landed too — the suite asks for none of the three, so all three were
-found by reading. `POST`/`GET /v1/sessions/{id}/share` (#57) is the one still absent, and
-is class *full*; it is now the only thing stopping `conformance_class` from truthfully
-reading `full`, whatever a run scores.
+found by reading. `POST`/`GET /v1/sessions/{id}/share` (#57) was the fourth and has now
+landed as well, which closes this list: every endpoint of the published surface has a route.
+
+Session sharing deserves its own note, because it is the one where a green suite would say
+the least. Nothing in the 52 checks opens a share, and nothing could usefully check the
+part that matters even if it did: the requirement is that the view be **read-only** and
+**revocable**, and both are properties of what the server *refuses*. A check that opened a
+link and read the conversation would pass against an implementation that also let the link
+start a task. What holds those up is this repository's tests and nothing else —
+`internal/transport/http/share_handlers_test.go` for the refusals (a share id presented as
+a credential is a 401 on every endpoint, every write method under `/v1/shares/` is a 405,
+another session's file id does not resolve through a link, and a revoked link stops
+resolving), and `internal/store/share_contract_test.go` for the two storage rules both
+engines have to obey (one share per session, and a deleted session takes its share with
+it).
+
+The capability is off by default (`UHP_SESSION_SHARING`), which has a consequence for how
+this file's numbers should be read: **a suite run that does not set it is measuring a server
+that reports `session_sharing: false`**, and the class question is then open again for the
+same reason it was before #57 landed. A `full` claim has to be measured with sharing on.
+This is the shape of #43 and #53 a third time — the configuration that exercises the
+feature is the one nothing runs by default — and it is written down here rather than
+discovered later.
 
 The trace deletion is worth a note of its own, because nothing in the suite would catch
 getting it backwards. `DELETE /v1/traces/{id}` cancels first and `DELETE /v1/responses/{id}`

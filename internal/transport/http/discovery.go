@@ -38,7 +38,13 @@ const ConformanceClass = "core"
 // depend on configuration: file input and artifact capture both need a
 // per-session working directory, and without UHP_WORKSPACE there is nowhere to
 // put a client's file and nothing to diff for artifacts.
-func capabilities(files, harnessManagement bool) uhp.Capabilities {
+//
+// Session sharing is computed for a different reason. It needs no storage a
+// deployment might not have; what it needs is consent, because it is the one
+// capability that makes this server answer a request carrying no credential.
+// So it is off unless an operator asked for it, and reporting it means
+// reporting that answer rather than what the code is capable of.
+func capabilities(files, harnessManagement, sessionSharing bool) uhp.Capabilities {
 	return uhp.Capabilities{
 		Streaming:         true,
 		Sessions:          true,
@@ -47,7 +53,7 @@ func capabilities(files, harnessManagement bool) uhp.Capabilities {
 		FilesOutput:       files,
 		SessionListing:    true,
 		HarnessManagement: harnessManagement,
-		SessionSharing:    false,
+		SessionSharing:    sessionSharing,
 		// Unconditional, unlike the two file capabilities: an idempotency key
 		// needs no configuration, only somewhere to remember it, and this
 		// server always has that. It is remembered in memory, so a restart
@@ -64,8 +70,12 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
 		Versions:         supportedVersions,
 		DefaultVersion:   UHPVersion,
 		ConformanceClass: ConformanceClass,
-		Capabilities:     capabilities(s.tasks.FilesEnabled(), s.tasks.HarnessManagementEnabled()),
-		Implementation:   &uhp.Implementation{Name: "uhp-go", Version: Version},
+		Capabilities: capabilities(
+			s.tasks.FilesEnabled(),
+			s.tasks.HarnessManagementEnabled(),
+			s.tasks.SessionSharingEnabled(),
+		),
+		Implementation: &uhp.Implementation{Name: "uhp-go", Version: Version},
 	})
 }
 

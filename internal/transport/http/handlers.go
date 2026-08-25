@@ -89,6 +89,35 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/sessions/{id}/files", withVersion(s.withAuth(s.handleSessionFiles)))
 	s.mux.HandleFunc("GET /v1/sessions/{id}/files/archive", withVersion(s.withAuth(s.handleSessionArchive)))
 
+	// Sharing (Sessions §5). Minting, reading and revoking a share belong to
+	// the principal that owns the session, so all three are behind auth.
+	// DELETE is this server's reading: the chapter requires revocation and
+	// names no endpoint for it.
+	s.mux.HandleFunc("POST /v1/sessions/{id}/share", withVersion(s.withAuth(s.handleShareSession)))
+	s.mux.HandleFunc("GET /v1/sessions/{id}/share", withVersion(s.withAuth(s.handleGetSessionShare)))
+	s.mux.HandleFunc("DELETE /v1/sessions/{id}/share", withVersion(s.withAuth(s.handleRevokeShare)))
+
+	// The shared views, and the only routes in this table that answer a caller
+	// who presented no credential.
+	//
+	// They are in one block, under one prefix, and every one of them is a GET.
+	// That is what makes "shared views must be read-only" a property of the
+	// routing table rather than a rule spread over four handlers: there is no
+	// write path here to refuse, so POST, PATCH and DELETE under /v1/shares/
+	// are answered 405 by the router itself, and a share id presented as a
+	// bearer token to any of the routes above is an unknown credential. A
+	// future endpoint cannot forget a check that does not exist. Discovery is
+	// unauthenticated too, but carries nothing principal-specific; these carry
+	// one conversation, which is why the id that reaches them is 256 bits.
+	s.mux.HandleFunc("GET /v1/shares/{share_id}",
+		withVersion(withSharedHeaders(s.handleSharedSession)))
+	s.mux.HandleFunc("GET /v1/shares/{share_id}/turns",
+		withVersion(withSharedHeaders(s.handleSharedTurns)))
+	s.mux.HandleFunc("GET /v1/shares/{share_id}/files",
+		withVersion(withSharedHeaders(s.handleSharedFiles)))
+	s.mux.HandleFunc("GET /v1/shares/{share_id}/files/{file_id}/content",
+		withVersion(withSharedHeaders(s.handleSharedArtifact)))
+
 	s.mux.HandleFunc("POST /v1/files", withVersion(s.withAuth(s.handleUploadFile)))
 	s.mux.HandleFunc("GET /v1/containers/{container_id}/files/{file_id}/content",
 		withVersion(s.withAuth(s.handleDownloadArtifact)))

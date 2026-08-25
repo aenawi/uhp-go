@@ -43,6 +43,7 @@ type TaskService interface {
 	ModelAvailable(ctx context.Context, harnessID, model string) bool
 	FilesEnabled() bool
 	HarnessManagementEnabled() bool
+	SessionSharingEnabled() bool
 
 	// Harness management (Harnesses §4-5).
 	CreateHarness(ctx context.Context, spec service.HarnessSpec) (uhpgo.Harness, error)
@@ -68,6 +69,20 @@ type TaskService interface {
 	SessionTurns(ctx context.Context, id string) ([]uhp.Turn, error)
 	CancelSession(ctx context.Context, id string) error
 	DeleteSession(ctx context.Context, id string) error
+
+	// Session sharing (Sessions §5). The first three are the owner's, behind a
+	// credential; the four below them are what a share id resolves to, and are
+	// the only methods on this interface reached by a request that presented
+	// nothing. See internal/service/shares.go, and the routing table, where the
+	// whole of /v1/shares/ is registered without withAuth in one block.
+	ShareSession(ctx context.Context, sessionID string) (uhp.Share, error)
+	SessionShare(ctx context.Context, sessionID string) (uhp.Share, error)
+	RevokeShare(ctx context.Context, sessionID string) (shareID string, err error)
+
+	SharedSession(ctx context.Context, shareID string) (uhpgo.SharedSession, error)
+	SharedTurns(ctx context.Context, shareID string) ([]uhp.Turn, error)
+	SharedFiles(ctx context.Context, shareID string) ([]domain.Artifact, error)
+	OpenSharedArtifact(ctx context.Context, shareID, fileID string) (domain.Artifact, *os.File, error)
 
 	// Files (Files §1-5).
 	StoreUpload(ctx context.Context, filename, mimeType string, data []byte) (uhpgo.Upload, error)

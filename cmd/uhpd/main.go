@@ -140,6 +140,23 @@ func main() {
 	if cfg.DefaultHarness != "" {
 		opts = append(opts, service.WithDefaultHarness(cfg.DefaultHarness))
 	}
+	if cfg.SessionSharing {
+		// Logged at Info and not silently, because this is the line that makes
+		// the server answer requests carrying no credential. An operator
+		// reading the startup log should be able to see that it is on without
+		// asking the discovery document.
+		log.Info("session sharing enabled; /v1/shares/{id} is served without authentication",
+			"revoke", "DELETE /v1/sessions/{id}/share")
+		if cfg.PublicBaseURL == "" {
+			// A share is a link somebody sends to somebody else, and without an
+			// origin this server emits a relative one. That is still a working
+			// share — the id is what matters — but the field a client copies
+			// out of the response is not something it can paste anywhere.
+			log.Warn("session sharing is on with no public URL; share links will be relative",
+				"hint", "set UHP_PUBLIC_URL")
+		}
+		opts = append(opts, service.WithSessionSharing())
+	}
 	taskService := service.NewTaskService(registry, taskStore, log, opts...)
 	requireDefaultHarness(cfg, taskService, log)
 

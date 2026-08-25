@@ -46,6 +46,10 @@ Commands:
   turns <session-id>              a session's ordered history
   cancel-session <session-id>     stop whatever is running in a session
   delete-session <session-id>     dispose of a session: its turns, its files, and any run
+  share <session-id>              publish a read-only link to a session
+  share-info <session-id>         the link a session already has
+  unshare <session-id>            revoke a session's link
+  shared <share-id>               read a link, as its recipient sees it
   files <session-id>              a session's artifacts
   download <container-id> <file-id>   an artifact's bytes, to stdout
   upload <path>                   store a file for later use as input
@@ -139,6 +143,14 @@ func (c *cli) dispatch(ctx context.Context, command string, args []string) error
 		return c.turns(ctx, args)
 	case "cancel-session":
 		return c.cancelSession(ctx, args)
+	case "share":
+		return c.share(ctx, args)
+	case "share-info":
+		return c.shareInfo(ctx, args)
+	case "unshare":
+		return c.unshare(ctx, args)
+	case "shared":
+		return c.shared(ctx, args)
 	case "delete-session":
 		return c.deleteSession(ctx, args)
 	case "files":

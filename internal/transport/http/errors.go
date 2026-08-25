@@ -121,6 +121,14 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, typeInvalidRequest, "session_busy", err.Error())
 	case errors.Is(err, service.ErrHarnessManagementUnsupported):
 		writeHarnessManagementUnsupported(w)
+	case errors.Is(err, service.ErrSessionSharingUnsupported):
+		// 501, like harness management: the request is well-formed and the
+		// endpoint is one the protocol defines — what is missing is this
+		// deployment's willingness to serve unauthenticated read paths at all.
+		// A 4xx would tell the client its request was wrong.
+		writeSessionSharingUnsupported(w)
+	case errors.Is(err, service.ErrShareNotFound):
+		writeShareNotFound(w)
 	case errors.Is(err, service.ErrHarnessNotManaged):
 		// 409 rather than 403: nothing about the credential is wrong, the
 		// harness simply is not the API's to change.
@@ -201,6 +209,8 @@ const (
 	vendorCodeMcpUndeliverable             = "uhpgo_mcp_undeliverable"
 	vendorCodeMethodNotAllowed             = "uhpgo_method_not_allowed"
 	vendorCodeRouteNotFound                = "uhpgo_route_not_found"
+	vendorCodeSessionSharingUnsupported    = "uhpgo_session_sharing_unsupported"
+	vendorCodeShareNotFound                = "uhpgo_share_not_found"
 	vendorCodeSkillNotFound                = "uhpgo_skill_not_found"
 	vendorCodeStorageFailure               = "uhpgo_storage_failure"
 )

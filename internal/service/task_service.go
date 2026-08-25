@@ -80,6 +80,13 @@ type TaskService struct {
 	// idempotency remembers which Idempotency-Key started which run (Tasks §6).
 	idempotency *idempotencyKeys
 
+	// sessionSharing is whether this deployment serves the anonymous read
+	// views of Sessions §5. It is off unless an operator says otherwise: it is
+	// the only thing here that answers a request carrying no credential, so it
+	// is a posture the deployment adopts rather than one it inherits. See
+	// shares.go.
+	sessionSharing bool
+
 	// defaultHarnessID is the harness a task that names none runs on. Empty
 	// means nothing was configured, and DefaultHarness falls back to the sole
 	// ready harness — see there for why "sole" is the only safe guess.

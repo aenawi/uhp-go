@@ -497,6 +497,90 @@ func (c *cli) deleteSession(ctx context.Context, args []string) error {
 	return nil
 }
 
+// share mints a session's read-only link, or reports the one it already has.
+//
+// The reminder is printed rather than left implied. This command produces a
+// URL that reads the conversation with no credential at all, and the person
+// running it is about to paste that URL somewhere — so the one fact they need
+// before they do is that it is the credential, and the one thing they need
+// afterwards is the command that takes it back.
+func (c *cli) share(ctx context.Context, args []string) error {
+	id, err := arg(args, 0, "session id")
+	if err != nil {
+		return err
+	}
+	sh, err := c.client.ShareSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	return c.emit(sh, func() {
+		c.printf("%s\n\nAnyone with this link can read the conversation, its turns and its\nfiles. Revoke it with: uhpc unshare %s\n", sh.URL, id)
+	})
+}
+
+// shareInfo reports a session's existing link without minting one.
+//
+// It is a separate command rather than a flag on `share` because the two differ
+// in whether they change anything, and a reader of a shell history should be
+// able to tell which one was run.
+func (c *cli) shareInfo(ctx context.Context, args []string) error {
+	id, err := arg(args, 0, "session id")
+	if err != nil {
+		return err
+	}
+	sh, err := c.client.SessionShare(ctx, id)
+	if err != nil {
+		return err
+	}
+	return c.emit(sh, func() { c.printf("%s\n", sh.URL) })
+}
+
+func (c *cli) unshare(ctx context.Context, args []string) error {
+	id, err := arg(args, 0, "session id")
+	if err != nil {
+		return err
+	}
+	shareID, err := c.client.RevokeShare(ctx, id)
+	if err != nil {
+		return err
+	}
+	c.printf("revoked %s: the link for %s no longer resolves. The session is untouched.\n", shareID, id)
+	return nil
+}
+
+// shared reads a link, which is what someone on the receiving end does. It
+// sends no credential even when one is configured: the point of the command is
+// to see what the recipient sees.
+func (c *cli) shared(ctx context.Context, args []string) error {
+	id, err := arg(args, 0, "share id")
+	if err != nil {
+		return err
+	}
+	viewer := *c.client
+	viewer.APIKey = ""
+
+	sess, err := viewer.SharedSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	turns, err := viewer.SharedTurns(ctx, id)
+	if err != nil {
+		return err
+	}
+	return c.emit(map[string]any{"session": sess, "turns": turns}, func() {
+		c.printf("id:      %s\nharness: %s\nstatus:  %s\ntitle:   %s\n\n",
+			sess.ID, sess.HarnessID, sess.Status, sess.Title)
+		for _, raw := range turns {
+			var t uhp.Turn
+			if err := json.Unmarshal(raw, &t); err != nil {
+				c.printf("%s\n", raw)
+				continue
+			}
+			c.printf("%-28s %-12s %s\n", t.ResponseID, t.Status, firstLine(t.Input))
+		}
+	})
+}
+
 func (c *cli) files(ctx context.Context, args []string) error {
 	id, err := arg(args, 0, "session id")
 	if err != nil {

@@ -355,6 +355,119 @@ func (c *Client) SessionArchive(ctx context.Context, id string) (io.ReadCloser, 
 		"/v1/sessions/"+url.PathEscape(id)+"/files/archive", nil, nil)
 }
 
+// ShareSession posts POST /v1/sessions/{id}/share (conformance class full): a
+// read-only view of the conversation, published under an unguessable id.
+//
+// Check `session_sharing` in the discovery document first. The returned
+// [Share].ID is a bearer capability — anyone holding it reads the conversation,
+// its turns and its files with no credential at all — so treat it the way you
+// treat an API key: out of logs, out of bug reports, and revoked with
+// [Client.RevokeShare] the moment it should stop working.
+//
+// It is idempotent per session. A second call returns the share that already
+// exists rather than a second one, so this is not the way to rotate a link:
+// revoke first, then share again.
+func (c *Client) ShareSession(ctx context.Context, id string) (*Share, error) {
+	var out Share
+	return &out, c.send(ctx, http.MethodPost, "/v1/sessions/"+url.PathEscape(id)+"/share", nil, &out)
+}
+
+// SessionShare fetches GET /v1/sessions/{id}/share: the share this session has.
+//
+// A session that has never been shared answers 404. That is not the same
+// failure as a session that does not exist, and both arrive as an [*Error] —
+// read `Code` to tell them apart.
+func (c *Client) SessionShare(ctx context.Context, id string) (*Share, error) {
+	var out Share
+	return &out, c.get(ctx, "/v1/sessions/"+url.PathEscape(id)+"/share", nil, &out)
+}
+
+// RevokeShare deletes DELETE /v1/sessions/{id}/share: the link stops working,
+// and the id of the link that was withdrawn comes back.
+//
+// Read the returned id rather than assuming it is the one you last minted. A
+// revoke that crosses a re-share withdraws whichever share the session had when
+// the delete ran, and the server reports that one.
+//
+// Sessions §5 requires revocation and names no endpoint for it, so this path is
+// one server's reading rather than protocol. Revoking a session that has no
+// share answers 404 rather than succeeding, so a client cannot use this to
+// assert "make sure this is not shared" without handling that.
+func (c *Client) RevokeShare(ctx context.Context, id string) (string, error) {
+	var out struct {
+		ID string `json:"id"`
+	}
+	err := c.send(ctx, http.MethodDelete, "/v1/sessions/"+url.PathEscape(id)+"/share", nil, &out)
+	return out.ID, err
+}
+
+// SharedSession fetches a shared view by its share id, with no credential.
+//
+// # None of this is normative
+//
+// Sessions §5 requires that a shared view exist and be read-only, and says
+// nothing about where it is served or what it contains. This method — and the
+// three below it — speak the paths *this project's server* uses, and a
+// different conformant server may not have them at all. Everything above this
+// point in the file is the specification's; this block is not.
+//
+// The response envelope carries the harness that ran the session as well, which
+// this returns nothing of: the harness object a server sends is the protocol's
+// thirteen fields plus whatever it adds, and surfacing it here would mean this
+// package declaring a shape it does not own. Read the endpoint directly if you
+// want it.
+//
+// Set [Client.APIKey] to the empty string for these. A share is the credential.
+func (c *Client) SharedSession(ctx context.Context, shareID string) (*Session, error) {
+	var out struct {
+		Session Session `json:"session"`
+	}
+	if err := c.get(ctx, "/v1/shares/"+url.PathEscape(shareID), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out.Session, nil
+}
+
+// SharedTurns fetches a shared session's turns, oldest first. The items come
+// back raw for the reason [Client.SessionTurns] gives.
+func (c *Client) SharedTurns(ctx context.Context, shareID string) ([]json.RawMessage, error) {
+	var out struct {
+		Turns []json.RawMessage `json:"turns"`
+	}
+	if err := c.get(ctx, "/v1/shares/"+url.PathEscape(shareID)+"/turns", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Turns, nil
+}
+
+// SharedFiles fetches a shared session's artifacts.
+//
+// Each entry's `download_url` points at the authenticated container path, which
+// a viewer holding only a share cannot use. Fetch the bytes with
+// [Client.DownloadShared] instead.
+func (c *Client) SharedFiles(ctx context.Context, shareID string) ([]File, error) {
+	var out struct {
+		Files []File `json:"files"`
+	}
+	if err := c.get(ctx, "/v1/shares/"+url.PathEscape(shareID)+"/files", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Files, nil
+}
+
+// DownloadShared fetches one artifact's bytes through a share. The caller
+// closes the reader.
+//
+// There is no container id, and that is the scoping: the server derives it from
+// the share, so a file id belonging to another session does not resolve here.
+// The bytes carry the same warning [Client.Download] gives — they are whatever
+// an agent wrote — and rather more of it, since this path is reachable by
+// anyone holding the link.
+func (c *Client) DownloadShared(ctx context.Context, shareID, fileID string) (io.ReadCloser, error) {
+	return c.openStream(ctx, http.MethodGet, "/v1/shares/"+
+		url.PathEscape(shareID)+"/files/"+url.PathEscape(fileID)+"/content", nil, nil)
+}
+
 // Upload posts POST /v1/files: a file to reference later by `file_id`.
 //
 // The alternative is a data: URL inline in the request, which a server must
