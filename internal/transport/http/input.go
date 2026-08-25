@@ -25,6 +25,15 @@ import (
 type parsedInput struct {
 	Text        string
 	Attachments []service.Attachment
+
+	// Items is the `input` as the client sent it, normalised to an array and
+	// otherwise unmodified, for GET /v1/responses/{id}/input_items.
+	//
+	// It is carried alongside the reduction rather than derived from it,
+	// because the reduction is lossy on purpose: Text and Attachments are what
+	// a CLI can be given, and reconstructing the request from them would
+	// answer "what did I send" with a description of what the harness got.
+	Items []json.RawMessage
 }
 
 // badInputError is returned for anything a client can fix by sending a
@@ -57,7 +66,7 @@ func parseInput(raw json.RawMessage) (parsedInput, error) {
 		if strings.TrimSpace(s) == "" {
 			return parsedInput{}, badInput("input", "field 'input' is required")
 		}
-		return parsedInput{Text: s}, nil
+		return parsedInput{Text: s, Items: []json.RawMessage{shorthandItem(s)}}, nil
 	}
 
 	if trimmed[0] != '[' {
@@ -74,11 +83,39 @@ func parseInput(raw json.RawMessage) (parsedInput, error) {
 		if err := readItem(rawItem, fmt.Sprintf("input[%d]", i), &out); err != nil {
 			return parsedInput{}, err
 		}
+		// Appended after the item validates, so a body that is refused leaves
+		// nothing behind: input_items must never be able to report an item the
+		// task was not created with.
+		out.Items = append(out.Items, append(json.RawMessage(nil), rawItem...))
 	}
 	if strings.TrimSpace(out.Text) == "" && len(out.Attachments) == 0 {
 		return parsedInput{}, badInput("input", "field 'input' carries neither text nor a file")
 	}
 	return out, nil
+}
+
+// shorthandItem expands the bare-string form of `input` into the one item it
+// abbreviates.
+//
+// This is the one place input_items answers with something the client did not
+// literally send, and it is not a paraphrase: the schema defines the string
+// form as shorthand — "A bare string is shorthand for one user message" — so
+// the expansion is the specification's own, not this server's reading of it.
+// The alternative, reporting a bare string where every other request reports an
+// array, would make the endpoint's shape depend on which form the client used.
+func shorthandItem(text string) json.RawMessage {
+	item, err := json.Marshal(map[string]any{
+		"type": "message",
+		"role": "user",
+		"content": []map[string]any{
+			{"type": "input_text", "text": text},
+		},
+	})
+	if err != nil {
+		// Unreachable: the value is a map of strings and slices of the same.
+		return json.RawMessage(`[]`)
+	}
+	return item
 }
 
 // inputItem is a message item, or — for clients that skip the message wrapper —

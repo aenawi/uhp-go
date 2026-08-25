@@ -176,10 +176,30 @@ type blockingAdapter struct {
 	once    sync.Once
 	started chan struct{}
 	release chan struct{}
+
+	// stopped records whether Cancel was ever called. It is the only way to
+	// tell "this run was asked to stop" from "this run ended on its own": both
+	// look the same from the wire, which is what makes an endpoint that
+	// wrongly cancels so easy to ship. See TestDeletingAResponseDoesNotStopTheRun.
+	mu      sync.Mutex
+	stopped bool
 }
 
 func newBlockingAdapter() *blockingAdapter {
 	return &blockingAdapter{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (a *blockingAdapter) Cancel(context.Context, string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.stopped = true
+	return nil
+}
+
+func (a *blockingAdapter) cancelled() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stopped
 }
 
 func (a *blockingAdapter) Run(ctx context.Context, _ harness.RunRequest) (<-chan harness.RunUpdate, error) {

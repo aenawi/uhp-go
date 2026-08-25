@@ -141,11 +141,26 @@ func (s *Server) handlePatchHarness(w http.ResponseWriter, r *http.Request) {
 // The sessions and responses that ran on it are left alone (Harnesses §5.3):
 // history that disappears when configuration changes cannot be audited.
 func (s *Server) handleDeleteHarness(w http.ResponseWriter, r *http.Request) {
+	// Resolved before the delete, so the response can name the canonical id
+	// even when the request used a friendly base-name alias. The canonical one
+	// is the id the client will not be able to look up any more, which makes it
+	// the useful half of the answer.
+	id := r.PathValue("id")
+	if h, ok, err := s.tasks.GetHarness(r.Context(), id); err == nil && ok {
+		id = h.ID
+	}
+
 	if err := s.tasks.DeleteHarness(r.Context(), r.PathValue("id")); err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+
+	// 200 with a body, not the 204 this used to answer (issue #59). The
+	// OpenAPI specifies `{id, deleted}` here and on DELETE /v1/responses/{id},
+	// so it is the protocol's deletion envelope rather than one endpoint's
+	// preference — and a client written against it decodes a body on a 2xx,
+	// which a 204 answers with an EOF.
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
 }
 
 // decodeHarnessBody reads the body twice: once into the typed struct, and once

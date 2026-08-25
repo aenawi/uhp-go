@@ -51,6 +51,16 @@ type Store interface {
 	GetTask(ctx context.Context, id string) (t *domain.Task, found bool, err error)
 	AppendArtifact(ctx context.Context, taskID string, a domain.Artifact) error
 
+	// DeleteTask removes a stored task. It reports found=false for an id the
+	// store does not hold, rather than an error: DELETE on a task that is
+	// already gone is not a storage failure.
+	//
+	// It has nothing to do with stopping work. Tasks §4: "A server MUST NOT let
+	// this cancel a running task — cancellation and deletion are different
+	// intentions." A store cannot cancel anything anyway, and that is the point
+	// — deletion lives here precisely because it is not a supervisor concern.
+	DeleteTask(ctx context.Context, id string) (found bool, err error)
+
 	CreateSession(ctx context.Context, s *domain.Session) error
 	GetSession(ctx context.Context, id string) (sess *domain.Session, found bool, err error)
 	UpdateSession(ctx context.Context, s *domain.Session) error

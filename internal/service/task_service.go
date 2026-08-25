@@ -7,6 +7,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -170,6 +171,12 @@ type CreateTaskRequest struct {
 	// order they appeared. They are materialized into the session's working
 	// directory before the harness starts.
 	Attachments []Attachment
+
+	// InputItems is the `input` as the client sent it, normalised to an array.
+	// It is stored and never read by a run: the harness is driven by Input and
+	// Attachments above, and this exists so the client can be told what it
+	// sent (Tasks §4, GET /v1/responses/{id}/input_items).
+	InputItems []json.RawMessage
 
 	// IdempotencyKey is the client's `Idempotency-Key` header, or empty. A
 	// repeat of a key returns the first request's run instead of starting a
@@ -394,6 +401,7 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 		HarnessID:      req.HarnessID,
 		SessionID:      sessionID,
 		Input:          input,
+		InputItems:     req.InputItems,
 		UpdatedAt:      now,
 	}
 	// The first of the two sync points ADR-0003 names. Everything the wire
@@ -774,6 +782,57 @@ func (s *TaskService) GetTask(ctx context.Context, id string) (*domain.Task, err
 		return nil, fmt.Errorf("%w: %q", ErrResponseNotFound, id)
 	}
 	return t, nil
+}
+
+// TaskInputItems answers GET /v1/responses/{id}/input_items: the input the task
+// was created with, "for clients that need to reconstruct a transcript without
+// having stored it themselves".
+//
+// It reads the stored items rather than rebuilding them from Task.Input, which
+// is the whole point of storing them — Input is the flattened prompt, and a
+// rebuild would silently drop every file the request carried.
+//
+// A task stored before this was implemented has no items and answers with an
+// empty list. That is the honest answer: the server genuinely does not know
+// what was sent, and an invented single text item would be indistinguishable
+// from a task that really was one string.
+func (s *TaskService) TaskInputItems(ctx context.Context, id string) ([]json.RawMessage, error) {
+	task, err := s.GetTask(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if task.InputItems == nil {
+		return []json.RawMessage{}, nil
+	}
+	return task.InputItems, nil
+}
+
+// DeleteTask removes a stored response (Tasks §4).
+//
+// It deliberately does not cancel, and the specification says why: "A server
+// MUST NOT let this cancel a running task — cancellation and deletion are
+// different intentions, and conflating them means a client cannot clean up
+// history without stopping work."
+//
+// So a run in flight is left entirely alone. The supervisor owns it, it reaches
+// a terminal state as it would have anyway, and its final UpdateTask writes to
+// a row that is no longer there — which the memory store reports as an error
+// and SQLite as zero rows affected. Neither is worth failing the delete over:
+// the client asked for the record to be gone and it is gone, and the alternative
+// is refusing a delete because the work it is not stopping has not finished.
+//
+// The session is untouched. Disposing of a whole conversation is
+// DELETE /v1/traces/{id}, which does cancel first, and keeping the two apart is
+// the entire point of this method.
+func (s *TaskService) DeleteTask(ctx context.Context, id string) error {
+	found, err := s.store.DeleteTask(ctx, id)
+	if err != nil {
+		return fmt.Errorf("%w: delete response %q: %w", ErrStorage, id, err)
+	}
+	if !found {
+		return fmt.Errorf("%w: %q", ErrResponseNotFound, id)
+	}
+	return nil
 }
 
 // GetRun returns the live run for a task, if it is still in flight.

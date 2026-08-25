@@ -299,6 +299,23 @@ func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*domain.Task, boo
 	return t, true, nil
 }
 
+// DeleteTask removes a task's row.
+//
+// One statement and no transaction: the row is the whole task, artifacts
+// included, because this engine stores a task as one JSON document. There is
+// nothing else to keep consistent with it.
+func (s *SQLiteStore) DeleteTask(ctx context.Context, id string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM tasks WHERE id = ?`, id)
+	if err != nil {
+		return false, fmt.Errorf("store: delete task %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: delete task %s: %w", id, err)
+	}
+	return n > 0, nil
+}
+
 // AppendArtifact adds one artifact to a task's list.
 //
 // Read, decode, append, write — inside one transaction, because two harness

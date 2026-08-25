@@ -91,6 +91,8 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("POST /v1/responses", withVersion(s.withAuth(s.handleCreateTask)))
 	s.mux.HandleFunc("GET /v1/responses/{id}", withVersion(s.withAuth(s.handleGetTask)))
+	s.mux.HandleFunc("GET /v1/responses/{id}/input_items", withVersion(s.withAuth(s.handleTaskInputItems)))
+	s.mux.HandleFunc("DELETE /v1/responses/{id}", withVersion(s.withAuth(s.handleDeleteTask)))
 	s.mux.HandleFunc("POST /v1/responses/{id}/cancel", withVersion(s.withAuth(s.handleCancelTask)))
 
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
@@ -308,6 +310,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		PreviousResponseID: body.PreviousResponseID,
 		Metadata:           body.Metadata,
 		Attachments:        input.Attachments,
+		InputItems:         input.Items,
 		IdempotencyKey:     idempotency,
 	})
 	if err != nil {
