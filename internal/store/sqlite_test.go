@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/aenawi/uhp-go/internal/domain"
 )
 
 // The reason this engine exists: a client holds a response id and comes back.
@@ -101,6 +103,50 @@ func TestSQLiteStoreReopenIsIdempotent(t *testing.T) {
 		if err := s.Close(); err != nil {
 			t.Fatalf("close %d: %v", i, err)
 		}
+	}
+}
+
+// A version-1 file — one written before shares existed — is brought forward
+// without losing what is in it.
+//
+// This is the first migration this schema has had, so it is also the first
+// check that the mechanism works at all on a file with rows in it. The rows
+// matter: a migration that dropped a session while adding a table would pass
+// every other test here, because every other test starts from an empty file.
+func TestSQLiteStoreMigratesAVersionOneFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "uhp.db")
+	s, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	seed(t, s, shareSession("sess_old"))
+	// Wind the file back to what a build before shares would have left: the
+	// table gone and the version stamp with it.
+	if _, err := s.db.Exec(`DROP TABLE shares`); err != nil {
+		t.Fatalf("drop shares: %v", err)
+	}
+	if _, err := s.db.Exec(`PRAGMA user_version = 1`); err != nil {
+		t.Fatalf("stamp version 1: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("reopen a version-1 file: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	ctx := context.Background()
+	if _, found, err := reopened.GetSession(ctx, "sess_old"); !found || err != nil {
+		t.Fatalf("the migration lost a session: found=%v err=%v", found, err)
+	}
+	if _, _, err := reopened.CreateShare(ctx, &domain.Share{ID: "shr_new", SessionID: "sess_old"}); err != nil {
+		t.Fatalf("share a session in a migrated file: %v", err)
+	}
+	if _, found, err := reopened.GetShare(ctx, "shr_new"); !found || err != nil {
+		t.Fatalf("get share after migration: found=%v err=%v", found, err)
 	}
 }
 

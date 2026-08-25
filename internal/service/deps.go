@@ -75,10 +75,62 @@ type Store interface {
 	// its output, its artifact list — for a conversation whose owner has just
 	// disposed of it. An engine implements this as one atomic operation: a
 	// partial delete is a session that is unreadable and a history that is not.
+	//
+	// The session's share goes with it, and that one is a live capability
+	// rather than a stale row: a share id that outlived its session would be an
+	// anonymous route back to a conversation whose owner has just disposed of
+	// it. See CreateShare below.
 	DeleteSession(ctx context.Context, id string) (found bool, err error)
 
 	// ListSessionTasks returns a session's tasks in the order they ran.
 	ListSessionTasks(ctx context.Context, sessionID string) ([]*domain.Task, error)
+
+	// CreateShare records a session's read-only view (Sessions §5), or reports
+	// the one the session already has.
+	//
+	// It is get-or-create and not create, and the difference is what makes the
+	// endpoint's idempotency real rather than nearly real. A session has at most
+	// one share, so a caller that read "no share yet" and then wrote would race
+	// a second caller doing the same: both mint, one wins, and the loser is
+	// handed a 200 carrying an id that is already dead — indistinguishable, to
+	// whoever it was sent to, from a link somebody deliberately revoked. Asking
+	// the store to decide makes the check and the write one operation.
+	//
+	// `current` is the session's share afterwards: the argument when this call
+	// created it, and the existing record when it did not. An engine never
+	// replaces a live share, because the client that minted it was told one id
+	// and revokes one id.
+	//
+	// `found` is the *session*, and it is checked here rather than by the caller
+	// for the reason the get-or-create is here: the two tables have no foreign
+	// key between them, so a caller that checked the session and then wrote
+	// would race DeleteSession and leave a share row naming a conversation that
+	// no longer exists — a row no endpoint can list or revoke, and a 200 handed
+	// to a client carrying an id that resolves to nothing. An engine checks
+	// inside the same transaction, or under the same lock, as the write.
+	CreateShare(ctx context.Context, sh *domain.Share) (current *domain.Share, found bool, err error)
+
+	// GetShare resolves a share id, reporting found=false for one this store
+	// does not hold — which is the same answer a revoked id gets, deliberately.
+	GetShare(ctx context.Context, shareID string) (sh *domain.Share, found bool, err error)
+
+	// GetSessionShare finds a session's share, if it has one. This is what an
+	// idempotent POST reads before minting anything.
+	GetSessionShare(ctx context.Context, sessionID string) (sh *domain.Share, found bool, err error)
+
+	// DeleteSessionShare revokes a session's share, reporting found=false for a
+	// session that had none.
+	//
+	// Revocation is required by Sessions §5 and is the only thing standing
+	// between a leaked link and a permanently readable conversation, so the
+	// contract is that the id stops resolving — not that it is marked, or
+	// expired, or hidden from a listing.
+	//
+	// `shareID` is what this call actually removed, so a caller can report the
+	// link it withdrew without reading first. Reading first is the obvious
+	// shape and it is wrong: a revoke interleaved with a re-share would delete
+	// the newly minted id while telling the client it had withdrawn the old one.
+	DeleteSessionShare(ctx context.Context, sessionID string) (shareID string, found bool, err error)
 }
 
 // Uploads holds files a client sent ahead of a task (Files §1.2), until a task

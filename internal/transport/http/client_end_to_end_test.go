@@ -282,3 +282,89 @@ func responseTextOf(resp *uhp.Response) string {
 	}
 	return b.String()
 }
+
+// Sharing, over the socket, with two clients: the owner who holds the key and
+// a viewer who holds nothing but a link.
+//
+// The second client is the point. Every other test in this file uses one
+// client, so "this path needs no credential" has only ever been asserted by a
+// handler test against a request it built itself. Here the viewer is a real
+// uhp.Client with an empty APIKey, talking to a server that refuses everyone
+// else — and then the same client is refused after the link is revoked.
+func TestPublishedClientSharesASessionAndRevokesIt(t *testing.T) {
+	c, _ := newSharingLiveServer(t, "e2e-key")
+	ctx := context.Background()
+
+	resp, err := c.Create(ctx, uhp.CreateResponseRequest{
+		Input:    "hello",
+		Metadata: map[string]any{"harness_id": "chrn_echo"},
+	}, "key-e2e-share")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	sessionID, _ := resp.Metadata["session_id"].(string)
+	if sessionID == "" {
+		t.Fatalf("no session id in %v", resp.Metadata)
+	}
+
+	share, err := c.ShareSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("share: %v", err)
+	}
+	if share.SessionID != sessionID || share.URL == "" {
+		t.Fatalf("share = %+v", share)
+	}
+
+	// A second client with no credential at all, which is what someone holding
+	// the link has.
+	viewer := uhp.NewClient(c.BaseURL, "")
+	if _, err := viewer.GetSession(ctx, sessionID); err == nil {
+		t.Fatal("the viewer read the session directly without a credential")
+	}
+
+	shared, err := viewer.SharedSession(ctx, share.ID)
+	if err != nil {
+		t.Fatalf("shared session: %v", err)
+	}
+	if shared.ID != sessionID {
+		t.Fatalf("shared view names %q, want %q", shared.ID, sessionID)
+	}
+	turns, err := viewer.SharedTurns(ctx, share.ID)
+	if err != nil {
+		t.Fatalf("shared turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("shared turns = %d, want the one task that ran", len(turns))
+	}
+
+	revoked, err := c.RevokeShare(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if revoked != share.ID {
+		t.Fatalf("revoke reported %q, want the link it withdrew (%s)", revoked, share.ID)
+	}
+	_, err = viewer.SharedSession(ctx, share.ID)
+	if err == nil {
+		t.Fatal("the link still worked after it was revoked")
+	}
+	if e, ok := uhp.AsError(err); !ok || e.Code != "uhpgo_share_not_found" {
+		t.Fatalf("revoked link error = %v, want uhpgo_share_not_found", err)
+	}
+}
+
+// newSharingLiveServer is newLiveServer with sharing switched on, since the
+// capability is off by default and every other test in this file wants it that
+// way.
+func newSharingLiveServer(t *testing.T, key string) (*uhp.Client, *service.TaskService) {
+	t.Helper()
+	reg := harness.NewRegistry()
+	reg.Register(echoAdapter{})
+	svc := service.NewTaskService(reg, store.NewMemoryStore(), slog.Default(),
+		service.WithWorkspace(t.TempDir()), service.WithUploads(store.NewMemoryUploads()),
+		service.WithSessionSharing())
+
+	httpSrv := httptest.NewServer(NewServer(svc, slog.Default(), []string{key}, 0).Handler())
+	t.Cleanup(httpSrv.Close)
+	return uhp.NewClient(httpSrv.URL, key), svc
+}

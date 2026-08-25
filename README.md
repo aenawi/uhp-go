@@ -157,11 +157,12 @@ pip install -e protocol/conformance
 uhp-conformance --base-url http://localhost:8080 --api-key "$UHP_API_KEY" --class full
 ```
 
-**Last measured score: `full` 52/52 — CONFORMANT (UHP 2026-08-11, class full).**
+**Last measured score: `full` 52/52 — CONFORMANT (UHP 2026-08-11, class full), 0 skipped.**
 Details, reproduction steps and what a green suite still cannot see:
 [docs/conformance.md](docs/conformance.md).
-Measured 2026-08-23 against a pinned suite revision: **37/37 core**, **44/45 extended**,
-**52/52 full**, 0 failed.
+Measured 2026-08-25 by `make conformance-gate` at `UHP_CLASS=full` against a pinned suite
+revision, on a server with a workspace, a harness store and `UHP_SESSION_SHARING=1`, and
+with no `--model` pinned. Zero skips, which the earlier runs could not say.
 
 File support (issue #2) and harness management with skills, MCP and tool restrictions
 (issues #3 and #4) had all landed after the previous run and were carried as "implemented,
@@ -182,11 +183,19 @@ re-run on 2026-08-24 — **37/37 core, 0 skipped**, `T-03` reading `claude-opus-
 task that named no model. The two configurations now agree. The gate stays the one place the
 suite runs unpinned, because that is the configuration that found the defect.
 
-This server still reports `conformance_class: core` in its discovery document. Raising it
-to `full` is a deliberate follow-up rather than an automatic consequence of one green run:
-the class is what the server *guarantees*, and one run on one machine with one CLI logged
-in is thinner evidence than a guarantee wants. Capabilities it does not implement are
-reported as `false` rather than omitted.
+This server still reports `conformance_class: core` in its discovery document, and the
+reason has changed twice. The missing feature is no longer one: session sharing (issue #57)
+is implemented, so nothing in class `full` is absent. The missing evidence is no longer one
+either: the 52/52 above was measured with sharing on and no model pinned.
+
+What is left is that **the class cannot honestly be a constant.** Three capabilities here
+are computed from configuration — `files_input`, `files_output` and `harness_management` —
+and the suite's own D-05 check tests the class against a list that includes the first two.
+A hardcoded `full` would therefore be a claim `uhpd` contradicts the moment it is started
+without `UHP_WORKSPACE`, and D-05 would catch it. Raising the class means computing it from
+the same booleans the capability list is built from, which is a change in its own right
+rather than a one-line edit. Capabilities a deployment does not offer stay reported as
+`false` rather than omitted — see [UHP surface implemented](#uhp-surface-implemented).
 
 A skip is counted as a failure here, not as a pass.
 
@@ -266,7 +275,14 @@ internal/config/           environment-variable configuration loader
 | `GET /v1/sessions/{id}/files` | Every artifact of a session, including earlier tasks' |
 | `GET /v1/sessions/{id}/files/archive` | The same artifacts as one zip |
 | `POST /v1/sessions/{id}/cancel` | Stop whatever is running in a session |
-| `DELETE /v1/traces/{id}` | Dispose of a session: its turns, its working directory, and any run in flight. **Does** stop the work |
+| `POST /v1/sessions/{id}/share` | Publish a read-only link to a session. Idempotent: a second call returns the same share |
+| `GET /v1/sessions/{id}/share` | The share this session has, or `404 uhpgo_share_not_found` |
+| `DELETE /v1/sessions/{id}/share` | Revoke the link. §5 requires revocation and names no endpoint; this path is ours |
+| `GET /v1/shares/{share_id}` | The shared session and the harness that ran it. **Unauthenticated** |
+| `GET /v1/shares/{share_id}/turns` | The shared session's history. **Unauthenticated** |
+| `GET /v1/shares/{share_id}/files` | The shared session's artifacts. **Unauthenticated** |
+| `GET /v1/shares/{share_id}/files/{fid}/content` | One shared artifact's bytes. **Unauthenticated** |
+| `DELETE /v1/traces/{id}` | Dispose of a session: its turns, its working directory, and any run in flight. **Does** stop the work. Revokes its share |
 | `POST /v1/responses` | Create a task (`stream:true` for SSE, else blocks until terminal). Honours `Idempotency-Key` |
 | `GET /v1/responses/{id}` | Retrieve a task's current state and output |
 | `GET /v1/responses/{id}/input_items` | The input a task was created with, verbatim |
@@ -277,12 +293,14 @@ internal/config/           environment-variable configuration loader
 | `GET /v1/containers/{cid}/files/{fid}/pdf` | Rendered preview — always `501 preview_unavailable` |
 | `GET /healthz` | Liveness probe |
 
-Not implemented, and reported as `false` in the discovery document: session sharing
-([#57](https://github.com/aenawi/uhp-go/issues/57)). It is conformance class `full`, and it is
-now the only thing left standing between this server and a `conformance_class` of `full`.
-`files_input` and `files_output` are computed from configuration rather than asserted —
-`true` only when `UHP_WORKSPACE` is set, because both need a per-session working
-directory. See [Files](#files) and [Harness management](#harness-management).
+Every capability is now implemented ([#57](https://github.com/aenawi/uhp-go/issues/57) was
+the last one absent). Three of them are computed from configuration rather than asserted, so
+what discovery reports depends on how the server was started: `files_input` and
+`files_output` are `true` only when `UHP_WORKSPACE` is set, because both need a per-session
+working directory, and `session_sharing` is `true` only when `UHP_SESSION_SHARING` is,
+because it is the one capability that makes this server answer a request carrying no
+credential. See [Files](#files), [Harness management](#harness-management) and
+[Session sharing](#session-sharing).
 
 Harness ids are `chrn_`-prefixed. The ones this server is started with derive theirs
 deterministically from the base name, so they survive a restart; a harness created over
@@ -477,11 +495,96 @@ refused before routing rather than redirected to a cleaned one.
 
 Artifacts are reachable only through their session's records, so an artifact of a session
 this server no longer has is a 404 — which is what the specification asks for when a
-session is deleted. There is no `DELETE /v1/sessions/{id}` yet, so that is a property of
-the lookup rather than an endpoint you can exercise. Access is scoped to the server's
+session is deleted, and `DELETE /v1/traces/{id}` is the endpoint that does it. Access is scoped to the server's
 single principal: every configured `UHP_API_KEYS` value is equivalent and carries no
 identity, so a deployment serving several tenants needs a principal on the credential
 before artifact lookup can filter by one.
+
+## Session sharing
+
+Sessions §5 asks a `full` implementation for a read-only view of a conversation that
+someone without a credential can open. This server implements it, and it is **off unless
+you turn it on**:
+
+```bash
+UHP_SESSION_SHARING=1 UHP_PUBLIC_URL=https://uhp.example.com uhpd
+```
+
+The default is off because this is the only capability here that changes what the
+deployment *is*. Everything else is behind a bearer token; switching this on makes the
+server answer some requests that carry none. Every other capability is gated on having
+somewhere to put something — a workspace for files, a store for harnesses — and this one is
+gated on consent. With it off, discovery reports `session_sharing: false` and every share
+endpoint answers `501 uhpgo_session_sharing_unsupported`.
+
+```bash
+uhpc share sess_abc          # mint (or re-read) the link
+uhpc shared shr_9f2…         # read it the way its recipient does
+uhpc unshare sess_abc        # revoke it
+```
+
+### The share id is the credential
+
+A share id is 256 bits of randomness behind a `shr_` prefix, and it is a bearer capability:
+whoever holds it reads that conversation, its turns and its files, with nothing else.
+Treat it the way you treat an API key. Because it necessarily travels in a URL, every
+shared response carries `Cache-Control: no-store`, `X-Robots-Tag: noindex, nofollow` and
+`Referrer-Policy: no-referrer` — the three channels a secret in a URL leaks through. They
+are middleware rather than a line in each handler, so they are on the 404 for a revoked
+link as well as on the 200, which is the case that matters more: an error response is
+reached by the same address.
+
+Sharing is idempotent per session: a second `POST` returns the share that already exists
+rather than a second live id, because a client is told about one id and revokes one id.
+Rotating a link means revoking and sharing again, in that order.
+
+### Read-only is a property of the routing table
+
+"Shared views must be read-only" is enforced by there being nothing to refuse. A share id
+is a path segment and never a credential, so:
+
+- presenting it as a bearer token is presenting an unknown token — `401`, on every endpoint;
+- `POST`, `PUT`, `PATCH` and `DELETE` under `/v1/shares/` are methods no route claims — `405`,
+  from the router itself;
+- the shared artifact path takes no container id, so the container is derived from the share
+  and another session's file id resolves to nothing rather than to a check someone has to
+  remember.
+
+A future endpoint cannot forget a check that does not exist. The tests that hold this up are
+the negative ones in `internal/transport/http/share_handlers_test.go` — a share that cannot
+start a task, cannot cancel, cannot upload, cannot delete the trace, and stops working the
+moment it is revoked.
+
+### What a viewer never sees
+
+The shared view carries the harness that ran the session, projected down to what answers a
+viewer's only question — *what ran this, on what, and could it do the things the transcript
+shows*. It is built by copying the fields that are kept rather than by blanking the ones
+that are not, because a deny-list is correct only until the next field is added to the
+harness object, and the cost of forgetting one here is a configuration secret served to
+whoever holds a URL.
+
+Kept: id, name, base, base label, default model, models, capabilities, status, created-at.
+Dropped: the MCP server list, the system prompt, skill bundles, disabled tools, and the
+step and timeout budgets. The MCP list is the sharpest of those — Harnesses §4.1 forbids
+returning a resolved credential to a client, and this is the one path where "a client"
+means someone who presented nothing. Stripping `auth` alone would not have been enough:
+`headers` is a free-form map, and it is the map the server materialises the resolved `auth`
+into as an `Authorization` header, so the whole list goes.
+
+The projection lands in `uhpgo.SharedHarness`, a type of its own rather than a harness with
+fields removed, and that is not tidiness. Several of a harness object's fields *say
+something* when they are empty: `mcpServers: []` means "this harness has none" and a null
+`maxStep` means "unbounded". A stripped harness would therefore tell a viewer two untrue
+things about a system they cannot see. A separate type says only what it says.
+
+Revocation is absolute: the id stops resolving. Not hidden, not expired, not marked. And
+deleting the trace takes the share with it — Sessions §6 makes a deleted session's files
+unreachable, and a surviving share id would be the anonymous route back to them. Both
+engines are held to that in `internal/store/share_contract_test.go`.
+
+There is no expiry, deliberately. §5 requires revocation and says nothing about expiry, and
+a stored expiry that nothing enforces is a worse promise than none.
 
 ## Harness management
 
@@ -693,7 +796,8 @@ properties of `service.Store`, not of whichever engine a deployment configured.
 | `UHP_DB` | `$UHP_WORKSPACE/uhp.db`, or unset = tasks and sessions in memory | SQLite file holding tasks and sessions |
 | `UHP_MAX_BODY_BYTES` | `8388608` | Maximum accepted request body, and the upload limit |
 | `UHP_MAX_CONCURRENT_RUNS` | `8` | Harness processes allowed to run at once; beyond it, `503 harness_unavailable` |
-| `UHP_PUBLIC_URL` | (unset = relative URLs) | Origin used to build absolute artifact download URLs |
+| `UHP_PUBLIC_URL` | (unset = relative URLs) | Origin used to build absolute artifact download and share URLs |
+| `UHP_SESSION_SHARING` | `false` | `1` or `true` serves the unauthenticated read views of Sessions §5. Off by default — see [Session sharing](#session-sharing) |
 | `UHP_DEFAULT_HARNESS` | (unset = the sole ready harness, if there is exactly one) | Harness a task that names none runs on. `uhpd` refuses to start if it names nothing |
 | `UHP_CLAUDE_MODELS` | `claude-sonnet-5,claude-opus-5` | Claude Code models — see [Where the model list comes from](#where-the-model-list-comes-from) |
 | `UHP_CODEX_MODELS` | `gpt-5.6-sol` | Codex fallback models |

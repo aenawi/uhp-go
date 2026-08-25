@@ -35,6 +35,19 @@ type MemoryStore struct {
 	// wrongly. SQLiteStore answers the same question with rowid.
 	arrived map[string]uint64
 	nextSeq uint64
+
+	// shares is keyed by share id, and sharedBy is the reverse index a session
+	// is looked up through.
+	//
+	// The reverse index is kept rather than derived by scanning, unlike the
+	// task sweep in DeleteSession below, because both directions are on a
+	// request path: an idempotent POST reads the session's share before it
+	// mints one, and every anonymous read resolves a share id. The two maps
+	// are written under the same lock and are never allowed to disagree — a
+	// share id in one and not the other is either a capability with no owner
+	// or an owner whose revoke misses.
+	shares   map[string]*domain.Share
+	sharedBy map[string]string
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -42,6 +55,8 @@ func NewMemoryStore() *MemoryStore {
 		tasks:    make(map[string]*domain.Task),
 		sessions: make(map[string]*domain.Session),
 		arrived:  make(map[string]uint64),
+		shares:   make(map[string]*domain.Share),
+		sharedBy: make(map[string]string),
 	}
 }
 
@@ -155,6 +170,9 @@ func (s *MemoryStore) DeleteSession(_ context.Context, id string) (bool, error) 
 		return false, nil
 	}
 	delete(s.sessions, id)
+	// The share is a live capability, so it goes before anything else: a
+	// reader that raced this delete must not still be able to resolve the id.
+	_, _ = s.revokeLocked(id)
 	for taskID, t := range s.tasks {
 		if t.SessionID != id {
 			continue
@@ -164,6 +182,89 @@ func (s *MemoryStore) DeleteSession(_ context.Context, id string) (bool, error) 
 		delete(s.arrived, taskID)
 	}
 	return true, nil
+}
+
+// CreateShare records a session's read-only view, or reports the one it already
+// has.
+//
+// The session check, the lookup and the write are all under one lock, which is
+// the whole point. Two concurrent shares of one session must not both mint —
+// only one of the two ids can survive, and the other was already handed to a
+// client as though it worked — and neither may interleave with a DeleteSession
+// and leave a share row naming a conversation that is gone.
+func (s *MemoryStore) CreateShare(_ context.Context, sh *domain.Share) (*domain.Share, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.sessions[sh.SessionID]; !ok {
+		return nil, false, nil
+	}
+	if id, ok := s.sharedBy[sh.SessionID]; ok {
+		if existing, ok := s.shares[id]; ok {
+			cp := *existing
+			return &cp, true, nil
+		}
+		// The reverse index pointed at nothing, which the two writers here
+		// cannot produce. Dropping the dangling entry is the repair; the
+		// alternative is a session that can never be shared again.
+		delete(s.sharedBy, sh.SessionID)
+	}
+	cp := *sh
+	s.shares[sh.ID] = &cp
+	s.sharedBy[sh.SessionID] = sh.ID
+	out := *sh
+	return &out, true, nil
+}
+
+// GetShare answers with found=false for an id it does not hold, for the reason
+// GetTask gives — and a revoked id is exactly that, deliberately: "never
+// existed" and "was revoked" are the same answer, so a probe learns nothing
+// from the difference.
+func (s *MemoryStore) GetShare(_ context.Context, shareID string) (*domain.Share, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sh, ok := s.shares[shareID]
+	if !ok {
+		return nil, false, nil
+	}
+	cp := *sh
+	return &cp, true, nil
+}
+
+// GetSessionShare finds a session's share, if it has one.
+func (s *MemoryStore) GetSessionShare(_ context.Context, sessionID string) (*domain.Share, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, ok := s.sharedBy[sessionID]
+	if !ok {
+		return nil, false, nil
+	}
+	sh, ok := s.shares[id]
+	if !ok {
+		return nil, false, nil
+	}
+	cp := *sh
+	return &cp, true, nil
+}
+
+// DeleteSessionShare revokes a session's share and reports which id it removed.
+func (s *MemoryStore) DeleteSessionShare(_ context.Context, sessionID string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, found := s.revokeLocked(sessionID)
+	return id, found, nil
+}
+
+// revokeLocked drops a session's share from both maps and reports the id it
+// removed. The caller holds the write lock; it exists because three callers
+// need the same two deletes and forgetting one of them leaves a live id.
+func (s *MemoryStore) revokeLocked(sessionID string) (string, bool) {
+	id, ok := s.sharedBy[sessionID]
+	if !ok {
+		return "", false
+	}
+	delete(s.sharedBy, sessionID)
+	delete(s.shares, id)
+	return id, true
 }
 
 // copyTask deep-copies the reference-typed fields as well as the struct.

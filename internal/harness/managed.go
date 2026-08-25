@@ -163,6 +163,14 @@ func (m *Managed) Cancel(ctx context.Context, taskID string) error {
 // Harnesses §4.1: "A server must never return a resolved credential to a
 // client." The copy matters as much as the blanking — clearing the field in
 // place would erase the credential this server still has to connect with.
+//
+// It blanks `auth` and nothing else, which is enough here and is *not* enough
+// for a reader with no credential. Headers is a free-form map, and
+// writeMcpConfig materialises the resolved `auth` into exactly that map as an
+// Authorization header — so an entry can carry a working key with `auth` empty.
+// Every caller of this is behind bearer auth. The anonymous share view
+// (Sessions §5) does not narrow an McpServer at all; it drops the whole list.
+// See service.sharedHarness, and do not relax it to a call to this.
 func withoutCredentials(servers []uhp.McpServer) []uhp.McpServer {
 	out := make([]uhp.McpServer, len(servers))
 	for i, m := range servers {

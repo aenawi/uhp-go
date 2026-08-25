@@ -39,7 +39,11 @@ type SQLiteStore struct {
 // sqliteSchemaVersion is written to `PRAGMA user_version` and checked on open.
 // It is the file format's version, so it changes when a migration is added and
 // not when this package is edited.
-const sqliteSchemaVersion = 1
+//
+// Version 2 adds the `shares` table. The migration is additive and every
+// statement is CREATE ... IF NOT EXISTS, so a version-1 file is brought forward
+// by running the whole list again; nothing already in it is touched.
+const sqliteSchemaVersion = 2
 
 // The columns are what has to be searched, ordered or filtered; everything
 // else lives in `data` as one JSON document. Splitting a task across nineteen
@@ -85,6 +89,20 @@ var sqliteSchema = []string{
 	// paging query sorting the whole table on every page.
 	`CREATE INDEX IF NOT EXISTS sessions_by_recency ON sessions (created_at DESC, id ASC)`,
 	`CREATE INDEX IF NOT EXISTS sessions_by_harness ON sessions (harness_id, created_at DESC, id ASC)`,
+	// A share is the one row here with no `data` document, because it has no
+	// fields beyond the three columns and inventing a JSON blob to hold nothing
+	// would only make the next reader look for what is in it.
+	//
+	// `session_id` is UNIQUE, and that is the constraint rather than a comment:
+	// a session has at most one share, and the rule that a second POST replaces
+	// the first is then enforced by the file itself. An engine that got the
+	// replacement wrong would fail loudly here instead of quietly leaving a
+	// capability nobody was told about.
+	`CREATE TABLE IF NOT EXISTS shares (
+		id         TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL UNIQUE,
+		created_at INTEGER NOT NULL
+	)`,
 }
 
 // NewSQLiteStore opens (or creates) the database at path and brings its schema
@@ -430,6 +448,13 @@ func (s *SQLiteStore) DeleteSession(ctx context.Context, id string) (bool, error
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// The share first. It is the only row here that is a live capability rather
+	// than a record, so if this transaction is going to fail part-way, the id
+	// that lets a stranger read the conversation is the one that should already
+	// be gone.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM shares WHERE session_id = ?`, id); err != nil {
+		return false, fmt.Errorf("store: delete session %s: %w", id, err)
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM tasks WHERE session_id = ?`, id); err != nil {
 		return false, fmt.Errorf("store: delete session %s: %w", id, err)
 	}
@@ -572,4 +597,111 @@ func (s *SQLiteStore) ListSessionTasks(ctx context.Context, sessionID string) ([
 		return nil, fmt.Errorf("store: list tasks for %s: %w", sessionID, err)
 	}
 	return out, nil
+}
+
+// CreateShare records a session's read-only view, or reports the one it already
+// has.
+//
+// The read and the insert are one transaction, and the connection is opened
+// with `_txlock=immediate`, so BEGIN takes the write lock and a second caller
+// asking the same question waits rather than reading "no share" alongside the
+// first. Without that, two concurrent shares of one session would both decide
+// to mint and the `session_id` UNIQUE constraint would fail one of them — a 500
+// where an idempotent endpoint owes a 200 carrying the id that won.
+func (s *SQLiteStore) CreateShare(ctx context.Context, sh *domain.Share) (*domain.Share, bool, error) {
+	fail := func(err error) (*domain.Share, bool, error) {
+		return nil, false, fmt.Errorf("store: create share for %s: %w", sh.SessionID, err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fail(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// The session, inside the transaction. The two tables have no foreign key —
+	// see DeleteSession — so this is what stops a share being inserted for a
+	// conversation a concurrent DELETE /v1/traces/{id} is removing.
+	var present int
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT 1 FROM sessions WHERE id = ?`, sh.SessionID).Scan(&present); {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, false, nil
+	case err != nil:
+		return fail(err)
+	}
+
+	var existing domain.Share
+	err = tx.QueryRowContext(ctx,
+		`SELECT id, session_id, created_at FROM shares WHERE session_id = ?`, sh.SessionID).
+		Scan(&existing.ID, &existing.SessionID, &existing.CreatedAt)
+	switch {
+	case err == nil:
+		// Committing a read-only transaction rather than letting the deferred
+		// rollback take it, so the write lock is given back at the same point
+		// on both paths.
+		if err := tx.Commit(); err != nil {
+			return fail(err)
+		}
+		return &existing, true, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return fail(err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO shares (id, session_id, created_at) VALUES (?, ?, ?)`,
+		sh.ID, sh.SessionID, sh.CreatedAt); err != nil {
+		return fail(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fail(err)
+	}
+	out := *sh
+	return &out, true, nil
+}
+
+// GetShare resolves a share id, splitting absence from failure the way
+// GetSession does. A revoked id is absent, which is the same answer an id that
+// never existed gets: a probe learns nothing from the difference.
+func (s *SQLiteStore) GetShare(ctx context.Context, shareID string) (*domain.Share, bool, error) {
+	return s.readShare(ctx, `SELECT id, session_id, created_at FROM shares WHERE id = ?`, shareID)
+}
+
+// GetSessionShare finds a session's share, if it has one.
+func (s *SQLiteStore) GetSessionShare(ctx context.Context, sessionID string) (*domain.Share, bool, error) {
+	return s.readShare(ctx, `SELECT id, session_id, created_at FROM shares WHERE session_id = ?`, sessionID)
+}
+
+// readShare runs one of the two single-row share queries. The two differ only
+// in which column they select on, and a second hand-written scan is a second
+// place for the column order to drift from the struct.
+func (s *SQLiteStore) readShare(ctx context.Context, query, key string) (*domain.Share, bool, error) {
+	var sh domain.Share
+	err := s.db.QueryRowContext(ctx, query, key).Scan(&sh.ID, &sh.SessionID, &sh.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("store: read share %s: %w", key, err)
+	}
+	return &sh, true, nil
+}
+
+// DeleteSessionShare revokes a session's share and reports which id it removed,
+// with found=false for a session that had none.
+//
+// `DELETE ... RETURNING` rather than a read and then a delete: the id reported
+// has to be the id this statement removed, or a revoke racing a re-share would
+// name the wrong link. SQLite has had RETURNING since 3.35 and the driver is
+// well past it.
+func (s *SQLiteStore) DeleteSessionShare(ctx context.Context, sessionID string) (string, bool, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx,
+		`DELETE FROM shares WHERE session_id = ? RETURNING id`, sessionID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("store: revoke share for %s: %w", sessionID, err)
+	}
+	return id, true, nil
 }

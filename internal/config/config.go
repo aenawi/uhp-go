@@ -40,7 +40,23 @@ type Config struct {
 	// PublicBaseURL is the origin clients reach this server on. It is used to
 	// make artifact download URLs absolute; unset means they are emitted
 	// relative, which is correct whenever the client shares the API's origin.
+	//
+	// It is worth setting once SessionSharing is on: a share is a link someone
+	// sends to someone else, and a relative one is not a link.
 	PublicBaseURL string
+
+	// SessionSharing is whether this server serves the read-only session views
+	// of Sessions §5. It defaults to off, and that default is a security
+	// posture rather than an oversight.
+	//
+	// Every other capability here is gated on having somewhere to put
+	// something — a workspace for files, a store for harnesses. This one is
+	// gated on consent: turning it on makes a server that answered nothing
+	// without a credential start answering some things without one, which is a
+	// change to what the deployment *is* and belongs to whoever runs it. With
+	// it off, discovery reports `session_sharing: false` and the endpoints
+	// answer 501, which is the honest pair.
+	SessionSharing bool
 
 	// The five model lists are fallbacks, not the advertised catalogue. Four
 	// of the five CLIs can enumerate their own models and are asked; these
@@ -66,6 +82,7 @@ func Load() Config {
 		// own default. Config does not carry a second copy of that number.
 		MaxConcurrentRuns: int(getEnvInt("UHP_MAX_CONCURRENT_RUNS", 0)),
 		PublicBaseURL:     strings.TrimSuffix(os.Getenv("UHP_PUBLIC_URL"), "/"),
+		SessionSharing:    envBool(os.Getenv("UHP_SESSION_SHARING")),
 		DefaultHarness:    strings.TrimSpace(os.Getenv("UHP_DEFAULT_HARNESS")),
 		// Claude Code cannot be asked what it serves, so this list is the only
 		// answer there will be. Both ids were checked against the real CLI on
@@ -100,6 +117,24 @@ func getEnvInt(key string, fallback int64) int64 {
 		return fallback
 	}
 	return n
+}
+
+// envBool reads a boolean switch, accepting the spellings an operator actually
+// types and treating everything else as off.
+//
+// The asymmetry is deliberate: the only variable that uses this turns on an
+// unauthenticated read path, so a value nobody can agree the meaning of —
+// "yes", "on", "enabled", "maybe" — must not be the one that opens it. An
+// operator who meant to enable sharing and typed "on" gets a server that did
+// not, which they discover from the discovery document; the other way round,
+// they get a server serving links they never asked it to serve.
+func envBool(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true":
+		return true
+	default:
+		return false
+	}
 }
 
 func getEnv(key, fallback string) string {

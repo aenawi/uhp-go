@@ -83,3 +83,37 @@ type Turn struct {
 	// CreatedAt is Unix seconds.
 	CreatedAt int64 `json:"created_at"`
 }
+
+// Share is a read-only view of a session, published under an unguessable id.
+//
+// # This shape is not normative
+//
+// The caveat on [Turn] applies here for the same reason and rather more
+// strongly. Sessions §5 requires POST and GET /v1/sessions/{session_id}/share
+// of a `full` implementation, and requires that the view be read-only and
+// revocable — but the schema has no share object among its twenty-three, and
+// the chapter names no revocation endpoint and no path the view is served at.
+// So this is one server's reading: the fields below, DELETE on the same path
+// to revoke, and the view itself under URL.
+//
+// What is not one server's reading is the security property. A share id is a
+// bearer capability — whoever holds it can read the conversation, its turns and
+// its files, with no credential — so it is minted with real entropy and is the
+// only secret in the object. Treat it like a password in logs, in referrers and
+// in bug reports.
+type Share struct {
+	// ID is the capability. It is opaque: nothing about a session can be
+	// derived from it, and it cannot be guessed from the session's own id.
+	ID string `json:"id"`
+	// Object is always "session.share", and is omitted when unset for the
+	// reason [Session].Object is.
+	Object string `json:"object,omitempty"`
+	// SessionID is the session this shares. It is meaningful to the principal
+	// that minted the share and is not itself a credential.
+	SessionID string `json:"session_id"`
+	// URL is where the read-only view is served. It may be relative, when the
+	// server has not been told the origin it is reached on.
+	URL string `json:"url"`
+	// CreatedAt is Unix seconds.
+	CreatedAt int64 `json:"created_at"`
+}

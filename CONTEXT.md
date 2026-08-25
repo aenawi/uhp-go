@@ -40,6 +40,16 @@ _Avoid_: Output file, Result file
 The wire object for one page of a session listing, and its internal counterpart.
 _Avoid_: Sessions response, Page of sessions
 
+**Share**:
+A read-only view of a Session, published under an unguessable id that is itself the
+credential for it. The wire object and the internal record are genuinely different — the
+wire one carries a URL, which is a property of the origin this server is reached on rather
+than of the share — so `domain.Share` does not embed `uhp.Share` and renders it instead.
+The id is a capability, never an identifier for anything else, and it is not a bearer
+token: it is a path segment under `/v1/shares/`, and presenting it as a credential
+anywhere buys nothing.
+_Avoid_: Link, Public URL, Share token, Session token
+
 ## Core concepts
 
 **Harness**:

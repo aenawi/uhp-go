@@ -38,3 +38,34 @@ func TestStorePathsDoNotCollide(t *testing.T) {
 		t.Fatalf("both stores resolved to %q", db)
 	}
 }
+
+// The switch that opens an unauthenticated read path is the one place where a
+// value nobody agrees the meaning of must not be read as "yes".
+//
+// An operator who meant to enable sharing and typed "on" gets a server that did
+// not, and finds out from the discovery document. The other way round, they get
+// a server serving links they never asked it to serve, and find out from
+// whoever opened one.
+func TestSessionSharingIsOffUnlessItIsUnambiguouslyOn(t *testing.T) {
+	for _, v := range []string{"1", "true", "TRUE", " true ", "True"} {
+		if !envBool(v) {
+			t.Errorf("envBool(%q) = false, want true", v)
+		}
+	}
+	for _, v := range []string{"", "0", "false", "on", "yes", "enabled", "y", "maybe"} {
+		if envBool(v) {
+			t.Errorf("envBool(%q) = true, want false", v)
+		}
+	}
+}
+
+func TestSessionSharingDefaultsOff(t *testing.T) {
+	t.Setenv("UHP_SESSION_SHARING", "")
+	if Load().SessionSharing {
+		t.Error("session sharing is on with the variable unset")
+	}
+	t.Setenv("UHP_SESSION_SHARING", "1")
+	if !Load().SessionSharing {
+		t.Error("session sharing is off with UHP_SESSION_SHARING=1")
+	}
+}
