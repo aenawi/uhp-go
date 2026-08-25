@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/aenawi/uhp-go/internal/harness"
@@ -89,6 +90,63 @@ func TestTwoReadyHarnessesRefuseWithTheListToChooseFrom(t *testing.T) {
 	}
 	if len(noDefault.Candidates) != 2 {
 		t.Fatalf("Candidates = %v, want both harnesses so the client can choose", noDefault.Candidates)
+	}
+	if noDefault.Ready != 2 {
+		t.Errorf("Ready = %d, want 2", noDefault.Ready)
+	}
+	if !strings.Contains(noDefault.Error(), "more than one") {
+		t.Errorf("message = %q, want it to say the choice is ambiguous", noDefault.Error())
+	}
+}
+
+// The other zero-default case, and the one a real deployment hits first: five
+// harnesses configured and none of them logged in. It used to report "more than
+// one harness ... so a task must name one", which sends the operator to name a
+// harness when naming any of them would fail too — the fix is to make one
+// available, and the message has to say so.
+func TestNoReadyHarnessSaysSoRatherThanBlamingTheChoice(t *testing.T) {
+	svc := serviceWith(unavailableAdapter{}, secondUnavailable{})
+
+	_, err := svc.DefaultHarness(context.Background())
+	var noDefault *NoDefaultHarnessError
+	if !errors.As(err, &noDefault) {
+		t.Fatalf("expected a NoDefaultHarnessError, got %v", err)
+	}
+	if noDefault.Ready != 0 {
+		t.Fatalf("Ready = %d, want 0", noDefault.Ready)
+	}
+	if !strings.Contains(noDefault.Error(), "is ready") {
+		t.Errorf("message = %q, want it to name readiness as the problem", noDefault.Error())
+	}
+	// Still listed, because unavailable is a state that changes: a client told
+	// these do not exist could not act on GET /v1/harnesses showing them.
+	if len(noDefault.Candidates) != 2 {
+		t.Errorf("Candidates = %v, want the unavailable harnesses listed anyway", noDefault.Candidates)
+	}
+}
+
+// secondUnavailable is a second harness that exists and cannot run.
+type secondUnavailable struct{ echoAdapter }
+
+func (secondUnavailable) Info() uhpgo.Harness {
+	info := unavailableAdapter{}.Info()
+	info.ID = "chrn_sleeping2"
+	info.Base = "sleeping2"
+	return info
+}
+
+// And the empty case: nothing configured at all is a different problem again,
+// and telling an operator to name a harness would be advice they cannot follow.
+func TestNoHarnessesAtAllSaysNothingIsConfigured(t *testing.T) {
+	svc := serviceWith()
+
+	_, err := svc.DefaultHarness(context.Background())
+	var noDefault *NoDefaultHarnessError
+	if !errors.As(err, &noDefault) {
+		t.Fatalf("expected a NoDefaultHarnessError, got %v", err)
+	}
+	if !strings.Contains(noDefault.Error(), "no harnesses configured") {
+		t.Errorf("message = %q", noDefault.Error())
 	}
 }
 

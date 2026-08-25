@@ -170,14 +170,29 @@ func (s *TaskService) ListHarnesses(ctx context.Context) ([]uhpgo.Harness, error
 // so being refused is a surprise, and the only useful answer is the list it
 // should have picked from. Errors §1 asks for structured context whenever there
 // is one, and here there always is.
-type NoDefaultHarnessError struct{ Candidates []string }
+type NoDefaultHarnessError struct {
+	// Candidates is every harness on this server, ready or not. An unavailable
+	// one is still worth naming: "unavailable" is a state that changes when
+	// somebody logs the CLI in, so a client told only about the ready ones
+	// would be told a harness it can see in GET /v1/harnesses does not exist.
+	Candidates []string
+
+	// Ready is how many of them could actually run a task, and it is what
+	// decides which of three quite different problems this is. Reporting the
+	// wrong one sends the operator to the wrong fix: "name a harness" is
+	// useless advice when the real answer is "log one of them in".
+	Ready int
+}
 
 func (e *NoDefaultHarnessError) Error() string {
-	switch len(e.Candidates) {
-	case 0:
-		return "service: this server has no harness to run a task on"
+	switch {
+	case len(e.Candidates) == 0:
+		return "service: this server has no harnesses configured, so it cannot run a task"
+	case e.Ready == 0:
+		return "service: no harness on this server is ready, so there is no default to fall back to; " +
+			"name one in metadata.harness_id or make one available"
 	default:
-		return "service: this server has more than one harness and no configured default, " +
+		return "service: more than one harness is ready and no default is configured, " +
 			"so a task must name one in metadata.harness_id"
 	}
 }
@@ -228,7 +243,7 @@ func (s *TaskService) DefaultHarness(ctx context.Context) (string, error) {
 	if found == 1 {
 		return ready, nil
 	}
-	return "", &NoDefaultHarnessError{Candidates: ids}
+	return "", &NoDefaultHarnessError{Candidates: ids, Ready: found}
 }
 
 // GetHarness answers GET /v1/harnesses/{id}, accepting an id or an alias.
