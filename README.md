@@ -160,9 +160,11 @@ uhp-conformance --base-url http://localhost:8080 --api-key "$UHP_API_KEY" --clas
 **Last measured score: `full` 52/52 — CONFORMANT (UHP 2026-08-11, class full), 0 skipped.**
 Details, reproduction steps and what a green suite still cannot see:
 [docs/conformance.md](docs/conformance.md).
-Measured 2026-08-25 by `make conformance-gate` at `UHP_CLASS=full` against a pinned suite
-revision, on a server with a workspace, a harness store and `UHP_SESSION_SHARING=1`, and
-with no `--model` pinned. Zero skips, which the earlier runs could not say.
+Re-measured 2026-08-26 by `make conformance-gate` at `UHP_CLASS=full` on a server with a
+workspace and `UHP_SESSION_SHARING=1`, with no `--model` pinned. Zero skips, which the runs
+before 2026-08-25 could not say — and the first run scored against a server that answered
+`conformance_class: full` while being graded, so `D-05` reported `class=full` rather than
+the `class=core` every earlier run recorded (#65).
 
 File support (issue #2) and harness management with skills, MCP and tool restrictions
 (issues #3 and #4) had all landed after the previous run and were carried as "implemented,

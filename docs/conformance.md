@@ -56,6 +56,34 @@ started with `UHP_WORKSPACE`, a harness store and `UHP_SESSION_SHARING=1`. Still
 is the part worth reading — the 2026-08-23 `extended` run skipped X-07 because the agent
 happened not to write a file, and this run passed X-06 and X-07 on a real artifact.
 
+**The gate has since been re-run against a server that answers `full` (#65).**
+
+```
+52/52 full · 0 failed · 0 skipped · 0 errored
+CONFORMANT — UHP 2026-08-11 (full)
+```
+
+Measured 2026-08-26 by `make conformance-gate CONFORMANCE_FLOOR=52` with `UHP_CLASS=full`,
+against suite `2026.8.11.post1` at harnessrouter revision `856d62c`, on the `claude-code`
+harness with no `--model`. What is new is not the number — it is the same 52/52 — but what
+the server said about itself while being scored. Before #65 the discovery document answered
+`core` no matter how `uhpd` was started, so D-05 graded the claim against the three
+unconditional `core` capabilities and could not fail; the check was vacuous on this server.
+This run is the first where it graded the claim that was actually made:
+
+```
+D-01  pass  conformance_class=full versions=['2026-08-11']
+D-05  pass  class=full
+```
+
+Two notes for anyone reproducing it. The suite revision is `856d62c` rather than the
+`95b96d7` the runs above pin — it was re-read at that revision to confirm the D-05 source,
+and the check is unchanged between them. And `claude-code` reported `unavailable` until the
+CLI was put on `PATH`: on a machine where `claude` is a shell alias rather than a binary,
+`uhpd`'s health check (`exec.LookPath`) cannot find it, and the harness is honestly reported
+as unavailable. Start the server with the real binary's directory on `PATH`, or the gate
+measures a harness that cannot run.
+
 That is the strongest number this server has recorded, and it is worth being exact about
 what it does not cover. **None of the 52 checks touches session sharing.** `/share` appears
 nowhere in the suite at the pinned revision, so the feature #57 added was carried through
@@ -105,13 +133,14 @@ Files §5 are satisfied vacuously rather than enforced (#56).
 raising it was a deliberate follow-up rather than part of recording it. That follow-up is
 #65, and it did not raise the class so much as stop it being a constant: the document now
 computes it from the capabilities it publishes. A server started the way this run's was —
-workspace, harness store, sharing on — answers `full` today; the same binary started bare
-answers `core`. See "The class is not a constant" below. **D-05 has not been re-run against
-a server answering `full`.** The check was read rather than re-scored, and the suite is not
-installed on the machine #65 was implemented on, so the 52/52 above is still a number from a
-server that answered `core`. Re-running `make conformance-gate` at `UHP_CLASS=full` on a
-fully configured server is what closes that, and it is the one claim here no test in this
-repository can make.
+workspace, harness store, sharing on — answers `full`; the same binary started bare answers
+`core`. See "The class is not a constant" below.
+
+**That has since been measured rather than reasoned about.** The 2026-08-26 run below is the
+first recorded score from a server that *claimed* `full` while being graded, and D-05 —
+which reads the class off the discovery document, not off `--class` — reported `class=full`
+rather than the `class=core` every previous run recorded. Every number above it was taken
+from a server whose class was the constant.
 
 The caution that held the class down is still worth reading, because it is about evidence
 rather than about code: one green run on one
