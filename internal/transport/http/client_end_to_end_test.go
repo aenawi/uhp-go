@@ -14,6 +14,7 @@ import (
 	"github.com/aenawi/uhp-go/internal/service"
 	"github.com/aenawi/uhp-go/internal/store"
 	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 // These are the only tests in this repository that speak UHP over a socket.
@@ -367,4 +368,84 @@ func newSharingLiveServer(t *testing.T, key string) (*uhp.Client, *service.TaskS
 	httpSrv := httptest.NewServer(NewServer(svc, slog.Default(), []string{key}, 0).Handler())
 	t.Cleanup(httpSrv.Close)
 	return uhp.NewClient(httpSrv.URL, key), svc
+}
+
+// describedAdapter is a harness that answers the question a client actually
+// asks before it sends work: what can you run, what can you do, and are you
+// reachable right now. echoAdapter reports only the last of the three, which is
+// why the test below registers this one instead.
+type describedAdapter struct{ echoAdapter }
+
+func (describedAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{
+		Harness: uhp.Harness{ID: "chrn_described", Object: "harness", Name: "Described",
+			Base: "echo", DefaultModel: "echo-1"},
+		Models:       []string{"echo-1", "echo-2"},
+		Capabilities: []uhpgo.Capability{uhpgo.CapStreaming, uhpgo.CapSessions},
+		Status:       uhpgo.HarnessReady,
+	}
+}
+
+// This server extends the harness object with `models`, `capabilities` and
+// `status`, and computes all three on every read — so they are the freshest
+// thing on it and the only way to learn whether a harness can be sent work.
+// [uhp.Harness] has no field for any of them and a decoder drops what it cannot
+// land, which is how a client could read a harness over this socket and come
+// back holding `status: null`.
+//
+// The two Into methods are the way through, and this is the test that the way
+// through arrives at the same bytes the server wrote. It reads both endpoints
+// because they decode differently — one an object, one an array inside an
+// envelope — so a fix to one proves nothing about the other.
+func TestPublishedClientReadsThisServersHarnessExtensions(t *testing.T) {
+	reg := harness.NewRegistry()
+	reg.Register(describedAdapter{})
+	svc := service.NewTaskService(reg, store.NewMemoryStore(), slog.Default(),
+		service.WithWorkspace(t.TempDir()))
+	httpSrv := httptest.NewServer(NewServer(svc, slog.Default(), nil, 0).Handler())
+	t.Cleanup(httpSrv.Close)
+
+	c := uhp.NewClient(httpSrv.URL, "")
+	ctx := context.Background()
+
+	var one uhpgo.Harness
+	if err := c.GetHarnessInto(ctx, "chrn_described", &one); err != nil {
+		t.Fatalf("harness: %v", err)
+	}
+	// The protocol half, unchanged: the extension type embeds uhp.Harness, so
+	// a fix that kept the additions by re-declaring the object would show up
+	// here as a field that stopped arriving.
+	if one.ID != "chrn_described" || one.Base != "echo" || one.DefaultModel != "echo-1" {
+		t.Errorf("the protocol half = %+v", one.Harness)
+	}
+	if one.Status != uhpgo.HarnessReady {
+		t.Errorf("status = %q, want %q", one.Status, uhpgo.HarnessReady)
+	}
+	if len(one.Models) != 2 {
+		t.Errorf("models = %v, want the two the harness reports", one.Models)
+	}
+	if !one.HasCapability(uhpgo.CapSessions) {
+		t.Errorf("capabilities = %v, want sessions among them", one.Capabilities)
+	}
+
+	var all []uhpgo.Harness
+	if err := c.ListHarnessesInto(ctx, &all); err != nil {
+		t.Fatalf("harnesses: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("harnesses = %+v, want the one registered", all)
+	}
+	if all[0].Status != uhpgo.HarnessReady || len(all[0].Models) != 2 {
+		t.Errorf("listed harness = %+v, want its status and models", all[0])
+	}
+
+	// And the protocol-only path still decodes what the protocol defines, so
+	// a client that never heard of this server is no worse off than before.
+	plain, err := c.GetHarness(ctx, "chrn_described")
+	if err != nil {
+		t.Fatalf("plain harness: %v", err)
+	}
+	if plain.ID != "chrn_described" || plain.Name != "Described" {
+		t.Errorf("plain harness = %+v", plain)
+	}
 }

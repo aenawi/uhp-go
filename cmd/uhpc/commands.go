@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aenawi/uhp-go/uhp"
+	"github.com/aenawi/uhp-go/uhp/uhpgo"
 )
 
 type cli struct {
@@ -87,12 +88,31 @@ func (c *cli) discover(ctx context.Context) error {
 	})
 }
 
+// The two harness reads decode into [uhpgo.Harness] rather than [uhp.Harness],
+// which is the one place this command knows which server it is talking to.
+//
+// It has to. `status`, `models` and `capabilities` are uhp-go's additions to a
+// schema that permits them — every object in it is additionalProperties: true —
+// and [uhp.Harness] has no field for any of the three, so a decoder that only
+// knows the protocol drops them on the floor. Whether a harness is reachable is
+// the first question anyone asks a router, and until this the only way to get an
+// answer out of this repository was curl piped into python3.
+//
+// Nothing is given up by asking for the larger shape. Against a server that
+// sends none of the three they decode as their zero values, the protocol half
+// is exactly what [uhp.Client.GetHarness] would have returned, and the renderer
+// prints what it was actually told rather than inventing a state — see
+// [harnessStatus] and [renderedHarness].
 func (c *cli) harnesses(ctx context.Context) error {
-	hs, err := c.client.ListHarnesses(ctx)
-	if err != nil {
+	var hs []uhpgo.Harness
+	if err := c.client.ListHarnessesInto(ctx, &hs); err != nil {
 		return err
 	}
-	return c.emit(hs, func() {
+	rendered := make([]any, len(hs))
+	for i, h := range hs {
+		rendered[i] = renderedHarness(h)
+	}
+	return c.emit(rendered, func() {
 		if len(hs) == 0 {
 			// An empty list is a legitimate answer, not a failure — a server
 			// with no harnesses in the caller's scope says so this way.
@@ -100,7 +120,7 @@ func (c *cli) harnesses(ctx context.Context) error {
 			return
 		}
 		for _, h := range hs {
-			c.printf("%-28s %-14s %s\n", h.ID, h.Base, h.Name)
+			c.printf("%-28s %-14s %-12s %s\n", h.ID, h.Base, harnessStatus(h.Status), h.Name)
 		}
 	})
 }
@@ -110,14 +130,27 @@ func (c *cli) harness(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	h, err := c.client.GetHarness(ctx, id)
-	if err != nil {
+	var h uhpgo.Harness
+	if err := c.client.GetHarnessInto(ctx, id, &h); err != nil {
 		return err
 	}
-	return c.emit(h, func() {
+	return c.emit(renderedHarness(h), func() {
 		c.printf("id:      %s\nname:    %s\nbase:    %s\n", h.ID, h.Name, h.Base)
+		if h.Status != "" {
+			c.printf("status:  %s\n", h.Status)
+		}
 		if h.DefaultModel != "" {
 			c.printf("default: %s\n", h.DefaultModel)
+		}
+		if len(h.Models) > 0 {
+			c.printf("models:  %s\n", strings.Join(h.Models, ", "))
+		}
+		if len(h.Capabilities) > 0 {
+			can := make([]string, len(h.Capabilities))
+			for i, capability := range h.Capabilities {
+				can[i] = string(capability)
+			}
+			c.printf("can:     %s\n", strings.Join(can, ", "))
 		}
 		if len(h.DisabledTools) > 0 {
 			c.printf("blocked: %s\n", strings.Join(h.DisabledTools, ", "))
@@ -129,6 +162,38 @@ func (c *cli) harness(ctx context.Context, args []string) error {
 			c.printf("mcp:     %s %s\n", m.Name, m.URL)
 		}
 	})
+}
+
+// renderedHarness picks which of the two harness objects -json prints.
+//
+// [uhpgo.Harness] renders all three additions unconditionally, which is right
+// for the server that computes them and wrong for a client rendering a server
+// that does not: `"status": ""` reads as a state, and `"models": null` as a
+// harness that runs nothing. Against a server that sent none of the three, what
+// uhpc has is a protocol harness, so that is what it prints.
+//
+// A server that sent some but not all of them is rendered as this server's
+// object, nulls included — a partial answer is that object's own convention for
+// "not reported", and second-guessing it here would hide a real difference
+// between two harnesses on the same router.
+func renderedHarness(h uhpgo.Harness) any {
+	if h.Status == "" && h.Models == nil && h.Capabilities == nil {
+		return h.Harness
+	}
+	return h
+}
+
+// harnessStatus renders a status column for a server that may not have one.
+//
+// An empty status is not "unavailable": it is a server that did not say, and
+// printing one of the three states for it would be a claim uhpc has no basis
+// for — the difference between "this CLI is not logged in" and "this server
+// does not report reachability" is the whole reason to look.
+func harnessStatus(status string) string {
+	if status == "" {
+		return "?"
+	}
+	return status
 }
 
 func (c *cli) models(ctx context.Context, args []string) error {

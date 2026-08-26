@@ -169,13 +169,14 @@ The suite lives in the protocol repository and runs against any server over HTTP
 git clone https://github.com/HarnessRouter/harnessrouter
 pip install -e harnessrouter/protocol/conformance
 
-go build -o bin/uhpd ./cmd/uhpd
+make build   # bin/uhpd and bin/uhpc
 UHP_API_KEYS=devkey UHP_WORKSPACE=/tmp/uhp-workspace ./bin/uhpd &
 
 # The suite runs real agent tasks, so pick a harness whose CLI is installed and
-# authenticated on this machine, and pass its canonical chrn_ id.
-curl -s -H "Authorization: Bearer devkey" localhost:8080/v1/harnesses \
-  | python3 -c 'import sys,json; [print(h["base"], h["id"], h["status"]) for h in json.load(sys.stdin)["harnesses"]]'
+# authenticated on this machine, and pass its canonical chrn_ id. The status
+# column is the one to read: `unavailable` is a CLI that is not installed or not
+# logged in, and every check pointed at it will fail for that reason alone.
+UHP_API_KEY=devkey ./bin/uhpc harnesses
 
 uhp-conformance --base-url http://localhost:8080 --api-key devkey \
   --class core --harness-id chrn_… --model … --plain
@@ -257,12 +258,12 @@ Then start a server with a workspace — without one, `files_input`, `files_outp
 rather than measured — and point the gate at the `claude-code` harness:
 
 ```bash
-go build -o bin/uhpd ./cmd/uhpd
+make build   # bin/uhpd and bin/uhpc
 UHP_API_KEYS=devkey UHP_WORKSPACE=/tmp/uhp-workspace ./bin/uhpd &
 
-# Ask which id it serves rather than writing a derived value down by hand.
-pick='import sys,json; print(next((h["id"] for h in json.load(sys.stdin)["harnesses"] if h["base"] == "claude-code"), ""))'
-curl -sf -H 'Authorization: Bearer devkey' localhost:8080/v1/harnesses | python3 -c "$pick"
+# Ask which id it serves rather than writing a derived value down by hand, and
+# check it is ready before spending six agent tasks finding out it was not.
+UHP_API_KEY=devkey ./bin/uhpc harnesses | awk '$2 == "claude-code" { print $1, $3 }'
 
 UHP_API_KEY=devkey UHP_HARNESS_ID=chrn_… make conformance-gate
 ```
