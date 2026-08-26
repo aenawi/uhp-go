@@ -17,13 +17,46 @@ const UHPVersion = uhp.Version
 // supportedVersions is every version this server can serve.
 var supportedVersions = []string{UHPVersion}
 
-// ConformanceClass is what this server claims.
+// conformanceClass is what this server claims, read off the document it claims
+// it in.
 //
-// It is "core" and not "full" deliberately. The class MUST agree with the
-// capability list, and claiming a class the server does not implement is a
-// claim the conformance suite exists to falsify. This moves up only when the
-// corresponding capabilities are genuinely true.
-const ConformanceClass = "core"
+// It takes the capability struct rather than the three configuration booleans
+// so that the class and the list cannot disagree: they are computed from one
+// value, and the value is the one that goes on the wire. It used to be
+// `const ConformanceClass = "core"`, which was safe only by accident — `core`
+// requires streaming, sessions and cancellation, and all three are
+// unconditionally true here. Three of the capabilities above `core` are not:
+// files need UHP_WORKSPACE, harness management needs a harness store, and
+// sharing needs an operator to ask for it. A constant `full` would have been a
+// claim the same document contradicts two fields later, and the suite's D-05
+// check ("conformance_class agrees with capabilities") exists to catch exactly
+// that.
+//
+// **Session sharing gates `full` here, and D-05 does not require it.** That is
+// the one real decision in this function, so it is written down rather than
+// left to be inferred: the specification's Sessions §5 is what makes sharing a
+// `full` feature, while the suite's list at revision
+// 95b96d7ce473ab59d510e1690c73cc6660d0a73e stops at harness_management. The
+// stricter reading cannot be wrong — a server that satisfies it satisfies the
+// suite's too — and the looser one would let a deployment with sharing switched
+// off claim the class the specification reserves for one that has it. The next
+// person will assume the other; this is the answer.
+//
+// There is no class below `core`, so it is the floor rather than a fourth
+// branch. If any of its three requirements ever becomes conditional, this
+// function is where that has to be answered, because a `core` claim would then
+// be as unfounded as a constant `full` was.
+func conformanceClass(c uhp.Capabilities) string {
+	files := c.FilesInput && c.FilesOutput
+	switch {
+	case files && c.SessionListing && c.HarnessManagement && c.SessionSharing:
+		return "full"
+	case files && c.SessionListing:
+		return "extended"
+	default:
+		return "core"
+	}
+}
 
 // capabilities reports what this server actually implements.
 //
@@ -64,18 +97,22 @@ func capabilities(files, harnessManagement, sessionSharing bool) uhp.Capabilitie
 }
 
 func (s *Server) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
+	// One value, published and graded. Computing the class from the same
+	// struct the document carries is what makes "the class agrees with the
+	// capabilities" a property of this code rather than a thing to remember.
+	caps := capabilities(
+		s.tasks.FilesEnabled(),
+		s.tasks.HarnessManagementEnabled(),
+		s.tasks.SessionSharingEnabled(),
+	)
 	writeJSON(w, http.StatusOK, uhp.Discovery{
 		Object:           "uhp.discovery",
 		Protocol:         "uhp",
 		Versions:         supportedVersions,
 		DefaultVersion:   UHPVersion,
-		ConformanceClass: ConformanceClass,
-		Capabilities: capabilities(
-			s.tasks.FilesEnabled(),
-			s.tasks.HarnessManagementEnabled(),
-			s.tasks.SessionSharingEnabled(),
-		),
-		Implementation: &uhp.Implementation{Name: "uhp-go", Version: Version},
+		ConformanceClass: conformanceClass(caps),
+		Capabilities:     caps,
+		Implementation:   &uhp.Implementation{Name: "uhp-go", Version: Version},
 	})
 }
 

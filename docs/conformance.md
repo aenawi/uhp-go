@@ -56,6 +56,34 @@ started with `UHP_WORKSPACE`, a harness store and `UHP_SESSION_SHARING=1`. Still
 is the part worth reading — the 2026-08-23 `extended` run skipped X-07 because the agent
 happened not to write a file, and this run passed X-06 and X-07 on a real artifact.
 
+**The gate has since been re-run against a server that answers `full` (#65).**
+
+```
+52/52 full · 0 failed · 0 skipped · 0 errored
+CONFORMANT — UHP 2026-08-11 (full)
+```
+
+Measured 2026-08-26 by `make conformance-gate CONFORMANCE_FLOOR=52` with `UHP_CLASS=full`,
+against suite `2026.8.11.post1` at harnessrouter revision `856d62c`, on the `claude-code`
+harness with no `--model`. What is new is not the number — it is the same 52/52 — but what
+the server said about itself while being scored. Before #65 the discovery document answered
+`core` no matter how `uhpd` was started, so D-05 graded the claim against the three
+unconditional `core` capabilities and could not fail; the check was vacuous on this server.
+This run is the first where it graded the claim that was actually made:
+
+```
+D-01  pass  conformance_class=full versions=['2026-08-11']
+D-05  pass  class=full
+```
+
+Two notes for anyone reproducing it. The suite revision is `856d62c` rather than the
+`95b96d7` the runs above pin — it was re-read at that revision to confirm the D-05 source,
+and the check is unchanged between them. And `claude-code` reported `unavailable` until the
+CLI was put on `PATH`: on a machine where `claude` is a shell alias rather than a binary,
+`uhpd`'s health check (`exec.LookPath`) cannot find it, and the harness is honestly reported
+as unavailable. Start the server with the real binary's directory on `PATH`, or the gate
+measures a harness that cannot run.
+
 That is the strongest number this server has recorded, and it is worth being exact about
 what it does not cover. **None of the 52 checks touches session sharing.** `/share` appears
 nowhere in the suite at the pinned revision, so the feature #57 added was carried through
@@ -101,12 +129,24 @@ because the suite always passes a key. Issue #55. Related, and equally invisible
 every configured key is the same principal, so the scoping MUSTs in Architecture and
 Files §5 are satisfied vacuously rather than enforced (#56).
 
-`conformance_class` in the discovery document still reads `core`, and raising it to `full`
-is a deliberate follow-up rather than part of recording this. The class is what the server
-*guarantees*, and one green run on one machine with one CLI installed is thinner evidence
-than a guarantee wants — particularly for the F-series, which measures the API surface on a
-box where `claude` happens to be logged in. Lifecycle §2 constrains the class only through
-`files_input`, `files_output` and `session_listing`, all of which report `true`.
+`conformance_class` in the discovery document read `core` when this run was recorded, and
+raising it was a deliberate follow-up rather than part of recording it. That follow-up is
+#65, and it did not raise the class so much as stop it being a constant: the document now
+computes it from the capabilities it publishes. A server started the way this run's was —
+workspace, harness store, sharing on — answers `full`; the same binary started bare answers
+`core`. See "The class is not a constant" below.
+
+**That has since been measured rather than reasoned about.** The 2026-08-26 run below is the
+first recorded score from a server that *claimed* `full` while being graded, and D-05 —
+which reads the class off the discovery document, not off `--class` — reported `class=full`
+rather than the `class=core` every previous run recorded. Every number above it was taken
+from a server whose class was the constant.
+
+The caution that held the class down is still worth reading, because it is about evidence
+rather than about code: one green run on one
+machine with one CLI installed is thinner evidence than a guarantee wants, particularly for
+the F-series, which measures the API surface on a box where `claude` happens to be logged
+in.
 
 ## Reproducing it
 
@@ -425,11 +465,55 @@ would accept a `full` claim from a server with sharing switched off, and would r
 from a server started without `UHP_WORKSPACE`, because that server honestly reports
 `files_input: false`.
 
-That is why raising `ConformanceClass` is not a matter of editing a constant. Three of this
+That is why raising `ConformanceClass` was not a matter of editing a constant. Three of this
 server's capabilities are computed from configuration, so a hardcoded `full` would be a
 claim `uhpd` contradicts the moment it is started without a workspace — and D-05 would
 catch it. A class this server can defend has to be computed from the same booleans the
 capability list is.
+
+### The class is not a constant
+
+That is what #65 did. `conformanceClass` in `internal/transport/http/discovery.go` takes the
+capability struct — the same value `handleDiscovery` puts on the wire, not the three
+configuration booleans behind it — and grades it:
+
+| Files | Session listing | Harness management | Session sharing | Class |
+| --- | --- | --- | --- | --- |
+| ✓ | ✓ | ✓ | ✓ | `full` |
+| ✓ | ✓ | — | any | `extended` |
+| — | any | any | any | `core` |
+
+In terms of how `uhpd` is started, that is: nothing → `core`, `UHP_WORKSPACE` → `extended`,
+`UHP_WORKSPACE` and `UHP_SESSION_SHARING=1` → `full`. The harness-management column never
+moves the class for this binary, because `openHarnessStore` always returns a store — an
+in-memory one when no path is configured — so `harness_management` is `true` on every
+`uhpd`. It is read rather than assumed anyway: the service is usable without a store, and a
+class that assumed the binary's wiring would be describing `cmd/uhpd` rather than the
+document.
+
+Two consequences are worth stating outright.
+
+**Session sharing gates `full` here, and D-05 does not require it.** That is the one real
+decision in the change, taken towards the stricter reading: Sessions §5 is what makes
+sharing a `full` feature — it is the premise #57 was filed on — while the suite's list stops
+at `harness_management` (#66). A server that satisfies the stricter rule satisfies the
+suite's as well, so requiring sharing cannot be wrong; not requiring it would let a
+deployment with sharing switched off claim the class the specification reserves for one that
+has it. Anyone reading the class and expecting the suite's answer should read
+`conformanceClass`'s comment, which says the same thing at the point of the decision.
+
+**`core` is the floor rather than a branch.** There is no class below it, and its three
+requirements — streaming, sessions, cancellation — are unconditionally true on this server.
+That is exactly why the old constant was safe: not because it was checked, but because the
+only class it claimed happened to need nothing configurable.
+
+The table above is asserted, not described:
+`TestConformanceClassIsComputedFromTheCapabilitiesItClaims` in
+`internal/transport/http/discovery_test.go` runs all eight configurations through
+`GET /v1/uhp` and holds each document to D-05's own rule — every capability the class it
+claims requires is `true` in that same document. The case that matters is the bare one,
+which must report `core` and must not report `full` merely because the binary contains the
+code for all of it.
 
 The trace deletion is worth a note of its own, because nothing in the suite would catch
 getting it backwards. `DELETE /v1/traces/{id}` cancels first and `DELETE /v1/responses/{id}`

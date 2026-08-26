@@ -160,9 +160,11 @@ uhp-conformance --base-url http://localhost:8080 --api-key "$UHP_API_KEY" --clas
 **Last measured score: `full` 52/52 — CONFORMANT (UHP 2026-08-11, class full), 0 skipped.**
 Details, reproduction steps and what a green suite still cannot see:
 [docs/conformance.md](docs/conformance.md).
-Measured 2026-08-25 by `make conformance-gate` at `UHP_CLASS=full` against a pinned suite
-revision, on a server with a workspace, a harness store and `UHP_SESSION_SHARING=1`, and
-with no `--model` pinned. Zero skips, which the earlier runs could not say.
+Re-measured 2026-08-26 by `make conformance-gate` at `UHP_CLASS=full` on a server with a
+workspace and `UHP_SESSION_SHARING=1`, with no `--model` pinned. Zero skips, which the runs
+before 2026-08-25 could not say — and the first run scored against a server that answered
+`conformance_class: full` while being graded, so `D-05` reported `class=full` rather than
+the `class=core` every earlier run recorded (#65).
 
 File support (issue #2) and harness management with skills, MCP and tool restrictions
 (issues #3 and #4) had all landed after the previous run and were carried as "implemented,
@@ -183,19 +185,35 @@ re-run on 2026-08-24 — **37/37 core, 0 skipped**, `T-03` reading `claude-opus-
 task that named no model. The two configurations now agree. The gate stays the one place the
 suite runs unpinned, because that is the configuration that found the defect.
 
-This server still reports `conformance_class: core` in its discovery document, and the
-reason has changed twice. The missing feature is no longer one: session sharing (issue #57)
-is implemented, so nothing in class `full` is absent. The missing evidence is no longer one
-either: the 52/52 above was measured with sharing on and no model pinned.
+**`conformance_class` is no longer a constant, and what it reads depends on how `uhpd` was
+started** (issue #65). Three capabilities here are computed from configuration —
+`files_input`, `files_output` and `harness_management` — so a hardcoded class would be a
+claim the same document contradicts two fields later, which is what the suite's D-05 check
+("conformance_class agrees with capabilities") exists to catch. `conformanceClass` in
+`internal/transport/http/discovery.go` therefore reads the class off the very capability
+struct the document publishes:
 
-What is left is that **the class cannot honestly be a constant.** Three capabilities here
-are computed from configuration — `files_input`, `files_output` and `harness_management` —
-and the suite's own D-05 check tests the class against a list that includes the first two.
-A hardcoded `full` would therefore be a claim `uhpd` contradicts the moment it is started
-without `UHP_WORKSPACE`, and D-05 would catch it. Raising the class means computing it from
-the same booleans the capability list is built from, which is a change in its own right
-rather than a one-line edit. Capabilities a deployment does not offer stay reported as
-`false` rather than omitted — see [UHP surface implemented](#uhp-surface-implemented).
+| `uhpd` started with | Answers |
+| --- | --- |
+| nothing | `core` |
+| `UHP_WORKSPACE` | `extended` |
+| `UHP_WORKSPACE` + `UHP_SESSION_SHARING=1` | `full` |
+
+Only two variables appear because `uhpd` always hands the service a harness store — a
+durable one where a path is configured, an in-memory one otherwise — so
+`harness_management` is `true` on every deployment of this binary and never the reason a
+class is held down. The capability is still read rather than assumed, because the service
+is usable without one.
+
+**Session sharing gates `full` here even though D-05 does not require it.** The suite's
+list stops at `harness_management`; Sessions §5 is what makes sharing a `full` feature, and
+the stricter reading is the one that cannot be wrong. So a server with a workspace and
+sharing switched off answers `extended`, not `full`.
+
+The default `uhpd` — no workspace, sharing off — still answers `core`, and that is now a
+property of the configuration rather than a line someone remembered not to edit.
+Capabilities a deployment does not offer stay reported as `false` rather than omitted — see
+[UHP surface implemented](#uhp-surface-implemented).
 
 A skip is counted as a failure here, not as a pass.
 

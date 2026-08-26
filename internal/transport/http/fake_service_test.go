@@ -32,6 +32,10 @@ type fakeService struct {
 	getTask    func(context.Context, string) (*domain.Task, error)
 	cancelTask func(context.Context, string) error
 
+	filesEnabled             bool
+	harnessManagementEnabled bool
+	sessionSharingEnabled    bool
+
 	listSessions  func(context.Context, domain.SessionFilter) (domain.SessionPage, error)
 	getSession    func(context.Context, string) (*domain.Session, error)
 	sessionTurns  func(context.Context, string) ([]uhp.Turn, error)
@@ -92,3 +96,16 @@ func (f *fakeService) DeleteSession(ctx context.Context, id string) error {
 func newFakeServer(f *fakeService) *Server {
 	return NewServer(f, slog.Default(), nil, 0)
 }
+
+// The three configuration answers the discovery document reports. They are
+// plain fields rather than function hooks because there is nothing to observe
+// about the call — the handler asks each one once and publishes the answer.
+//
+// Unlike everything else here, these three answer rather than panic when a test
+// leaves them out, and their zero value is the deployment that offers least. A
+// handler test that reaches one of them without setting it therefore gets
+// "switched off" instead of a panic naming the method — so a 501 from a file
+// endpoint on a bare fakeService is this default, not the behaviour under test.
+func (f *fakeService) FilesEnabled() bool             { return f.filesEnabled }
+func (f *fakeService) HarnessManagementEnabled() bool { return f.harnessManagementEnabled }
+func (f *fakeService) SessionSharingEnabled() bool    { return f.sessionSharingEnabled }
