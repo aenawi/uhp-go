@@ -77,6 +77,11 @@ type TaskService struct {
 	// maxConcurrentRuns bounds how many harness processes may run at once.
 	maxConcurrentRuns int
 
+	// taskTimeout is the longest a task may run on this deployment: the budget
+	// applied when nothing narrows it, and the ceiling every narrower budget is
+	// clamped to. See resolveBudget.
+	taskBudget time.Duration
+
 	// idempotency remembers which Idempotency-Key started which run (Tasks §6).
 	idempotency *idempotencyKeys
 
@@ -102,6 +107,7 @@ func NewTaskService(reg Registry, store Store, log *slog.Logger, opts ...Option)
 		store:             store,
 		log:               log,
 		maxConcurrentRuns: DefaultMaxConcurrentRuns,
+		taskBudget:        DefaultTaskBudget,
 		idempotency:       newIdempotencyKeys(),
 	}
 	for _, o := range opts {
@@ -154,6 +160,21 @@ func WithMaxConcurrentRuns(n int) Option {
 	}
 }
 
+// WithTaskBudget bounds how long a task may run.
+//
+// A value of zero or less falls back to DefaultTaskBudget rather than meaning
+// "unbounded", on the same reading WithMaxConcurrentRuns takes of a
+// misconfigured number and for a sharper reason: Security §5 requires a server
+// to bound task duration, so "no bound" is not one of the answers available.
+func WithTaskBudget(d time.Duration) Option {
+	return func(s *TaskService) {
+		if d <= 0 {
+			d = DefaultTaskBudget
+		}
+		s.taskBudget = d
+	}
+}
+
 // WithDefaultHarness names the harness a task that names none runs on.
 //
 // It is an id or an alias and is not validated here: whether it resolves
@@ -189,6 +210,11 @@ type CreateTaskRequest struct {
 	// repeat of a key returns the first request's run instead of starting a
 	// second one (Tasks §6).
 	IdempotencyKey string
+
+	// TimeoutSeconds is the wall-clock budget this request asked for, or nil.
+	// It narrows the harness's budget and the deployment's, and cannot widen
+	// either; see resolveBudget.
+	TimeoutSeconds *int
 }
 
 // StartTask starts a task, or — for a repeated idempotency key — returns the
@@ -393,6 +419,11 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 		model = adapter.Info().DefaultModel
 	}
 
+	// The effective budget, resolved before the task record so that the number
+	// on the response is the number the supervisor will enforce rather than a
+	// second copy of the same arithmetic.
+	budget := resolveBudget(req.TimeoutSeconds, harnessCfg.TimeoutSeconds, s.taskBudget)
+
 	now := time.Now().UTC()
 	task := &domain.Task{
 		Response: uhp.Response{
@@ -411,6 +442,7 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 		SessionID:      sessionID,
 		Input:          input,
 		InputItems:     req.InputItems,
+		TimeoutSeconds: budgetSeconds(budget),
 		UpdatedAt:      now,
 	}
 	// The first of the two sync points ADR-0003 names. Everything the wire
@@ -466,7 +498,7 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 	// still shows up on the stream a client opened against the harness itself.
 	feed := s.runs.feed(canonicalHarnessID(harnessCfg, req.HarnessID, s.registry))
 
-	run := newRun(task.ID, sessionID, feed, func() {
+	run := newRun(task.ID, sessionID, feed, budget, func() {
 		if err := adapter.Cancel(runCtx, task.ID); err != nil {
 			s.log.Debug("adapter cancel", "error", err, "task_id", task.ID)
 		}
@@ -668,6 +700,28 @@ func (s *TaskService) applyUpdate(ctx context.Context, task *domain.Task, upd ha
 		// carrying status "cancelled"; the status field, not the event name,
 		// is authoritative.
 		return s.terminal(ctx, task, seq, "response.failed", rs)
+
+	case harness.UpdateIncomplete:
+		// Lifecycle §3: `incomplete` MUST be used when a budget stopped the
+		// work, and MUST NOT be used for errors — so Error stays null, and the
+		// reason goes in `incomplete_details`, which is the field it is for.
+		//
+		// The output produced before the budget bit is retained rather than
+		// discarded, which is also a MUST and which comes free from going
+		// through terminal() like every other terminal path: it captures
+		// artifacts and closes the open message item whatever ended the run.
+		task.Status = uhp.StatusIncomplete
+		task.Error = nil
+		// Omitted rather than written empty when the update names no budget.
+		// `{"reason": ""}` tells a client less than no details at all, and the
+		// one producer today always names one — so this is the honest answer
+		// for a future adapter that ends a run this way without saying which
+		// budget did it, not a default standing in for the case that happens.
+		task.IncompleteDetails = nil
+		if upd.Reason != "" {
+			task.IncompleteDetails = map[string]any{"reason": upd.Reason}
+		}
+		return s.terminal(ctx, task, seq, "response.incomplete", rs)
 
 	case harness.UpdateFailed:
 		task.Status = uhp.StatusFailed

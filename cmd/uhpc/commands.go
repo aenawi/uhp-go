@@ -330,6 +330,15 @@ func (c *cli) printStatus(resp *uhp.Response) {
 	if resp.Error != nil {
 		c.printf("error:  %s (%s)\n", resp.Error.Message, resp.Error.Code)
 	}
+	// The counterpart to the line above, and the reason the two are separate:
+	// a budget stopped the work part-way, which is not an error and is usually
+	// worth continuing. A status of `incomplete` with nothing beside it leaves
+	// the reader to guess which budget bit.
+	if resp.Status == uhp.StatusIncomplete {
+		if reason, ok := resp.IncompleteDetails["reason"].(string); ok && reason != "" {
+			c.printf("stopped: %s\n", reason)
+		}
+	}
 }
 
 func responseText(resp *uhp.Response) string {

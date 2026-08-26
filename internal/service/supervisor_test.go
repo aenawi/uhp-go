@@ -220,7 +220,7 @@ func TestNonPositiveLimitFallsBackToTheDefault(t *testing.T) {
 // to produce something on the wire. Events on its own is silent between
 // publishes, so a transport needs a tick it can hang a keep-alive off.
 func TestIdleTickFiresWhileNothingIsPublished(t *testing.T) {
-	run := newRun("resp_idle", "sess_idle", newFeed(0), func() {}, func() {})
+	run := newRun("resp_idle", "sess_idle", newFeed(0), DefaultTaskBudget, func() {}, func() {})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -262,7 +262,7 @@ func TestIdleTickFiresWhileNothingIsPublished(t *testing.T) {
 // subscriber sees, and in what order, must not depend on whether the transport
 // asked for one.
 func TestIdleTickChangesNoEventOrder(t *testing.T) {
-	run := newRun("resp_both", "sess_both", newFeed(0), func() {}, func() {})
+	run := newRun("resp_both", "sess_both", newFeed(0), DefaultTaskBudget, func() {}, func() {})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -286,7 +286,7 @@ func TestIdleTickChangesNoEventOrder(t *testing.T) {
 // error it returns has to end the subscription the same way an event write
 // failure does.
 func TestIdleTickErrorEndsTheSubscription(t *testing.T) {
-	run := newRun("resp_gone", "sess_gone", newFeed(0), func() {}, func() {})
+	run := newRun("resp_gone", "sess_gone", newFeed(0), DefaultTaskBudget, func() {}, func() {})
 	defer run.finish()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -95,6 +95,11 @@ the type offers and what this server does. Note that `max_step` and `timeout_sec
 a MUST *if honoured*: stop at or after the budget, report `incomplete`, and never report
 `completed` for truncated work. Implementing them later means implementing that too.
 
+> Since 2026-08-26 ([#54](https://github.com/aenawi/uhp-go/issues/54)) it is seven, not
+> eight: `timeout_seconds` is read and enforced, along with the MUST it carries.
+> `max_step` still gets silence, and that split is deliberate and stated — see
+> `docs/conformance.md`. The decision this ADR records is unaffected; only the count is.
+
 **The conformance suite measures none of those eight fields.** Its 52 checks contain no
 reference to `max_step`, `timeout_seconds`, `max_output_tokens`, `instructions` or
 `include`. The 52/52 `full` result is silent about all of them, and the same is true of

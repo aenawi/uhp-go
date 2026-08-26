@@ -63,9 +63,15 @@ type Run struct {
 	// release gives back the run slot this run holds. The run owns the slot
 	// for exactly as long as it owns the harness process.
 	release func()
+
+	// budget is the wall clock this run has, resolved once at creation from
+	// the request, the harness and the deployment. It is always positive:
+	// Security §5 requires a task to be bounded, so "no budget" is not a state
+	// a run can be in. See resolveBudget, and supervise for what enforces it.
+	budget time.Duration
 }
 
-func newRun(taskID, sessionID string, feed *Feed, cancel, release func()) *Run {
+func newRun(taskID, sessionID string, feed *Feed, budget time.Duration, cancel, release func()) *Run {
 	return &Run{
 		TaskID:    taskID,
 		SessionID: sessionID,
@@ -74,6 +80,7 @@ func newRun(taskID, sessionID string, feed *Feed, cancel, release func()) *Run {
 		cancel:    cancel,
 		done:      make(chan struct{}),
 		release:   release,
+		budget:    budget,
 	}
 }
 
@@ -320,7 +327,102 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 	seq := newSequencer()
 	run.publish(seq.next(uhp.Event{Type: "response.created", Response: responseOf(task)}))
 
-	for upd := range updates {
+	// The wall-clock budget, armed for as long as the run is (#54). Security §5
+	// requires a server to bound task duration, and nothing here did: a wedged
+	// CLI held its run slot for ever, and enough of them took the server
+	// permanently to capacity.
+	//
+	// It fires into this goroutine rather than into a timer callback because
+	// this goroutine is the task's only writer, which is what makes `expired`
+	// below need no synchronisation at all.
+	timer := time.NewTimer(run.budget)
+	defer timer.Stop()
+	budget := timer.C
+	expired := false
+
+	for {
+		var upd harness.RunUpdate
+		select {
+		case u, open := <-updates:
+			if !open {
+				for _, ev := range s.settleUnreported(ctx, task, seq, rs, expired) {
+					run.publish(ev)
+				}
+				return
+			}
+			upd = u
+		case <-budget:
+			// Stopped through the adapter's own Cancel — the same path
+			// CancelTask uses — so process-group teardown is not reimplemented
+			// here and a runtime that needs more than a signal to stop gets
+			// exactly what an explicit cancel would have given it.
+			//
+			// Without CancelTask's capability check, deliberately. That check
+			// refuses a *client* a stop the harness never advertised; this is
+			// the server keeping its own obligation under Security §5, and a
+			// harness that declines to advertise cancellation cannot thereby
+			// opt out of being bounded. What it can do is fail to stop — an
+			// adapter whose Cancel does nothing keeps its slot — which is a
+			// property of that adapter rather than something this can fix from
+			// here. All five CLI harnesses stop on a process-group kill.
+			//
+			// The run is not settled here. The adapter still owes a terminal
+			// update, and taking the answer from it is what keeps this from
+			// reporting a task finished while its process is still writing into
+			// the session's working directory — files that would then be
+			// captured as some later task's artifacts. What bounds the wait is
+			// the teardown itself: process.run kills the group and gives it
+			// WaitDelay before closing the pipes regardless.
+			expired = true
+			// Disarmed, so a second firing cannot re-enter this and cancel a
+			// run that has since been given back.
+			budget = nil
+			s.log.Info("task budget expired; stopping the run",
+				"task_id", task.ID, "budget", run.budget)
+			run.cancel()
+			continue
+		}
+
+		// Once a budget has stopped a run, the terminal update the adapter
+		// eventually produces is a report of the teardown *this* server caused,
+		// whatever the adapter calls it — so it is relabelled rather than
+		// believed.
+		//
+		// `cancelled` is the cooperative case, and it is not the one that
+		// bites. `failed` is: process.run tests its scan error before it tests
+		// its own cancellation, so a stdout read torn by the very kill the
+		// budget issued comes back `failed`; and three of the five CLIs report
+		// a problem by printing it, which parseLine turns into `failed` before
+		// the runner's terminal switch is reached at all — so a wedged agent
+		// that says anything on its way out lands here as a failure. Reporting
+		// either as `failed` tells a client the work could not be done, when
+		// what happened is that it ran out of time. That is the inversion
+		// Lifecycle §3 forbids, on the most likely real teardown.
+		//
+		// `completed` is left alone, deliberately. An agent that finished
+		// inside the window between the deadline firing and the kill landing
+		// produced whole work, and the MUST is not to report `completed` for
+		// work that was *truncated* — this work was not.
+		//
+		// A client cancel that lands in the same instant as the deadline is
+		// reported as incomplete, because the deadline is what this goroutine
+		// observed first. Nothing distinguishes them at this distance and the
+		// window is one scheduling quantum wide; the reverse order — a cancel
+		// applied before the deadline is ever selected — settles the task
+		// terminal and returns below without reaching here at all.
+		if expired && relabelAsIncomplete(upd.Type) {
+			if upd.Err != nil {
+				// Not lost, only kept out of the response: `incomplete` carries
+				// no error object, and an operator reading the log is the one
+				// who needs to know what the CLI said as it died.
+				s.log.Info("harness reported a failure after its budget expired; reporting incomplete",
+					"task_id", task.ID, "harness_error", upd.Err.Error())
+			}
+			upd.Type = harness.UpdateIncomplete
+			upd.Reason = reasonTimeout
+			upd.Err = nil
+		}
+
 		evs, err := s.applyUpdate(ctx, task, upd, seq, rs)
 		if err != nil {
 			// A client may delete this task's record while the run is still
@@ -350,31 +452,65 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 			return
 		}
 	}
+}
 
-	// The channel closed without a terminal update. That is an adapter bug,
-	// but the task must still reach a terminal state: the specification
-	// requires every task to end terminal, and a task stuck "in_progress"
-	// forever is the exact defect this design exists to prevent.
-	if !isTerminalStatus(task.Status) {
+// settleUnreported writes a terminal state for an adapter that closed its
+// update stream without reporting one. That is an adapter bug, but the task
+// must still reach a terminal state: the specification requires every task to
+// end terminal, and a task stuck "in_progress" forever is the exact defect this
+// design exists to prevent.
+//
+// What it settles as depends on whether a budget had already stopped the run.
+// A wedged runtime that is killed on its deadline and then says nothing has not
+// failed — the budget ended it, and Lifecycle §3 is explicit that a budget is
+// not an error — so reporting `failed` there would tell a client the work was
+// impossible when it was merely cut short.
+func (s *TaskService) settleUnreported(
+	ctx context.Context, task *domain.Task, seq *sequencer, rs *runState, expired bool,
+) []uhpgo.Event {
+	if isTerminalStatus(task.Status) {
+		return nil
+	}
+
+	evType := "response.failed"
+	if expired {
+		task.Status = uhp.StatusIncomplete
+		task.Error = nil
+		task.IncompleteDetails = map[string]any{"reason": reasonTimeout}
+		evType = "response.incomplete"
+	} else {
 		task.Status = uhp.StatusFailed
 		task.Error = &uhp.Error{
 			Type:    uhp.ErrorTypeHarness,
 			Code:    uhp.CodeHarnessError,
 			Message: "the harness closed its update stream without reporting a terminal state",
 		}
-		task.UpdatedAt = time.Now().UTC()
-		evs, err := s.terminal(ctx, task, seq, "response.failed", rs)
-		// Same excuse as the loop above, and it needs stating twice because
-		// this is the other place a write meets a deleted row: a task whose
-		// record went while its adapter was misbehaving fails here rather than
-		// there, and an ERROR would report the deletion as a storage fault.
-		if err != nil && !s.taskGone(ctx, task.ID) {
-			s.log.Error("persist terminal state failed", "error", err, "task_id", task.ID)
-		}
-		for _, ev := range evs {
-			run.publish(ev)
-		}
 	}
+	task.UpdatedAt = time.Now().UTC()
+
+	evs, err := s.terminal(ctx, task, seq, evType, rs)
+	// Same excuse as the loop above, and it needs stating twice because this is
+	// the other place a write meets a deleted row: a task whose record went
+	// while its adapter was misbehaving fails here rather than there, and an
+	// ERROR would report the deletion as a storage fault.
+	if err != nil && !s.taskGone(ctx, task.ID) {
+		s.log.Error("persist terminal state failed", "error", err, "task_id", task.ID)
+	}
+	return evs
+}
+
+// relabelAsIncomplete reports whether a terminal update from an adapter whose
+// budget has already expired should be rewritten as `incomplete`.
+//
+// Everything terminal except `completed`, and `incomplete` itself — which an
+// adapter that bounds its own steps would send, already carrying the reason
+// that overwriting it would destroy.
+func relabelAsIncomplete(t harness.UpdateType) bool {
+	switch t {
+	case harness.UpdateCancelled, harness.UpdateFailed:
+		return true
+	}
+	return false
 }
 
 func isTerminalStatus(st uhp.ResponseStatus) bool {

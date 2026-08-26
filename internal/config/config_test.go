@@ -3,6 +3,7 @@ package config
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // A deployment that has given this server a durable directory has already
@@ -67,5 +68,40 @@ func TestSessionSharingDefaultsOff(t *testing.T) {
 	t.Setenv("UHP_SESSION_SHARING", "1")
 	if !Load().SessionSharing {
 		t.Error("session sharing is off with UHP_SESSION_SHARING=1")
+	}
+}
+
+// UHP_TASK_TIMEOUT is the deployment's own bound on how long a task may run
+// (#54). It accepts a Go duration because that is what an operator writing
+// "30m" means, and a bare number because the protocol field it backstops is
+// spelled `timeout_seconds` — so "1800" and "30m" are the same configuration.
+//
+// Zero is passed straight through to the service, which substitutes its own
+// default, on the same rule MaxConcurrentRuns follows: config does not carry a
+// second copy of that number.
+func TestTaskTimeoutIsParsed(t *testing.T) {
+	cases := []struct {
+		set  string
+		want time.Duration
+	}{
+		{"", 0},
+		{"90m", 90 * time.Minute},
+		{"45s", 45 * time.Second},
+		{"1800", 30 * time.Minute},
+		// Nothing here means "unbounded": Security §5 requires a server to
+		// bound task duration, so a value that cannot be read as a positive
+		// duration falls back to the service's default rather than switching
+		// the bound off.
+		{"0", 0},
+		{"-5m", 0},
+		{"soon", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.set, func(t *testing.T) {
+			t.Setenv("UHP_TASK_TIMEOUT", tc.set)
+			if got := Load().TaskTimeout; got != tc.want {
+				t.Errorf("TaskTimeout = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

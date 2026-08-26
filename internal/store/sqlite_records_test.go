@@ -27,7 +27,7 @@ func TestSQLiteRecordsCoverDomainFields(t *testing.T) {
 		// field is covered.
 		atLeast int
 	}{
-		{name: "task", domainType: domain.Task{}, recordType: taskRecord{}, atLeast: 19},
+		{name: "task", domainType: domain.Task{}, recordType: taskRecord{}, atLeast: 20},
 		{name: "session", domainType: domain.Session{}, recordType: sessionRecord{}, atLeast: 9},
 		{name: "artifact", domainType: domain.Artifact{}, recordType: artifactRecord{}, atLeast: 7},
 	}

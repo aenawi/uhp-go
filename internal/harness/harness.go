@@ -117,13 +117,28 @@ const (
 	UpdateCompleted UpdateType = "completed"
 	UpdateFailed    UpdateType = "failed"
 	UpdateCancelled UpdateType = "cancelled"
+
+	// UpdateIncomplete ends a run because a budget stopped it, which is a
+	// different outcome from all three above and is why it is a fourth member
+	// rather than a flag on one of them: Lifecycle §3 requires `incomplete` for
+	// a budget and forbids it for an error, and a client reads the distinction
+	// as "this work is worth continuing".
+	//
+	// The router synthesizes it today. A wall-clock budget is enforced by the
+	// supervisor, which cancels the run through the adapter's own Cancel and
+	// relabels the `cancelled` that comes back — see service.supervise. It is
+	// declared here rather than kept internal because the *other* budget is
+	// not the router's to enforce: a step budget is counted by whatever runs
+	// the tool-call loop, so an adapter that bounds its own steps has this
+	// vocabulary waiting for it and needs no second mechanism.
+	UpdateIncomplete UpdateType = "incomplete"
 )
 
 // Terminal reports whether this update ends a run. Every terminal state must
 // answer true here, or a consumer blocks until the adapter closes the channel.
 func (t UpdateType) Terminal() bool {
 	switch t {
-	case UpdateCompleted, UpdateFailed, UpdateCancelled:
+	case UpdateCompleted, UpdateFailed, UpdateCancelled, UpdateIncomplete:
 		return true
 	}
 	return false
@@ -139,6 +154,12 @@ type RunUpdate struct {
 	Model     string
 	Usage     *uhp.Usage
 	Err       error
+
+	// Reason says which budget stopped an [UpdateIncomplete] run, and becomes
+	// `incomplete_details.reason` on the response. It is separate from Err
+	// because the two are opposites: Err says the work could not be done, and
+	// this says it was stopped part-way and could be continued.
+	Reason string
 }
 
 // Adapter is the single interface every harness backend must satisfy.

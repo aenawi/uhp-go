@@ -51,6 +51,22 @@ type Task struct {
 	HarnessID      string
 	RequestedModel string
 
+	// TimeoutSeconds is the wall-clock budget this run was given, and reaches
+	// a client the same way the three above do — inside `metadata`, because
+	// Response has nowhere else to put it.
+	//
+	// It is reported because the resolved value is not necessarily the one the
+	// client asked for: a request may narrow the deployment's bound and not
+	// widen it, so a caller that asked for a day and was given half an hour
+	// finds that out here rather than by watching a task stop early.
+	//
+	// Zero means no budget, which nothing in this server produces: every task
+	// gets one, and service.budgetSeconds rounds a sub-second budget up to one
+	// rather than truncating it away — a bound enforced and not reported is the
+	// reporting half of #54 undone. The projection below therefore omits the
+	// key only for a Task nothing ever ran.
+	TimeoutSeconds int
+
 	// The genuinely internal four: nothing below reaches a client on the
 	// response object. InputItems reaches one on its own endpoint.
 	Input string
@@ -111,6 +127,12 @@ func (t *Task) SyncMetadata() {
 	}
 	if t.HarnessID != "" {
 		meta["harness_id"] = t.HarnessID
+	}
+	// Security §5 makes bounding a task this server's obligation; reporting the
+	// bound is what makes it something the client can act on rather than a
+	// silent truncation it has to infer.
+	if t.TimeoutSeconds > 0 {
+		meta["timeout_seconds"] = t.TimeoutSeconds
 	}
 
 	// Tasks §1.3: a client must always be able to answer "did the model I
