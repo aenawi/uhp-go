@@ -106,12 +106,18 @@ CONFORMANCE_REPORT ?= conformance-report.json
 # The suite's exit code is not the whole verdict, which is why the report is
 # read afterwards: skips exit zero, and a skip is never a pass.
 #
-# UHP_CLASS=full needs the *server* started with UHP_SESSION_SHARING=1. The
-# capability is off by default, so a full-class gate against a server without it
-# is measuring one that reports `session_sharing: false` — the same shape of
-# mistake as #43, where the configuration that exercises the feature was the one
-# nothing ran. Nothing here can check that: this target points at a server it
-# did not start.
+# UHP_CLASS=full needs the *server* started with UHP_SESSION_SHARING=1, and with
+# UHP_WORKSPACE and a harness store. The capability is off by default, so a
+# full-class gate against a server without it is measuring one that reports
+# `session_sharing: false` — the same shape of mistake as #43, where the
+# configuration that exercises the feature was the one nothing ran. Nothing here
+# can check that: this target points at a server it did not start.
+#
+# What it is no longer invisible in is the document. Since #65 the server
+# computes `conformance_class` from those same capabilities, so a server
+# misconfigured for a full-class run says so in `GET /v1/uhp` — it answers
+# `core` or `extended`, not `full` — instead of claiming a class it cannot
+# defend. Read the class off discovery before trusting a UHP_CLASS=full score.
 conformance-gate:
 	@test -n "$$UHP_HARNESS_ID" || { echo "UHP_HARNESS_ID is required: the gate must name the harness it measures"; exit 1; }
 	# Removed before the run, not after it. The suite writes this file only if

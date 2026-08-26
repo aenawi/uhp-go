@@ -164,3 +164,92 @@ func TestListHarnessesEmptyIsAnArrayNotNull(t *testing.T) {
 		t.Fatalf("expected no harnesses, got %v", got)
 	}
 }
+
+// d05Required is the list check D-05 of the conformance suite ("conformance_class
+// agrees with capabilities") holds a class to, copied from the suite at the
+// pinned revision 95b96d7ce473ab59d510e1690c73cc6660d0a73e rather than
+// paraphrased. `session_sharing` is deliberately absent from `full` there; see
+// TestConformanceClassIsComputedFromTheCapabilitiesItClaims for why this
+// server is stricter than the list it must satisfy.
+var d05Required = map[string][]string{
+	"core": {"streaming", "sessions", "cancellation"},
+	"extended": {"streaming", "sessions", "cancellation",
+		"files_input", "files_output", "session_listing"},
+	"full": {"streaming", "sessions", "cancellation",
+		"files_input", "files_output", "session_listing", "harness_management"},
+}
+
+// The class is a claim about the deployment, not about the binary, and three of
+// the capabilities it has to agree with are answers to how uhpd was started.
+// So the class is asserted over the configurations that produce it, and each
+// document is then held to D-05's own rule: every capability the class it
+// claims requires is true in that same document.
+//
+// The case that matters most is the bare one — no workspace, no harness store,
+// sharing off — which must report `core` and must not report `full` merely
+// because the binary contains the code for all of it.
+func TestConformanceClassIsComputedFromTheCapabilitiesItClaims(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		files             bool
+		harnessManagement bool
+		sessionSharing    bool
+		want              string
+	}{
+		{"bare", false, false, false, "core"},
+		{"sharing only", false, false, true, "core"},
+		{"harness management only", false, true, false, "core"},
+		{"no workspace", false, true, true, "core"},
+		{"workspace only", true, false, false, "extended"},
+		{"no harness store", true, false, true, "extended"},
+		{"no sharing", true, true, false, "extended"},
+		{"everything", true, true, true, "full"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newFakeServer(&fakeService{
+				filesEnabled:             tc.files,
+				harnessManagementEnabled: tc.harnessManagement,
+				sessionSharingEnabled:    tc.sessionSharing,
+			})
+
+			status, body := callJSON(t, srv, "GET", "/v1/uhp", "")
+			if status != 200 {
+				t.Fatalf("expected 200, got %d: %v", status, body)
+			}
+			if body["conformance_class"] != tc.want {
+				t.Fatalf("class %v, want %v", body["conformance_class"], tc.want)
+			}
+
+			caps, ok := body["capabilities"].(map[string]any)
+			if !ok {
+				t.Fatalf("no capabilities object: %v", body)
+			}
+			for _, c := range d05Required[tc.want] {
+				if caps[c] != true {
+					t.Fatalf("class %s requires %s, document reports %v", tc.want, c, caps[c])
+				}
+			}
+		})
+	}
+}
+
+// The stricter half of the decision, asserted rather than left to the comment
+// that records it: sharing gates `full` here even though D-05 would accept a
+// `full` claim without it. A server with everything but sharing is `extended`,
+// and the capability it is missing is reported false in the same document.
+func TestFullRequiresSessionSharingEvenThoughTheSuiteDoesNot(t *testing.T) {
+	srv := newFakeServer(&fakeService{
+		filesEnabled:             true,
+		harnessManagementEnabled: true,
+		sessionSharingEnabled:    false,
+	})
+
+	_, body := callJSON(t, srv, "GET", "/v1/uhp", "")
+	if body["conformance_class"] != "extended" {
+		t.Fatalf("class %v, want extended", body["conformance_class"])
+	}
+	caps, _ := body["capabilities"].(map[string]any)
+	if caps["session_sharing"] != false {
+		t.Fatalf("session_sharing %v, want false", caps["session_sharing"])
+	}
+}
