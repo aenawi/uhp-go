@@ -369,3 +369,77 @@ func TestStreamingFromZeroSendsNoResumeHeader(t *testing.T) {
 		t.Error("a stream from the beginning sent a Last-Event-ID")
 	}
 }
+
+// Every object in the schema is `additionalProperties: true`, so a server is
+// entitled to extend the harness object and this repository's does — with
+// `status`, `models` and `capabilities`, which is how a client learns whether a
+// harness is reachable at all. [Harness] has no field for any of them, and a
+// decoder drops what it cannot land, so a client that only ever sees the
+// protocol type cannot ask the question.
+//
+// These two methods are the way out of that, and what they must preserve is
+// both halves at once: the protocol fields, decoded exactly as [Client.GetHarness]
+// would decode them, and whatever the server sent alongside.
+func TestClientDecodesAHarnessIntoAnExtendedType(t *testing.T) {
+	const body = `{"id":"chrn_x","object":"harness","name":"X","base":"echo",
+		"status":"ready","models":["m-1","m-2"],"capabilities":["streaming"]}`
+	c, _ := stubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("UHP-Version", Version)
+		if r.URL.Path == "/v1/harnesses" {
+			fmt.Fprintf(w, `{"object":"list","harnesses":[%s]}`, body)
+			return
+		}
+		fmt.Fprint(w, body)
+	})
+	ctx := context.Background()
+
+	// The extension type a server-aware client declares. uhpgo.Harness is one
+	// of these; this package cannot import it, and does not need to — the
+	// method's contract is about any type, not that one.
+	type extended struct {
+		Harness
+		Models       []string `json:"models"`
+		Capabilities []string `json:"capabilities"`
+		Status       string   `json:"status"`
+	}
+
+	var one extended
+	if err := c.GetHarnessInto(ctx, "chrn_x", &one); err != nil {
+		t.Fatalf("GetHarnessInto: %v", err)
+	}
+	if one.ID != "chrn_x" || one.Base != "echo" {
+		t.Errorf("the protocol half came back as %+v", one.Harness)
+	}
+	if one.Status != "ready" || len(one.Models) != 2 || len(one.Capabilities) != 1 {
+		t.Errorf("the extensions came back as status=%q models=%v capabilities=%v",
+			one.Status, one.Models, one.Capabilities)
+	}
+
+	var all []extended
+	if err := c.ListHarnessesInto(ctx, &all); err != nil {
+		t.Fatalf("ListHarnessesInto: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("ListHarnessesInto returned %d harnesses, want 1", len(all))
+	}
+	if all[0].ID != "chrn_x" || all[0].Status != "ready" || len(all[0].Models) != 2 {
+		t.Errorf("listed harness = %+v", all[0])
+	}
+}
+
+// An empty list is a legitimate answer, and the extended path has its own
+// decode of the envelope — so it has its own way to turn one into a failure.
+func TestListHarnessesIntoAcceptsAnEmptyList(t *testing.T) {
+	c, _ := stubServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("UHP-Version", Version)
+		fmt.Fprint(w, `{"object":"list","harnesses":[]}`)
+	})
+
+	var all []Harness
+	if err := c.ListHarnessesInto(context.Background(), &all); err != nil {
+		t.Fatalf("ListHarnessesInto: %v", err)
+	}
+	if len(all) != 0 {
+		t.Errorf("harnesses = %+v, want none", all)
+	}
+}

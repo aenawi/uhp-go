@@ -70,7 +70,7 @@ go install github.com/aenawi/uhp-go/cmd/uhpc@latest
 
 export UHP_BASE_URL=http://localhost:8080 UHP_API_KEY=devkey
 uhpc discover                                   # what this server can do
-uhpc harnesses                                  # what it can run
+uhpc harnesses                                  # what it can run, and which of them are ready
 uhpc run --stream "summarise the README"        # a task, rendered as it arrives
 uhpc watch chrn_…                               # every task on a harness, live
 ```
@@ -140,7 +140,7 @@ for {
 }
 ```
 
-Three things worth knowing before you depend on it:
+Four things worth knowing before you depend on it:
 
 - **It models the protocol, not this server.** All 23 schema objects are there with every
   field, including the ones this server ignores — `docs/conformance.md` records which. A
@@ -149,6 +149,19 @@ Three things worth knowing before you depend on it:
   a dependency on this implementation. Nothing in `uhp` imports anything outside the standard
   library, and module graph pruning means importing it does not pull the SQLite tree into
   your build.
+- **A server's extensions need a type to land in.** Every object in the schema is
+  `additionalProperties: true`, and a decoder drops what it cannot land — so
+  `uhp.Client.GetHarness` returning a `uhp.Harness` silently loses this server's `status`,
+  `models` and `capabilities`. `GetHarnessInto` and `ListHarnessesInto` take the shape from
+  the caller instead, which is how `uhpc` shows whether a harness is reachable:
+
+  ```go
+  var h uhpgo.Harness // uhp.Harness plus this server's three additions
+  err := c.GetHarnessInto(ctx, id, &h)
+  ```
+
+  Against a server that sends none of them the additions decode as zero values, so the call
+  stays portable even though the extra fields are not.
 - **Use keyed struct literals.** UHP permits adding response fields within a published
   version and these types will follow; `uhp.Response{a, b, c}` stops compiling when one
   arrives, and `uhp.Response{ID: …}` does not.
@@ -250,9 +263,11 @@ uhp/                       the protocol: all 23 objects of UHP 2026-08-11, an SS
 uhp/uhpgo/                 what this server adds to UHP, kept out of uhp so the boundary
                            between protocol and implementation is compiler-visible
 cmd/uhpd/                  composition root (main.go) — the only file wiring concrete types together
-cmd/uhpc/                  a client for any UHP server, built on uhp.Client. Imports uhp and the
-                           standard library and nothing else — a client that special-cased the
-                           server next door would stop being evidence about the protocol
+cmd/uhpc/                  a client for any UHP server, built on uhp.Client. Imports uhp, the
+                           standard library, and uhpgo in the two harness reads alone, so that
+                           `status` and `models` survive the decode — an addition it renders and
+                           never requires, since a client that special-cased the server next door
+                           would stop being evidence about the protocol
 internal/domain/           entities: Task, Session, Artifact — no external deps. Each embeds
                            the uhp type it is reported as, so there is one shape per concept
 internal/harness/          the adapter contract, the shared subprocess runner, the

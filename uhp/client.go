@@ -121,20 +121,74 @@ func (c *Client) Discover(ctx context.Context) (*Discovery, error) {
 }
 
 // ListHarnesses fetches GET /v1/harnesses. The list may legitimately be empty.
+//
+// It decodes the protocol's harness object and nothing else. A server that
+// extends it — and every object in the schema is `additionalProperties: true`,
+// so any server may — sends fields this type has no home for, and a decoder
+// drops what it cannot land. [Client.ListHarnessesInto] is how a client that
+// knows a particular server keeps them.
 func (c *Client) ListHarnesses(ctx context.Context) ([]Harness, error) {
-	var out struct {
-		Harnesses []Harness `json:"harnesses"`
-	}
-	if err := c.get(ctx, "/v1/harnesses", nil, &out); err != nil {
+	var out []Harness
+	if err := c.ListHarnessesInto(ctx, &out); err != nil {
 		return nil, err
 	}
-	return out.Harnesses, nil
+	return out, nil
 }
 
-// GetHarness fetches GET /v1/harnesses/{id}.
+// GetHarness fetches GET /v1/harnesses/{id}. It decodes the protocol's object;
+// see [Client.ListHarnesses] for what that leaves out and
+// [Client.GetHarnessInto] for the way to keep it.
 func (c *Client) GetHarness(ctx context.Context, id string) (*Harness, error) {
 	var out Harness
-	return &out, c.get(ctx, "/v1/harnesses/"+url.PathEscape(id), nil, &out)
+	return &out, c.GetHarnessInto(ctx, id, &out)
+}
+
+// GetHarnessInto fetches GET /v1/harnesses/{id} and decodes the harness into
+// out, whatever out is — in particular a type that embeds [Harness] and adds
+// the fields a specific server extends it with.
+//
+// # Why this is in the protocol's client
+//
+// Because the extensibility is the protocol's. Every object in
+// uhp-2026-08-11.schema.json is `additionalProperties: true`, so a server MAY
+// send fields UHP does not define, and a client that wants them needs somewhere
+// to put them. This method knows nothing about which fields those are or which
+// server sends them: it names the endpoint, and the caller names the shape.
+//
+//	var h uhpgo.Harness // uhp.Harness plus this server's three additions
+//	err := c.GetHarnessInto(ctx, id, &h)
+//
+// What the caller gives up is portability of the extra fields, not of the call:
+// against a server that sends none of them, the additions decode as their zero
+// values and the protocol half is exactly what [Client.GetHarness] returns.
+func (c *Client) GetHarnessInto(ctx context.Context, id string, out any) error {
+	return c.get(ctx, "/v1/harnesses/"+url.PathEscape(id), nil, out)
+}
+
+// ListHarnessesInto fetches GET /v1/harnesses and decodes the `harnesses` array
+// into out, which must be a pointer to a slice. See [Client.GetHarnessInto] for
+// why this exists.
+//
+// The array is decoded in a second pass rather than by declaring out as the
+// envelope's field, so that the type a caller hands in is the element type
+// rather than something wrapping it — the same shape they pass to
+// [Client.GetHarnessInto], for what is the same object.
+func (c *Client) ListHarnessesInto(ctx context.Context, out any) error {
+	var envelope struct {
+		Harnesses json.RawMessage `json:"harnesses"`
+	}
+	if err := c.get(ctx, "/v1/harnesses", nil, &envelope); err != nil {
+		return err
+	}
+	// An absent key and a null array are both "this server listed nothing",
+	// which leaves out as the caller passed it rather than being an error.
+	if len(envelope.Harnesses) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(envelope.Harnesses, out); err != nil {
+		return fmt.Errorf("uhp: decode response: %w", err)
+	}
+	return nil
 }
 
 // CreateHarness posts POST /v1/harnesses (conformance class full).

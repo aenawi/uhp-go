@@ -8,9 +8,15 @@
 // covers the surface fails to compile against a server missing an endpoint,
 // which is cheaper than reading.
 //
-// It imports only uhp and the standard library. Nothing in it knows what
-// uhp-go is, deliberately: a client that special-cases the server next door has
-// stopped being evidence about the protocol.
+// It is built on uhp and the standard library, and reaches for uhp/uhpgo in
+// exactly one place: the two harness reads, which decode into the extended
+// harness object so that `status`, `models` and `capabilities` survive. That is
+// a deliberate and bounded exception to a rule worth keeping — a client that
+// special-cases the server next door has stopped being evidence about the
+// protocol — and it stays evidence because the exception is additive. Every
+// request uhpc sends is the protocol's, every other decode is the protocol's,
+// and against a server that reports none of the three the harness commands
+// print what the protocol defines and say they were told nothing else.
 package main
 
 import (
@@ -33,8 +39,8 @@ Usage:
 
 Commands:
   discover                        the capability document (needs no credential)
-  harnesses                       list configured harnesses
-  harness <id>                    one harness
+  harnesses                       list configured harnesses, with each one's status
+  harness <id>                    one harness: how it is configured and what it can run
   models [harness-id]             the model catalogue, or one harness's models
   run <prompt>                    run a task and print the answer
   get <response-id>               read a task back
