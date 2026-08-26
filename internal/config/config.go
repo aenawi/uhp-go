@@ -10,6 +10,11 @@ import (
 )
 
 type Config struct {
+	// Addr is the listen address, and it defaults to loopback rather than to
+	// every interface. Authentication is off unless UHP_API_KEYS is set, so
+	// the default bind is what decides whether the default server is a local
+	// tool or an open one; a deployment that wants to be reachable says so,
+	// and CheckAuthPosture makes it say so with a credential.
 	Addr         string
 	APIKeys      []string
 	Workspace    string
@@ -72,7 +77,7 @@ type Config struct {
 func Load() Config {
 	workspace := os.Getenv("UHP_WORKSPACE")
 	return Config{
-		Addr:         getEnv("UHP_ADDR", ":8080"),
+		Addr:         getEnv("UHP_ADDR", "127.0.0.1:8080"),
 		APIKeys:      splitCSV(os.Getenv("UHP_API_KEYS")),
 		Workspace:    workspace,
 		HarnessStore: harnessStorePath(os.Getenv("UHP_HARNESS_STORE"), workspace),

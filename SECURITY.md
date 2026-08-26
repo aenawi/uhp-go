@@ -36,8 +36,11 @@ clients. That is its purpose, not a vulnerability. The security boundary is:
 - Vulnerabilities in the harness CLIs themselves (`claude`, `codex`, `grok`, `opencode`,
   `pi`). Report those to their vendors.
 - Running `uhpd` with `UHP_API_KEYS` unset. That disables authentication by design and is
-  documented as local-development-only; exposing such an instance to a network is a
-  deployment error.
+  documented as local-development-only — see [Authentication](README.md#authentication).
+  Such a server binds `127.0.0.1` by default, refuses to start on any other address, and
+  warns at startup, so exposing one to a network is a deployment error made against three
+  refusals. A way to reach an unkeyed server from off the machine it runs on — a bind the
+  loopback check accepts and the network does not agree is loopback — is in scope.
 - Running the container as root, or otherwise not applying the deployment hardening the
   README describes.
 

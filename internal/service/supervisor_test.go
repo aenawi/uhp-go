@@ -38,8 +38,9 @@ func drain(t *testing.T, svc *TaskService, taskID string, run *Run) {
 }
 
 // Issue #5: every accepted task forks a CLI process, and nothing else in the
-// path says no. Auth is off unless UHP_API_KEYS is set, so an unbounded number
-// of them is an unauthenticated fork bomb.
+// path says no. Auth is off unless UHP_API_KEYS is set — on loopback only,
+// since #55 — so an unbounded number of them is an unauthenticated fork bomb
+// that needs no more than a local caller.
 func TestConcurrentRunsAreBounded(t *testing.T) {
 	a := newSlowAdapter()
 	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger(), WithMaxConcurrentRuns(2))

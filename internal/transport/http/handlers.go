@@ -180,7 +180,15 @@ func refuseDotSegments(next http.Handler) http.Handler {
 }
 
 // withAuth enforces bearer-token auth (UHP "Security" chapter). If no keys
-// are configured, auth is skipped — useful for local dev only.
+// are configured, auth is skipped — a local tool rather than a conformant
+// server, since Security §1 requires a credential on every endpoint but
+// `GET /v1/uhp`.
+//
+// That skip is not a decision this function is allowed to make on its own.
+// `uhpd` refuses to start unauthenticated on anything but a loopback address,
+// and warns when it starts unauthenticated at all, so by the time a request
+// reaches here an empty key list means an operator asked for a local tool and
+// was told what they asked for. See config.CheckAuthPosture and issue #55.
 //
 // Every configured key is equivalent: this server has one principal, so
 // "scope file access to the owning principal" (Files §5) is satisfied by
