@@ -562,7 +562,7 @@ this is the table that says which:
 | `insufficient_scope` | one principal, so nothing is ever out of scope | #56 takes option (b) |
 | `rate_limited` | no rate limiting | a limiter is added |
 | `quota_exhausted` | no quota accounting | quotas exist |
-| `timeout` | nothing bounds a task's wall clock | #54 lands |
+| `timeout` | a wall-clock budget is enforced since #54, but a budget is not an error: it produces `status: "incomplete"` with `incomplete_details.reason: "timeout"`, and `error` stays null | an adapter reports an *upstream* timeout it can tell apart from a harness failure |
 | `provider_error` | adapter failures are all reported as `harness_error` | adapters distinguish an upstream refusal |
 | `preview_failed` | `/pdf` always answers `501 preview_unavailable`; no conversion is attempted | conversion is implemented |
 
@@ -572,23 +572,44 @@ was that nothing said so, which left a client author writing a `switch` over `uh
 with seven arms that never fire and no way to learn it from either the package or these
 docs. Issue #61.
 
-**Nothing in the suite sends eight of the thirteen request fields.**
-`CreateResponseRequest` has 13 properties in the schema; `createTaskBody` reads five. The 52
+**Nothing in the suite sends seven of the thirteen request fields.**
+`CreateResponseRequest` has 13 properties in the schema; `createTaskBody` reads six. The 52
 checks contain no reference to `max_step`, `timeout_seconds`, `max_output_tokens`,
 `instructions` or `include`, so the 52/52 `full` result is silent about every one of them —
-and about `tools` and `store` besides. Dropping them is the specified behaviour rather than a
-defect: Tasks §1.1 marks all eight optional and requires a server to ignore request fields it
-does not understand rather than reject them. So this is not a check that fails, and not a
-check that passes; it is a column of the request surface the suite never fills in. Issue #48.
+and about `tools` and `store` besides. Dropping the ones this server does not read is the
+specified behaviour rather than a defect: Tasks §1.1 marks all of them optional and requires
+a server to ignore request fields it does not understand rather than reject them. So this is
+not a check that fails, and not a check that passes; it is a column of the request surface
+the suite never fills in. Issue #48.
 
 All thirteen are now *published*, on `uhp.CreateResponseRequest`, which widens the distance
 rather than closing it: a caller can set `MaxStep` in Go, against a server that will ignore
 it, and get no error from either side. That is the deliberate consequence recorded in
 ADR-0002 — the package models the protocol, not this server — and it is why the gap is
-written down here instead of being hidden by a narrower type. Two of the eight carry a MUST
-*if honoured*: a server that acts on `max_step` or `timeout_seconds` must stop at or after
-the budget, report `incomplete`, and never report `completed` for truncated work.
-Implementing them later means implementing that too.
+written down here instead of being hidden by a narrower type.
+
+**`timeout_seconds` is the one that has since moved,** and it is worth being exact about
+what moved and what did not. Two of the thirteen carry a MUST *if honoured* — a server that
+acts on `max_step` or `timeout_seconds` must stop at or after the budget, report
+`incomplete`, and never report `completed` for truncated work — and #54 took that on for the
+wall clock only:
+
+- **`timeout_seconds` is read and enforced.** Every task runs under a budget resolved from
+  the request, then the harness, then `UHP_TASK_TIMEOUT`, clamped to the last; the resolved
+  value comes back as `metadata.timeout_seconds`; a run that outlives it is stopped, reported
+  `incomplete` with `incomplete_details.reason: "timeout"`, terminated on a stream with
+  `response.incomplete`, and keeps whatever it had produced. `error` stays null, because
+  Lifecycle §3 forbids `incomplete` for errors and reserves `failed` for work that could not
+  be done. See [Task budgets](../README.md#task-budgets).
+- **`max_step` is not, and is deliberately not implied by it.** Nothing in this server counts
+  tool-call rounds and only some adapters emit anything a round could be counted from, so it
+  is still accepted and dropped. That split is written down rather than left to be inferred:
+  a server honouring one budget and silently discarding the other is the same defect #54 was
+  about, one field over. Tracked as #72.
+
+No check in the suite sends either, so none of this shows up in the score. It is measured by
+`internal/service/budget_test.go` and `internal/transport/http/budget_test.go` instead —
+which is the honest place for it, and not a substitute for a check that does not exist.
 
 `store` is the one worth naming separately, because the field is not merely unimplemented but
 inert: `Task.Store` is hardcoded `true` at `internal/service/task_service.go:357` and the

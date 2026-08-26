@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -24,6 +25,13 @@ type Config struct {
 	// accepted task forks a CLI, so without a bound a single unauthenticated
 	// caller can fork the host to a standstill.
 	MaxConcurrentRuns int
+
+	// TaskTimeout is the longest a task may run here: the budget applied when
+	// neither the request nor the harness names one, and the ceiling both are
+	// clamped to. Zero means unset and the service substitutes its own default,
+	// which is not the same as unbounded — Security §5 requires a server to
+	// bound task duration, so there is deliberately no way to switch it off.
+	TaskTimeout time.Duration
 
 	// HarnessStore is where harnesses created over the API are kept. Empty
 	// means harness management is off, and discovery reports it as off:
@@ -86,6 +94,7 @@ func Load() Config {
 		// Zero is passed straight through to the service, which substitutes its
 		// own default. Config does not carry a second copy of that number.
 		MaxConcurrentRuns: int(getEnvInt("UHP_MAX_CONCURRENT_RUNS", 0)),
+		TaskTimeout:       envDuration(os.Getenv("UHP_TASK_TIMEOUT")),
 		PublicBaseURL:     strings.TrimSuffix(os.Getenv("UHP_PUBLIC_URL"), "/"),
 		SessionSharing:    envBool(os.Getenv("UHP_SESSION_SHARING")),
 		DefaultHarness:    strings.TrimSpace(os.Getenv("UHP_DEFAULT_HARNESS")),
@@ -122,6 +131,40 @@ func getEnvInt(key string, fallback int64) int64 {
 		return fallback
 	}
 	return n
+}
+
+// maxDuration is the largest time.Duration, which is a little under 292 years.
+const maxDuration = time.Duration(1<<63 - 1)
+
+// envDuration reads a duration an operator may have written either way.
+//
+// A Go duration — "30m", "90s" — is what someone naming a timeout writes, and a
+// bare number is read as seconds because the protocol field this backstops is
+// spelled `timeout_seconds`, so an operator who has been reading the Tasks
+// chapter reaches for "1800" and means the same thing.
+//
+// Anything else, including a value that is not positive, answers zero: the
+// caller substitutes its own default, and the one thing that must not happen is
+// a typo switching the bound off. See the note on Config.TaskTimeout.
+func envDuration(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if seconds, err := strconv.ParseInt(v, 10, 64); err == nil {
+		// The upper guard is not defensiveness for its own sake: multiplying a
+		// number of seconds larger than a Duration can hold wraps, and a wrap
+		// that lands positive is a bound nobody chose.
+		if seconds <= 0 || seconds > int64(maxDuration/time.Second) {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
 }
 
 // envBool reads a boolean switch, accepting the spellings an operator actually

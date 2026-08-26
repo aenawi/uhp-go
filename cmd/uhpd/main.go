@@ -139,6 +139,11 @@ func main() {
 	opts := []service.Option{
 		service.WithUploads(store.NewMemoryUploads()),
 		service.WithMaxConcurrentRuns(cfg.MaxConcurrentRuns),
+		// Zero when UHP_TASK_TIMEOUT is unset or unreadable, which the service
+		// turns into its own default. There is no spelling of "unbounded":
+		// Security §5 makes bounding task duration this server's obligation,
+		// and before #54 nothing here did it.
+		service.WithTaskBudget(cfg.TaskTimeout),
 	}
 	if cfg.Workspace != "" {
 		opts = append(opts, service.WithWorkspace(cfg.Workspace))

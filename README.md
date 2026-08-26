@@ -882,6 +882,7 @@ properties of `service.Store`, not of whichever engine a deployment configured.
 | `UHP_DB` | `$UHP_WORKSPACE/uhp.db`, or unset = tasks and sessions in memory | SQLite file holding tasks and sessions |
 | `UHP_MAX_BODY_BYTES` | `8388608` | Maximum accepted request body, and the upload limit |
 | `UHP_MAX_CONCURRENT_RUNS` | `8` | Harness processes allowed to run at once; beyond it, `503 harness_unavailable` |
+| `UHP_TASK_TIMEOUT` | `30m` | Longest a task may run, and the ceiling `timeout_seconds` is clamped to. A Go duration (`30m`) or a bare number of seconds (`1800`) — see [Task budgets](#task-budgets) |
 | `UHP_PUBLIC_URL` | (unset = relative URLs) | Origin used to build absolute artifact download and share URLs |
 | `UHP_SESSION_SHARING` | `false` | `1` or `true` serves the unauthenticated read views of Sessions §5. Off by default — see [Session sharing](#session-sharing) |
 | `UHP_DEFAULT_HARNESS` | (unset = the sole ready harness, if there is exactly one) | Harness a task that names none runs on. `uhpd` refuses to start if it names nothing |
@@ -960,6 +961,53 @@ the client the truth while it can still act on it.
 The bound is not tuned for your hardware. Raise it once you know what a run actually costs
 on the host; a value of zero or less is treated as a misconfiguration and falls back to the
 default rather than meaning "unbounded".
+
+### Task budgets
+
+Concurrency alone is not a bound. A slot is held for as long as its agent runs, so a CLI
+that wedges holds one for ever — and enough wedged agents take the server permanently to
+capacity, refusing every later task with a `503` that tells the client to retry for a
+condition retrying never clears. Security §5 asks for the other half: **a server MUST bound
+task duration.**
+
+Every task therefore runs under a wall-clock budget, resolved in this order:
+
+1. the request's `timeout_seconds`,
+2. the harness's configured `timeout_seconds`,
+3. `UHP_TASK_TIMEOUT`, which defaults to 30 minutes.
+
+**The last is a ceiling as well as a default.** A request or a harness may narrow the bound
+the deployment set and may not widen it, because a bound a caller can raise without limit is
+not one. So `timeout_seconds: 86400` against a default server is answered — not refused —
+with a budget of 1800 seconds, and the response says so: the resolved value is on every
+response as `metadata.timeout_seconds`, which is what makes narrowing a fact the client can
+read rather than an override it has to infer from when the work stopped. A `timeout_seconds`
+that is zero or negative *is* refused, with `400 invalid_input` and
+`param: "timeout_seconds"` — there is no reading of "a budget of no seconds" a caller could
+have wanted, and silently substituting the server's own would be the same defect in a
+quieter form.
+
+When the budget bites, the run is stopped through the same path `POST
+/v1/responses/{id}/cancel` uses — so the process group is torn down once, in one place — and
+the task reaches:
+
+```json
+{"status": "incomplete", "error": null, "incomplete_details": {"reason": "timeout"}}
+```
+
+`incomplete`, not `failed`: Lifecycle §3 reserves `failed` for work that could not be done,
+and the distinction is what tells a client this work is worth continuing. `incomplete`, not
+`cancelled`: nobody asked for a stop. On a stream the terminal event is `response.incomplete`
+rather than `response.failed`. Whatever the agent produced before the deadline is retained on
+the response, artifacts included, because the budget path settles through the same code every
+other terminal path does.
+
+**`max_step` is not implemented and is deliberately not implied by this.** It is a budget on
+tool-call rounds, nothing in this server counts one, and only some adapters emit anything a
+round could be counted from — so it stays accepted and dropped, as Tasks §1.1 permits, and is
+tracked separately. A server that honoured `timeout_seconds` and let `max_step` look honoured
+too would be back in the position this section is about; saying which one is enforced is the
+price of enforcing either. Tracked as [#72](https://github.com/aenawi/uhp-go/issues/72).
 
 ## Idempotency
 

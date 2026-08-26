@@ -48,6 +48,7 @@ type taskRecord struct {
 	RequestedModel  string            `json:"requested_model"`
 	Artifacts       []artifactRecord  `json:"artifacts"`
 	NativeSessionID string            `json:"native_session_id"`
+	TimeoutSeconds  int               `json:"timeout_seconds"`
 }
 
 // artifactRecord is domain.Artifact's fields rather than its wire object, which
@@ -135,6 +136,7 @@ func encodeTask(t *domain.Task) (string, error) {
 		InputItems:         t.InputItems,
 		RequestedModel:     t.RequestedModel,
 		NativeSessionID:    t.NativeSessionID,
+		TimeoutSeconds:     t.TimeoutSeconds,
 	}
 	if t.Artifacts != nil {
 		rec.Artifacts = make([]artifactRecord, len(t.Artifacts))
@@ -182,6 +184,7 @@ func decodeTask(id, data string) (*domain.Task, error) {
 		InputItems:      rec.InputItems,
 		RequestedModel:  rec.RequestedModel,
 		NativeSessionID: rec.NativeSessionID,
+		TimeoutSeconds:  rec.TimeoutSeconds,
 	}
 	if rec.Artifacts != nil {
 		task.Artifacts = make([]domain.Artifact, len(rec.Artifacts))

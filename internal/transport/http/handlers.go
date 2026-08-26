@@ -261,6 +261,20 @@ type createTaskBody struct {
 	Stream             bool            `json:"stream"`
 	PreviousResponseID string          `json:"previous_response_id,omitempty"`
 	Metadata           map[string]any  `json:"metadata,omitempty"`
+
+	// TimeoutSeconds is the wall-clock budget for this task, and a pointer
+	// because absent and zero are different requests: absent asks for whatever
+	// the harness and the deployment allow, and zero asks for a task that stops
+	// before it starts. Only a positive value is accepted, and how far it gets
+	// is service.resolveBudget's answer — the deployment's own bound is not
+	// something the transport knows, so a budget longer than the server allows
+	// is narrowed there and reported back rather than refused here.
+	//
+	// The sixth of thirteen schema properties this server reads. The other
+	// seven are still accepted and dropped, which Tasks §1.1 permits; #48 is
+	// the record of which, and `max_step` is the one that carries the same MUST
+	// this field does — see docs/conformance.md.
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 }
 
 // maxIdempotencyKeyBytes bounds the `Idempotency-Key` header.
@@ -338,6 +352,15 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input", err.Error())
 		return
 	}
+	// Refused rather than ignored. Quietly substituting the server's own budget
+	// would be the defect #54 is about in a quieter form — a field the client
+	// set and the server discarded without saying so — and "a budget of no
+	// seconds" is not something a caller could have meant.
+	if body.TimeoutSeconds != nil && *body.TimeoutSeconds <= 0 {
+		writeErrorParam(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input",
+			"timeout_seconds must be a positive number of seconds", "timeout_seconds")
+		return
+	}
 	// Absent is not invalid. Tasks §1.2: "If `harness_id` is absent, the server
 	// MUST use a default harness and MUST report which one it used in the
 	// response `metadata`." This used to refuse with `invalid_input`, which
@@ -355,6 +378,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		Attachments:        input.Attachments,
 		InputItems:         input.Items,
 		IdempotencyKey:     idempotency,
+		TimeoutSeconds:     body.TimeoutSeconds,
 	})
 	if err != nil {
 		writeServiceError(w, err)

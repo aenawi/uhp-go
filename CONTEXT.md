@@ -78,6 +78,20 @@ A Session's file store, seen from the Files chapter. A Session and its Container
 same thing named from two places, so one id derives from the other.
 _Avoid_: Workspace, Bucket, Volume
 
+**Budget**:
+A bound on one Task, enforced rather than recorded: the wall clock it may run for.
+Resolved once per run from the request, the Harness, and the deployment's own ceiling,
+and reported back on the Response so a client can see the number that was applied
+rather than the one it asked for. A Task stopped by one is `incomplete` — never
+`failed`, which means the work could not be done, and never `cancelled`, which means
+someone asked for a stop. UHP names two, `timeout_seconds` and `max_step`; only the
+first is enforced here, and the second is accepted and dropped.
+_Avoid_: Timeout, Limit, Deadline, Quota. "Timeout" names one budget and not the
+concept, and it stays where the name is not ours — the wire field
+`timeout_seconds`, the `metadata.timeout_seconds` this server reports it back on, and
+the `UHP_TASK_TIMEOUT` an operator sets. Everywhere the name is ours it is Budget:
+`service.DefaultTaskBudget`, `WithTaskBudget`, `resolveBudget`, `Run.budget`.
+
 **Capability**:
 Something a Harness or the server advertises before a client relies on it. Advertised
 capabilities are enforced, not merely reported.
