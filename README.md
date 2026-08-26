@@ -36,6 +36,16 @@ service, an account, a licence key, or a call home."
 server accepts from *its* clients. You invent the values. It is not a
 credential issued by anyone, and it is unrelated to any hosted UHP service.
 
+**Leaving it unset makes this server non-conformant, not merely permissive.**
+UHP Security §1 is unconditional — "A server MUST authenticate every endpoint
+except `GET /v1/uhp`" — so a server with no keys is a local tool rather than a
+UHP server, whatever it is bound to. The default configuration is that local
+tool: `UHP_ADDR` defaults to `127.0.0.1:8080`, and with no keys `uhpd` binds
+loopback, logs a `WARN` saying it authenticates nothing, and serves. Widen the
+bind without setting keys and it refuses to start, naming the variable — an
+open server is a deployment mistake, and boot is the last moment early enough
+to catch one. See [Authentication](#authentication).
+
 ## Relationship to UHP
 
 The Unified Harness Protocol is an open specification, published under
@@ -518,6 +528,60 @@ single principal: every configured `UHP_API_KEYS` value is equivalent and carrie
 identity, so a deployment serving several tenants needs a principal on the credential
 before artifact lookup can filter by one.
 
+## Authentication
+
+Every endpoint except `GET /v1/uhp` requires `Authorization: Bearer <key>`, where the key
+is one of the comma-separated values in `UHP_API_KEYS`. Discovery is exempt by design: a
+client has to be able to tell this is a UHP server before deciding what credential to
+present (Lifecycle §2), and the document carries nothing principal-specific. An absent,
+malformed or unknown token is `401` with an `authentication_error` envelope; the scheme is
+matched case-insensitively, as RFC 7235 requires.
+
+**With `UHP_API_KEYS` unset, that is all skipped, and such a server is not conformant.**
+Security §1 has no local-development exemption. This server keeps the unauthenticated mode
+anyway — it is genuinely useful, and "runs with no configuration" is a property worth
+having — but it is not allowed to be a mode you end up in without noticing:
+
+- **The default bind is loopback.** `UHP_ADDR` defaults to `127.0.0.1:8080`. An
+  unauthenticated server only this machine can reach is a local tool; the same server on
+  `0.0.0.0` is an open relay that will run agent tasks, spawn CLI subprocesses and serve
+  artifacts for anyone who can reach the port.
+- **Widening the bind without keys is fatal at boot.** If `UHP_API_KEYS` is empty and
+  `UHP_ADDR` is not a loopback address, `uhpd` refuses to start and names the variable.
+  This is a deployment mistake, and every per-request answer is too late to catch one —
+  by the time a request arrives to be refused, the server has already been open for as
+  long as it has been up. A literal IP is decided without asking anything; a hostname is
+  resolved, and every address it resolves to must be loopback. That includes `localhost`,
+  which is conventionally loopback and is ultimately whatever the resolver says: an
+  unkeyed server on a `localhost` somebody has pointed elsewhere is exactly the open
+  server this refuses. Resolving costs nothing the server was not already going to
+  spend — `net.Listen` resolves the same name moments later — so "runs entirely offline"
+  is untouched.
+- **The narrowed default is a breaking change, and it says so.** A keyed deployment that
+  relied on `UHP_ADDR` defaulting to `:8080` is correct, conformant, and — after an
+  upgrade — bound where nothing can reach it. That failure is otherwise silent, since the
+  posture check passes on the keys without looking at the address, so a keyed server on
+  loopback logs one `INFO` line naming `UHP_ADDR`. **If you were relying on the old
+  default, set `UHP_ADDR=0.0.0.0:8080` explicitly.**
+- **Running unauthenticated is logged.** One `WARN` line at startup, so an operator who
+  arrived here by accident finds it in their own logs:
+
+```
+{"level":"WARN","msg":"running unauthenticated; every endpoint except GET /v1/uhp answers without a credential, which UHP Security §1 forbids","addr":"127.0.0.1:8080","hint":"set UHP_API_KEYS"}
+```
+
+Nothing in the capability vocabulary covers "this server is open", and inventing a key for
+it would be a private dialect — the same reasoning [docs/conformance.md](docs/conformance.md)
+applies to resumption. So a client cannot tell an open server from a closed one by asking,
+and this section is the obligation instead of a wire field. The recorded conformance score
+was measured with `UHP_API_KEYS=devkey`; see
+[Conformance](docs/conformance.md) for what that means for the number.
+
+Every configured key is equivalent. This server has one principal, so "scope file access to
+the owning principal" (Files §5) is satisfied by requiring a key at all; a deployment
+serving several tenants needs a principal on the credential first, and artifact lookup
+would then have to filter by it.
+
 ## Session sharing
 
 Sessions §5 asks a `full` implementation for a read-only view of a conversation that
@@ -729,6 +793,10 @@ go build -o bin/uhpd ./cmd/uhpd
 UHP_API_KEYS=devkey ./bin/uhpd
 ```
 
+Without `UHP_API_KEYS` it still runs, on `127.0.0.1:8080` and with a `WARN` saying it
+authenticates nothing — and it refuses to start if you also widen `UHP_ADDR`. See
+[Authentication](#authentication).
+
 Create a task:
 
 ```bash
@@ -807,8 +875,8 @@ properties of `service.Store`, not of whichever engine a deployment configured.
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `UHP_ADDR` | `:8080` | HTTP listen address |
-| `UHP_API_KEYS` | (unset = auth disabled) | Comma-separated bearer tokens this server accepts |
+| `UHP_ADDR` | `127.0.0.1:8080` | HTTP listen address. Loopback by default — see [Authentication](#authentication) |
+| `UHP_API_KEYS` | (unset = auth disabled, loopback only) | Comma-separated bearer tokens this server accepts. Unset is non-conformant and `uhpd` refuses to start unauthenticated off loopback — see [Authentication](#authentication) |
 | `UHP_WORKSPACE` | (unset = router's own cwd, and no file support) | Root for per-session working directories |
 | `UHP_HARNESS_STORE` | `$UHP_WORKSPACE/harnesses.json`, or unset = no harness management | Where harnesses created over the API are kept |
 | `UHP_DB` | `$UHP_WORKSPACE/uhp.db`, or unset = tasks and sessions in memory | SQLite file holding tasks and sessions |
@@ -824,7 +892,8 @@ properties of `service.Store`, not of whichever engine a deployment configured.
 | `UHP_PI_MODELS` | (unset) | Pi fallback models |
 
 These are the defaults of the `uhpd` binary. The Docker image presets `UHP_WORKSPACE`,
-which changes the `UHP_WORKSPACE`, `UHP_HARNESS_STORE` and `UHP_DB` rows above — see
+which changes the `UHP_WORKSPACE`, `UHP_HARNESS_STORE` and `UHP_DB` rows above, and
+`UHP_ADDR`, which is why the image needs `UHP_API_KEYS` — see
 [Building the image](#building-the-image).
 
 ### Where the model list comes from
@@ -1117,7 +1186,13 @@ claims to ship fails the build, rather than the first request that reaches for i
 It runs as the unprivileged user `uhp`, uid and gid `10001`. Harness CLIs execute
 commands on behalf of authenticated clients, which is the product, but not as uid 0.
 
-Unlike the bare binary, the image presets `UHP_WORKSPACE=/workspace` — the per-session
+Unlike the bare binary, the image presets `UHP_ADDR=0.0.0.0:8080`. A published port is the
+whole point of a container, and the binary's loopback default would make `-p 8080:8080`
+reach nothing. The consequence is deliberate: `docker run` without `UHP_API_KEYS` refuses
+to start rather than publishing an unauthenticated server — see
+[Authentication](#authentication).
+
+Also unlike the bare binary, the image presets `UHP_WORKSPACE=/workspace` — the per-session
 working directory has to exist and be writable before the first session, and an image
 that ships one is better than an image that fails on it. That default turns on the
 three capabilities a workspace implies: `files_input`, `files_output`, and — via the

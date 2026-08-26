@@ -112,6 +112,16 @@ func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg := config.Load()
 
+	// First, and before anything is opened or spawned. An open server is a
+	// deployment mistake rather than a request-time one, so the only useful
+	// place to refuse it is the one where nothing has been served yet. See
+	// config.CheckAuthPosture for what it refuses and what it merely warns
+	// about.
+	if err := cfg.CheckAuthPosture(log); err != nil {
+		log.Error("authentication", "error", err)
+		os.Exit(1)
+	}
+
 	registry := harness.NewRegistry()
 	for _, h := range []*harness.CLIHarness{
 		harness.NewClaude(cfg.ClaudeModels),

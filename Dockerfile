@@ -25,6 +25,14 @@ RUN addgroup -g 10001 -S uhp && adduser -u 10001 -G uhp -S -h /home/uhp uhp
 # directory this user can write, not the `/` a bare USER directive leaves behind.
 ENV HOME=/home/uhp
 
+# The bare binary binds loopback, because an unauthenticated server that only
+# the machine can reach is a local tool. A container is the other case: a
+# published port is the whole point, and loopback inside the namespace would
+# make `-p 8080:8080` reach nothing. So the image says the wider bind out loud —
+# which also means `docker run` with no UHP_API_KEYS refuses to start rather
+# than publishing an open server, which is the trade the wider bind buys.
+ENV UHP_ADDR=0.0.0.0:8080
+
 # Every session gets a working directory under UHP_WORKSPACE, so the image ships
 # one the runtime user owns rather than leaving the first session to fail on a
 # directory it cannot create. Declared as a volume because sessions, uploaded

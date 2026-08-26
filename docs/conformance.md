@@ -125,9 +125,22 @@ report, not just the summary line; the suite says so itself.
 does not produce.** With the variable unset, `withAuth` returns early and every endpoint is
 open — Security §1 says "A server MUST authenticate every endpoint except `GET /v1/uhp`",
 so the default configuration is not a conformant one and no check can see the difference,
-because the suite always passes a key. Issue #55. Related, and equally invisible to a run:
-every configured key is the same principal, so the scoping MUSTs in Architecture and
-Files §5 are satisfied vacuously rather than enforced (#56).
+because the suite always passes a key. Issue #55.
+
+**#55 is fixed, and it did not close that gap so much as bound it.** Every number on this
+page still describes a keyed server, because that is still the only server the suite knows
+how to measure — nothing in the capability vocabulary covers "this server is open", so
+inventing a key for it would be a private dialect, and this file plus the README's
+[Authentication](../README.md#authentication) section are the obligation instead. What
+changed is where the unkeyed configuration can get to: `UHP_ADDR` now defaults to
+`127.0.0.1:8080`, an unkeyed server on any other address refuses to start, and one on
+loopback logs a `WARN` that it authenticates nothing. So the configuration these runs do
+not describe is now one that only the local machine can reach, and its operator has been
+told. **Read every score below as "measured with `UHP_API_KEYS=devkey`" — it still is.**
+
+Related, and equally invisible to a run: every configured key is the same principal, so the
+scoping MUSTs in Architecture and Files §5 are satisfied vacuously rather than enforced
+(#56).
 
 `conformance_class` in the discovery document read `core` when this run was recorded, and
 raising it was a deliberate follow-up rather than part of recording it. That follow-up is

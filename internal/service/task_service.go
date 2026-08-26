@@ -292,8 +292,10 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 	// Reserved here, ahead of the working directory, the input files and the
 	// fork itself, because every one of those is work this server does on an
 	// anonymous caller's say-so: `UHP_API_KEYS` is unset by default, so
-	// authentication is not what stands between a stranger and an unbounded
-	// number of CLI processes. Nothing downstream refuses either — the
+	// authentication is not necessarily what stands between a caller and an
+	// unbounded number of CLI processes. Since #55 such a server is confined to
+	// loopback, which narrows who that caller can be without changing what they
+	// can ask for. Nothing downstream refuses either — the
 	// per-session rule above only stops a second task in the *same*
 	// conversation, never an unbounded number of different ones.
 	//
