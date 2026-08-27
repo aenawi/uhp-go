@@ -42,6 +42,78 @@ func (s *Server) waitForResult(ctx context.Context, task *domain.Task, run *serv
 	return s.tasks.GetTask(context.WithoutCancel(ctx), task.ID)
 }
 
+// writeAccepted is the `background: true` path: the response object as it
+// stands, written now, instead of the finished one written later. It is
+// waitForResult's opposite number and the whole of what the field asks for —
+// nothing about the run changes, only whether this request waits for it.
+//
+// The task is read back from the store rather than marshalled from the pointer
+// StartTask returned. That pointer belongs to the supervisor from the moment
+// the run is handed over, so encoding it here would be a data race against the
+// goroutine writing the task's status and output. Reading it back is also the
+// truthful answer: a run that finished between acceptance and this line is
+// reported as finished, which is more than the client asked for and never less.
+//
+// Everything below turns on the retained/not-retained split, and the reason it
+// is decided here rather than in handleCreateTask is that here is where the
+// truth is. handleCreateTask can only see the body that arrived, and an
+// idempotent retry is not obliged to repeat the `store: false` its first request
+// sent — so a body carrying nothing but `background: true` can name a run whose
+// response will never be retained, and the pre-flight refusal cannot tell. The
+// accepted task can, because `store` is on it.
+//
+// So a retained response is answered from the store, which mid-run is the only
+// thing holding the task. An unretained one is answered from the run, which
+// keeps the terminal task precisely because the store will not — and is refused,
+// exactly as the same pair of fields is refused up front, when the run has not
+// got there yet and the store's copy is one this server has already undertaken
+// to drop.
+func (s *Server) writeAccepted(w http.ResponseWriter, r *http.Request, task *domain.Task, run *service.Run) {
+	accepted, err := s.tasks.GetTask(r.Context(), task.ID)
+	if err == nil && accepted.Store {
+		writeJSON(w, http.StatusOK, accepted)
+		return
+	}
+	// Tasks §6 owes a retry the first request's answer, and for an unretained
+	// response the run is the only place that answer still exists. Asked before
+	// the refusal below, so a run that has finished is answered rather than
+	// turned away over a record that is already gone.
+	if run != nil {
+		if final, over := run.Settled(); over && final != nil {
+			writeJSON(w, http.StatusOK, final)
+			return
+		}
+	}
+	if err == nil {
+		// Readable, unretained, and still running: the one state where this
+		// request has nothing to promise. The record goes when the run ends,
+		// this request is not waiting for that, and so every read after it
+		// would be a 404.
+		//
+		// The id is on the refusal for the same reason it is on the 500 below:
+		// the run this request named is going either way, and a client told
+		// only "no" is holding one it can neither follow nor stop.
+		writeErrorFull(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input",
+			"background: true names a response that is not retained — it is dropped when the "+
+				"run ends and this request will not be here to receive it; stream it instead, "+
+				"or ask for one that is stored", "background",
+			map[string]any{"response_id": task.ID})
+		return
+	}
+	if !errors.Is(err, service.ErrResponseNotFound) {
+		// The task was accepted and the run is on its way to a terminal state,
+		// so a client told only "500" is holding a run slot it can neither poll
+		// nor cancel. The id is the handle for both, and it is the one field
+		// safe to read from here: it is written once, before the supervisor is
+		// handed the task, and never again.
+		writeErrorDetail(w, http.StatusInternalServerError, typeServerError, vendorCodeStorageFailure,
+			"the task was accepted and is running, but this server could not read its response back",
+			map[string]any{"response_id": task.ID})
+		return
+	}
+	writeServiceError(w, err)
+}
+
 // subscription is how a stream is read, whichever stream it is: a task's own
 // run or a harness's feed. Both take the same four arguments and mean the same
 // thing by them, so the transport writes SSE once rather than once per source.

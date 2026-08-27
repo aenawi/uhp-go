@@ -271,13 +271,13 @@ type createTaskBody struct {
 	// something the transport knows, so a budget longer than the server allows
 	// is narrowed there and reported back rather than refused here.
 	//
-	// The sixth of thirteen schema properties this server reads. Five are
-	// still accepted and dropped, which Tasks §1.1 permits — `max_step` (#72),
-	// `background` (#78), and the three in #48 whose meaning across five
-	// heterogeneous CLI harnesses is still undecided. `max_step` is the one
-	// that carries the same MUST this field does; see docs/conformance.md.
-	// What a dropped one now gets is a mention in `metadata.ignored_fields`;
-	// see ignored_fields.go.
+	// The sixth of thirteen schema properties this server reads. Four are
+	// still accepted and dropped, which Tasks §1.1 permits — `max_step` (#72)
+	// and the three in #48 whose meaning across five heterogeneous CLI
+	// harnesses is still undecided. `max_step` is the one that carries the
+	// same MUST this field does; see docs/conformance.md. What a dropped one
+	// now gets is a mention in `metadata.ignored_fields`; see
+	// ignored_fields.go.
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 
 	// Instructions is additional system guidance for this task, and is
@@ -295,6 +295,17 @@ type createTaskBody struct {
 	// be the same thing and the server would apply the opposite of what was
 	// asked.
 	Store *bool `json:"store,omitempty"`
+
+	// Background asks for the POST to be answered as soon as the task is
+	// accepted rather than held open until the run is over (Tasks §1.1). The
+	// ninth of thirteen, and the one that is a lifecycle choice rather than a
+	// parameter of the run — nothing about the work changes, only when this
+	// request stops waiting for it. See ADR-0005 and issue #78.
+	//
+	// Not a pointer, because absent and false are the same request: the schema
+	// gives it a default of `false`, and holding the POST open is what a
+	// request that says nothing gets.
+	Background bool `json:"background,omitempty"`
 }
 
 // maxIdempotencyKeyBytes bounds the `Idempotency-Key` header.
@@ -400,6 +411,40 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 			"timeout_seconds must be a positive number of seconds", "timeout_seconds")
 		return
 	}
+	// The one combination of the two that has no honest answer, refused rather
+	// than half-done. `background` says "do not deliver the result here, I will
+	// come back for it"; `store: false` says "there will be nothing here to come
+	// back to", because the record is dropped the moment the run is terminal.
+	// Together, on a request that is not streaming, they ask this server to send
+	// the answer nowhere at all — the POST carries an `in_progress` object and
+	// every later read is a 404.
+	//
+	// Refused for the same reason `timeout_seconds: 0` is: it is not something a
+	// caller could have meant, and quietly picking a winner would drop a field
+	// the client set. A stream is not refused, because the terminal event
+	// delivers the whole response before the record goes.
+	//
+	// This one is a pre-flight check and its whole job is to refuse before a CLI
+	// is forked, so it can only see the body that arrived. A request carrying a
+	// key this server already knows is left to writeAccepted, which decides the
+	// same question against the accepted task: Tasks §6 owes that request the
+	// first one's answer, and for a run that has already finished the answer
+	// exists and can be delivered. Refusing it here would make the retry that
+	// faithfully repeats its original body the one that is turned away, while
+	// the retry that dropped a field got served.
+	//
+	// A key that expires between this check and the claim behind it starts a
+	// fresh task and is then refused by writeAccepted instead — a run nobody
+	// collects, and the same 400, for a window narrower than the request itself.
+	if body.Background && !body.Stream && body.Store != nil && !*body.Store &&
+		!s.tasks.ResumableStream(idempotency) {
+		writeErrorParam(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input",
+			"background: true with store: false has nowhere to deliver the result — the response "+
+				"is dropped when the run ends and this request will not be here to receive it; "+
+				"send stream: true to be given it on the stream, or drop store: false to read it "+
+				"back with GET /v1/responses/{id}", "background")
+		return
+	}
 	// Absent is not invalid. Tasks §1.2: "If `harness_id` is absent, the server
 	// MUST use a default harness and MUST report which one it used in the
 	// response `metadata`." This used to refuse with `invalid_input`, which
@@ -428,6 +473,10 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !body.Stream {
+		if body.Background {
+			s.writeAccepted(w, r, task, run)
+			return
+		}
 		final, err := s.waitForResult(r.Context(), task, run)
 		if err != nil {
 			// The client went away. The run is unaffected and still on its way

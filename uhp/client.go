@@ -235,9 +235,13 @@ func (c *Client) HarnessModels(ctx context.Context, id string) (*HarnessModels, 
 
 // Create posts POST /v1/responses and waits for the finished Response.
 //
-// The request's `stream` field is ignored — this is the non-streaming path, and
-// [Client.Stream] is the other one. Both produce the same output array, so
-// which you use is a question of whether you want to render progress.
+// The request's `stream` and `background` fields are ignored, because both of
+// them contradict "waits for the finished Response". `stream` is [Client.Stream]
+// instead — both paths produce the same output array, so which you use is a
+// question of whether you want to render progress. `background` is a POST
+// answered at acceptance with an `in_progress` object and an empty `output`,
+// which is a different method's return value than this one's: post it yourself
+// and follow the task with [Client.Get].
 //
 // idempotencyKey may be empty, and should not be. Errors §4: "Retries of
 // POST /v1/responses MUST carry an Idempotency-Key" — and this client will not
@@ -247,6 +251,7 @@ func (c *Client) Create(
 	ctx context.Context, req CreateResponseRequest, idempotencyKey string,
 ) (*Response, error) {
 	req.Stream = false
+	req.Background = false
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("uhp: encode request: %w", err)

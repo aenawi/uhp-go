@@ -94,18 +94,20 @@ func TestANullValuedFieldIsNotReported(t *testing.T) {
 	}
 }
 
-// `background: false` names the behaviour this server actually provides — a
-// POST held open until the task is done — so listing it would claim a request
-// was ignored that was honoured exactly. `true` is the one that is dropped.
-func TestBackgroundIsReportedOnlyWhenItAsksForSomethingThisServerDoesNotDo(t *testing.T) {
+// `background` was reported until #78 implemented it, and reporting it now
+// would be the mirror image of the defect this key exists to fix: a field the
+// server acted on, named as one it discarded. Neither of its two values is
+// dropped any more — `false` is the POST held open that it always was, and
+// `true` is answered at acceptance. See ADR-0005.
+func TestBackgroundIsNotReportedNowThatItIsImplemented(t *testing.T) {
 	srv := newTestServer()
-	if got, present := ignoredIn(t, srv,
-		`{"input":"hi","background":false,"metadata":{"harness_id":"chrn_echo"}}`); present {
-		t.Errorf("ignored_fields = %v for background:false, which is what this server does", got)
-	}
-	got, present := ignoredIn(t, srv, `{"input":"hi","background":true,"metadata":{"harness_id":"chrn_echo"}}`)
-	if !present || !reflect.DeepEqual(got, []string{"background"}) {
-		t.Errorf("ignored_fields = %v (present=%v), want [background]", got, present)
+	for _, body := range []string{
+		`{"input":"hi","background":false,"metadata":{"harness_id":"chrn_echo"}}`,
+		`{"input":"hi","background":true,"metadata":{"harness_id":"chrn_echo"}}`,
+	} {
+		if got, present := ignoredIn(t, srv, body); present {
+			t.Errorf("ignored_fields = %v for %s, want absent: the field is read", got, body)
+		}
 	}
 }
 
@@ -126,7 +128,7 @@ func TestTheServersIgnoredFieldsReplaceAClientsOwn(t *testing.T) {
 // The list is hand-maintained: a field leaves it by being implemented, and the
 // compiler cannot notice that. This is what notices.
 func TestTheDroppableListIsTheFieldsThisServerDoesNotRead(t *testing.T) {
-	want := []string{"max_output_tokens", "max_step", "tools", "include", "background"}
+	want := []string{"max_output_tokens", "max_step", "tools", "include"}
 	if !reflect.DeepEqual(droppableFields, want) {
 		t.Errorf("droppableFields = %v, want %v — if a field was implemented, it leaves this list "+
 			"and docs/conformance.md says so; if one was added, it joins it",
@@ -137,7 +139,7 @@ func TestTheDroppableListIsTheFieldsThisServerDoesNotRead(t *testing.T) {
 	read := map[string]bool{
 		"input": true, "model": true, "metadata": true, "stream": true,
 		"previous_response_id": true, "instructions": true, "store": true,
-		"timeout_seconds": true,
+		"timeout_seconds": true, "background": true,
 	}
 	if len(read)+len(droppableFields) != 13 {
 		t.Errorf("%d read + %d dropped = %d, want the schema's 13 properties",

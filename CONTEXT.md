@@ -22,7 +22,12 @@ The wire object UHP returns for a unit of work. Its shape is fixed by the protoc
 for the version being served. Retained for later reads unless the request said otherwise:
 `store: false` means the record is kept only while the run needs it and dropped once the run
 is terminal, so the client is answered exactly once — in the POST body or the terminal
-stream event — and every later read is `404`. What goes is the Response and only the
+stream event — and every later read is `404`. That one delivery is why a `background` POST
+that is not streaming is refused when the Response it names is one of these: `background`
+answers at acceptance rather than with the result, so the pair would send the answer nowhere,
+and the request is refused rather than half-honoured. The exception is a retry whose run has
+already finished, which is answered with the result — the one delivery, made to the request
+that came back for it. What goes is the Response and only the
 Response; the Session survives it, and so do the Artifacts on disk.
 _Avoid_: Task (that is the internal word), Result, Completion
 

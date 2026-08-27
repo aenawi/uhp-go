@@ -573,8 +573,8 @@ was that nothing said so, which left a client author writing a `switch` over `uh
 with seven arms that never fire and no way to learn it from either the package or these
 docs. Issue #61.
 
-**Nothing in the suite sends five of the thirteen request fields.**
-`CreateResponseRequest` has 13 properties in the schema; `createTaskBody` reads eight. The 52
+**Nothing in the suite sends four of the thirteen request fields.**
+`CreateResponseRequest` has 13 properties in the schema; `createTaskBody` reads nine. The 52
 checks contain no reference to `max_step`, `timeout_seconds`, `max_output_tokens`,
 `instructions` or `include`, so the 52/52 `full` result is silent about every one of them —
 and about `tools`, `store` and `background` besides. Dropping the ones this server does not
@@ -583,17 +583,20 @@ and requires a server to ignore request fields it does not understand rather tha
 them. So this is not a check that fails, and not a check that passes; it is a column of the
 request surface the suite never fills in. Issue #48.
 
-The count has moved three times and is worth stating precisely, because "eight dropped
-fields" is the sentence #48 was filed under and none of the three movements shows up in the
+The count has moved four times and is worth stating precisely, because "eight dropped
+fields" is the sentence #48 was filed under and not one of the four movements shows up in the
 score:
 
 - **`timeout_seconds` is read and enforced** (#54, #75, #77). See below.
 - **`instructions` and `store` are read** (#80). See below.
-- **`background` was the eighth field #48's own list never named**, and is now #78.
+- **`background` was the eighth field #48's own list never named**, and was split out as #78
+  — a correction to the count rather than a field moving.
+- **`background` is now read** (#78): `true` answers the POST as soon as the task is
+  accepted rather than holding it open. See below.
 
-What is left is five: `max_output_tokens`, `max_step`, `tools`, `include` and `background`.
-#48 is now the record of the three of those whose *meaning* across five heterogeneous CLI
-harnesses is undecided; `max_step` is #72 and `background` is #78.
+What is left is four: `max_output_tokens`, `max_step`, `tools` and `include`. #48 is now the
+record of the three of those whose *meaning* across five heterogeneous CLI harnesses is
+undecided; `max_step` is #72.
 
 All thirteen are *published*, on `uhp.CreateResponseRequest`, which widens the distance
 rather than closing it: a caller can set `MaxStep` in Go, against a server that will ignore
@@ -601,7 +604,7 @@ it, and get no error from either side. That is the deliberate consequence record
 ADR-0002 — the package models the protocol, not this server — and it is why the gap is
 written down here instead of being hidden by a narrower type.
 
-**The five that are still dropped are no longer dropped in silence.** A response now names
+**The four that are still dropped are no longer dropped in silence.** A response now names
 them, in `metadata.ignored_fields`, when the request actually sent one:
 
 ```json
@@ -612,12 +615,28 @@ Absent entirely when there is nothing to report. Only fields this server knows a
 act on — an unrecognised field is ignored without being named, because §1.1's
 ignore-don't-reject rule exists so a newer client can talk to an older server and naming
 every unknown field would turn that into a stream of warnings about valid protocol. And only
-values that ask for something: `null` is a key with no instruction in it, and
-`background: false` names the behaviour this server actually provides. This is an extension,
-not protocol — a different conformant server will not emit the key, and a client must not
-read its absence as "nothing was dropped". ADR-0004 records the decision; issue #80 records
-the work. No check in the suite sends any of the five, so none of this shows up in the score
-either.
+values that ask for something: `null` is a key with no instruction in it. This is an
+extension, not protocol — a different conformant server will not emit the key, and a client
+must not read its absence as "nothing was dropped". ADR-0004 records the decision; issue #80
+records the work. No check in the suite sends any of the four, so none of this shows up in
+the score either.
+
+**`background` was the last field that needed no machinery,** and the reason it took its own
+issue is that it is not a parameter of the run at all. The other four ask for the work to be
+done differently — a bound, a tool list, extra content in the result — and `background` asks
+only when this request stops waiting for it. Everything it needed was already here: the run
+is detached from the request with `context.WithoutCancel`, a run retains its whole event log,
+`GET /v1/responses/{id}` already answers mid-run, and a repeated `Idempotency-Key` already
+hands a retry the first request's own run.
+
+So the work was three decisions, recorded in ADR-0005. `background: true` is answered `200`
+at acceptance with the response object as it stands — `in_progress`, empty `output`, session
+id and resolved budget already in `metadata`. `background` with `stream` streams exactly as
+it always did, and the field is honoured rather than dropped, because a stream is a held-open
+POST by construction and everything else `background` asks for is already true of one.
+`background: true` with `store: false` and no stream is refused `400 invalid_input`: the
+record is dropped when the run ends and this request will not be there to receive it, so the
+answer would be delivered nowhere. No check in the suite sends the field either way.
 
 **`timeout_seconds` was the first to move,** and it is worth being exact about what moved
 and what did not. Two of the thirteen carry a MUST *if honoured* — a server that acts on
