@@ -19,7 +19,11 @@ vocabulary — see [ADR-0002](docs/adr/0002-uhp-package-models-the-protocol.md) 
 
 **Response**:
 The wire object UHP returns for a unit of work. Its shape is fixed by the protocol schema
-for the version being served.
+for the version being served. Retained for later reads unless the request said otherwise:
+`store: false` means the record is kept only while the run needs it and dropped once the run
+is terminal, so the client is answered exactly once — in the POST body or the terminal
+stream event — and every later read is `404`. What goes is the Response and only the
+Response; the Session survives it, and so do the Artifacts on disk.
 _Avoid_: Task (that is the internal word), Result, Completion
 
 **Task**:
@@ -35,6 +39,23 @@ _Avoid_: Attachment, Document, Blob
 A file produced by a run, discovered by walking the session's working directory. Every
 Artifact is reported as a File; not every File is an Artifact.
 _Avoid_: Output file, Result file
+
+**Instructions** / **Standing instructions**:
+The wire word is the protocol's and names one task's own system guidance: `instructions` on
+the request, additional and applying to that task alone. Standing instructions are this
+project's word for the harness's block — the operator's system prompt, plus whatever the
+runtime cannot enforce natively and must be told instead — which applies to every task on
+that harness. Two different things that were one word until the second acquired its
+qualifier.
+
+They are composed and never exchanged: standing instructions, then the task's, then the
+input. A task's instructions cannot displace the harness's, because the standing block is
+where a tool restriction lands when the runtime cannot enforce it and Harnesses §4.3 forbids
+dropping such a restriction — so a request that could replace the block could switch off an
+operator's configuration by sending one field. Each level of configuration is a floor the
+next one cannot remove, which is the same rule Budget follows.
+_Avoid_: System prompt (that is one input to a standing block, not the block), Prompt,
+Preamble, Guidance
 
 **SessionList** / **SessionPage**:
 The wire object for one page of a session listing, and its internal counterpart.
@@ -72,7 +93,9 @@ concept, so it stays in URLs and out of everything else, including test names.
 _Avoid_: Conversation, Thread, Trace
 
 **Turn**:
-One Task in a Session's history, carrying enough to rebuild a transcript.
+One Task in a Session's history, carrying enough to rebuild a transcript. Derived from the
+stored Task rather than recorded beside it, so a response the client asked not to retain
+(`store: false`) is not a Turn and appears in no transcript and no Share.
 _Avoid_: Message, Exchange, Step
 
 **Container**:

@@ -573,27 +573,56 @@ was that nothing said so, which left a client author writing a `switch` over `uh
 with seven arms that never fire and no way to learn it from either the package or these
 docs. Issue #61.
 
-**Nothing in the suite sends seven of the thirteen request fields.**
-`CreateResponseRequest` has 13 properties in the schema; `createTaskBody` reads six. The 52
+**Nothing in the suite sends five of the thirteen request fields.**
+`CreateResponseRequest` has 13 properties in the schema; `createTaskBody` reads eight. The 52
 checks contain no reference to `max_step`, `timeout_seconds`, `max_output_tokens`,
 `instructions` or `include`, so the 52/52 `full` result is silent about every one of them —
-and about `tools` and `store` besides. Dropping the ones this server does not read is the
-specified behaviour rather than a defect: Tasks §1.1 marks all of them optional and requires
-a server to ignore request fields it does not understand rather than reject them. So this is
-not a check that fails, and not a check that passes; it is a column of the request surface
-the suite never fills in. Issue #48.
+and about `tools`, `store` and `background` besides. Dropping the ones this server does not
+read is the specified behaviour rather than a defect: Tasks §1.1 marks all of them optional
+and requires a server to ignore request fields it does not understand rather than reject
+them. So this is not a check that fails, and not a check that passes; it is a column of the
+request surface the suite never fills in. Issue #48.
 
-All thirteen are now *published*, on `uhp.CreateResponseRequest`, which widens the distance
+The count has moved three times and is worth stating precisely, because "eight dropped
+fields" is the sentence #48 was filed under and none of the three movements shows up in the
+score:
+
+- **`timeout_seconds` is read and enforced** (#54, #75, #77). See below.
+- **`instructions` and `store` are read** (#80). See below.
+- **`background` was the eighth field #48's own list never named**, and is now #78.
+
+What is left is five: `max_output_tokens`, `max_step`, `tools`, `include` and `background`.
+#48 is now the record of the three of those whose *meaning* across five heterogeneous CLI
+harnesses is undecided; `max_step` is #72 and `background` is #78.
+
+All thirteen are *published*, on `uhp.CreateResponseRequest`, which widens the distance
 rather than closing it: a caller can set `MaxStep` in Go, against a server that will ignore
 it, and get no error from either side. That is the deliberate consequence recorded in
 ADR-0002 — the package models the protocol, not this server — and it is why the gap is
 written down here instead of being hidden by a narrower type.
 
-**`timeout_seconds` is the one that has since moved,** and it is worth being exact about
-what moved and what did not. Two of the thirteen carry a MUST *if honoured* — a server that
-acts on `max_step` or `timeout_seconds` must stop at or after the budget, report
-`incomplete`, and never report `completed` for truncated work — and #54 took that on for the
-wall clock only:
+**The five that are still dropped are no longer dropped in silence.** A response now names
+them, in `metadata.ignored_fields`, when the request actually sent one:
+
+```json
+{ "metadata": { "session_id": "sess_…", "ignored_fields": ["max_step", "tools"] } }
+```
+
+Absent entirely when there is nothing to report. Only fields this server knows and does not
+act on — an unrecognised field is ignored without being named, because §1.1's
+ignore-don't-reject rule exists so a newer client can talk to an older server and naming
+every unknown field would turn that into a stream of warnings about valid protocol. And only
+values that ask for something: `null` is a key with no instruction in it, and
+`background: false` names the behaviour this server actually provides. This is an extension,
+not protocol — a different conformant server will not emit the key, and a client must not
+read its absence as "nothing was dropped". ADR-0004 records the decision; issue #80 records
+the work. No check in the suite sends any of the five, so none of this shows up in the score
+either.
+
+**`timeout_seconds` was the first to move,** and it is worth being exact about what moved
+and what did not. Two of the thirteen carry a MUST *if honoured* — a server that acts on
+`max_step` or `timeout_seconds` must stop at or after the budget, report `incomplete`, and
+never report `completed` for truncated work — and #54 took that on for the wall clock only:
 
 - **`timeout_seconds` is read and enforced.** Every task runs under a budget resolved as the
   shortest of the bounds that are set — the request's, the harness's, and `UHP_TASK_TIMEOUT`
@@ -607,18 +636,47 @@ wall clock only:
   tool-call rounds and only some adapters emit anything a round could be counted from, so it
   is still accepted and dropped. That split is written down rather than left to be inferred:
   a server honouring one budget and silently discarding the other is the same defect #54 was
-  about, one field over. Tracked as #72.
+  about, one field over. Tracked as #72. It is now named in `ignored_fields` when a request
+  sets it, which is a smaller thing than enforcing it and is the honest interim.
 
 No check in the suite sends either, so none of this shows up in the score. It is measured by
 `internal/service/budget_test.go` and `internal/transport/http/budget_test.go` instead —
 which is the honest place for it, and not a substitute for a check that does not exist.
 
-`store` is the one worth naming separately, because the field is not merely unimplemented but
-inert: `Task.Store` is hardcoded `true` at `internal/service/task_service.go:357` and the
-request's own `store` is never consulted. Tasks §4 says a server MAY answer `404` with
-`response_not_found` for a response created with `store: false` — MAY, so retaining it anyway
-is permitted, and the `store: true` echoed back is an accurate report of what this server
-did. No check sends `store: false`, so nothing has ever asked.
+**`instructions` and `store` were the second and third to move** (#80), and neither needed a
+decision the protocol had not already made:
+
+- **`instructions` is read and prepended.** A task's own system guidance is appended to the
+  harness's standing block and never replaces it, because the standing block is where a tool
+  restriction lands when the runtime cannot enforce it (Harnesses §4.3) — so a request able
+  to replace it would be a request able to switch off an operator's configuration. It applies
+  to the task that sent it and does not carry into the next turn of a session, which is what
+  UHP's "for this task only" says. `uhpc run --instructions` had offered the flag since the
+  CLI shipped and had done nothing with it.
+- **`store` is read and honoured.** It was the field #48 singled out as inert rather than
+  merely unimplemented: `domain.Task.Store` existed, was hardcoded `true`, and the request's
+  own value was never consulted. `store: false` now means the record is kept while the run
+  needs it and dropped once the run is terminal — the client is answered in full exactly
+  once, in the POST body or the terminal stream event, and every later read of the response,
+  its input items, its place in the session's turns and its use as a `previous_response_id`
+  is gone. Tasks §4 makes the resulting `404 response_not_found` a MAY, which is what permits
+  it. The Session survives, because it owns the working directory and the harness binding and
+  carries the harness's own session id; the run's artifacts survive on disk, because `store`
+  is about response retention and erasing a run's files is a different thing. The one
+  exception is an `Idempotency-Key` retry, which Tasks §6 requires be given the first
+  request's answer — so it is, from the run's own copy, because a `404` there would make the
+  replay differ from the original.
+
+No check sends `store: false` or an `instructions` string, so nothing in the suite has ever
+asked. `internal/service/store_test.go`, `internal/service/instructions_test.go` and their
+transport-layer counterparts are what ask.
+
+**The suite was not re-run for #80, and the measurement above still stands.** Saying so is
+the point: a reader finding this section rewritten under an older date is owed the reason
+rather than left to wonder whether the ledger is stale. Nothing in the 52 checks touches any
+of these fields, the class is unchanged, and the suite runs about six real agent tasks at a
+real cost — so a re-run would produce the same 52/52 and falsify nothing. That is the same
+argument this file makes everywhere else about what a measurement is worth.
 
 **Nothing in the suite provokes a failed adapter start,** which is how an error object
 missing a schema-required field survived to be found by reading the specification rather than

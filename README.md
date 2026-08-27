@@ -352,7 +352,8 @@ The friendly base name is accepted as an alias wherever a harness id is expected
 `{"harness_id": "claude-code"}` works as well as the canonical form.
 
 Request body is intentionally OpenAI-Responses-shaped (`input`, `model`, `stream`,
-`previous_response_id`, `metadata`), with `metadata.harness_id` as the UHP extension that
+`previous_response_id`, `instructions`, `store`, `timeout_seconds`, `metadata`), with
+`metadata.harness_id` as the UHP extension that
 selects which harness runs the task. It is optional: Tasks §1.2 requires a server to pick a
 default when it is absent and to report which one it picked, so `{"input":"hi"}` is a
 complete request and the response names the harness that served it. The default is
@@ -370,6 +371,61 @@ which model it is running — `claude-code`, `grok-cli` and `pi` each do, on the
 a harness advertising no models at all reports no model rather than a guessed one. Naming a
 model leaves it untouched: `model` comes back as you spelled it, and
 `metadata.requested_model` is absent because there was no substitution to report.
+
+### Which request fields are read
+
+The schema's `CreateResponseRequest` has thirteen properties. This server reads eight and
+drops five, which is what Tasks §1.1 asks of it: every field but `input` is optional, and a
+server MUST ignore one it does not implement rather than reject it.
+
+| Field | What it does here |
+|---|---|
+| `input` | The work. A string, or the item array — `input_text`, `input_file`, `input_image` |
+| `model` | Optional; the response names one either way — see above |
+| `metadata` | Yours, plus `harness_id` on the way in and this server's own keys on the way out |
+| `stream` | SSE instead of one JSON object |
+| `previous_response_id` | Continues that response's session |
+| `instructions` | Appended to the harness's standing instructions, for this task only — never replaces them |
+| `store` | `false` drops the response once the run is terminal; the answer still arrives once |
+| `timeout_seconds` | Narrows the wall-clock budget, never widens it — see [Task budgets](#task-budgets) |
+| `max_output_tokens`, `max_step`, `tools`, `include`, `background` | Accepted and dropped — and named in `metadata.ignored_fields` |
+
+The last row is the one worth reading twice. Dropping a field is specified behaviour;
+dropping it silently was not, and a caller that set `max_step: 5` to bound an agent's
+tool-call rounds got unbounded work and no way to learn why. So a response now says which of
+its fields were dropped:
+
+```json
+{ "metadata": { "session_id": "sess_…", "ignored_fields": ["max_step", "tools"] } }
+```
+
+The key is absent when nothing was dropped, so its presence is the signal. Only fields this
+server knows and does not act on appear: an unrecognised field is ignored without being
+named, because §1.1's ignore-don't-reject rule is what lets a newer client talk to an older
+server and naming every unknown field would turn that into a stream of warnings about valid
+protocol. A `null` value asks for nothing and is not reported, and neither is
+`background: false`, which names what this server already does. This is an extension rather
+than protocol — see [ADR-0004](docs/adr/0004-ignored-fields-are-declared-in-metadata.md) —
+so a client must not read its absence from some other conformant server as "nothing was
+dropped".
+
+**`instructions` are added to the harness's, not swapped for them.** The prompt is composed
+standing-block, then the task's instructions, then the input. A harness's standing block is
+where a tool restriction lands when the runtime cannot enforce it natively, and Harnesses
+§4.3 forbids dropping such a restriction — so a request able to replace the block would be a
+request able to switch off an operator's configuration by sending one field. They apply to
+the task that sent them and do not carry into the next turn of a session.
+
+**`store: false` means the response is not kept, not that it is not delivered.** The record
+lives while the run needs it and is dropped when the run reaches a terminal state, so the
+client is answered in full exactly once — in the POST body, or in the terminal stream event
+— and after that `GET /v1/responses/{id}` is `404 response_not_found`, the response is not
+one of its session's turns, and it cannot be a `previous_response_id`. Tasks §4 makes that
+`404` a MAY, which is what permits honouring the field at all. The session survives, because
+it owns the working directory and the harness binding; the run's artifacts survive on disk,
+because `store` is about response retention and not about erasing files. An `Idempotency-Key`
+retry is the one read that still answers, because Tasks §6 requires a retry to be given the
+first request's answer.
 
 ### Capabilities are enforced, not decorative
 

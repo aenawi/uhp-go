@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -270,11 +271,30 @@ type createTaskBody struct {
 	// something the transport knows, so a budget longer than the server allows
 	// is narrowed there and reported back rather than refused here.
 	//
-	// The sixth of thirteen schema properties this server reads. The other
-	// seven are still accepted and dropped, which Tasks §1.1 permits; #48 is
-	// the record of which, and `max_step` is the one that carries the same MUST
-	// this field does — see docs/conformance.md.
+	// The sixth of thirteen schema properties this server reads. Five are
+	// still accepted and dropped, which Tasks §1.1 permits — `max_step` (#72),
+	// `background` (#78), and the three in #48 whose meaning across five
+	// heterogeneous CLI harnesses is still undecided. `max_step` is the one
+	// that carries the same MUST this field does; see docs/conformance.md.
+	// What a dropped one now gets is a mention in `metadata.ignored_fields`;
+	// see ignored_fields.go.
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+
+	// Instructions is additional system guidance for this task, and is
+	// appended to the harness's standing instructions rather than replacing
+	// them. The service composes the two; the transport only carries it.
+	//
+	// Not a pointer, because absent and empty are the same request here: both
+	// mean "no guidance of my own", and there is nothing an explicit empty
+	// string could ask for that omission does not already say.
+	Instructions string `json:"instructions,omitempty"`
+
+	// Store is whether this response is retained for later reads, and a
+	// pointer because its default is true — a plain bool could not express
+	// `store: false` at all, since the zero value and the omitted field would
+	// be the same thing and the server would apply the opposite of what was
+	// asked.
+	Store *bool `json:"store,omitempty"`
 }
 
 // maxIdempotencyKeyBytes bounds the `Idempotency-Key` header.
@@ -334,12 +354,31 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body createTaskBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	// Read whole and decoded twice, rather than streamed straight into the
+	// struct. The typed decode cannot see a field the struct has no name for,
+	// and `metadata.ignored_fields` is a report of exactly those — so the raw
+	// key set is the only thing that can answer which of them this request
+	// sent. decodeHarnessBody does the same for the same reason, one level of
+	// detail further: there it tells `{"max_step": null}` from `{}`, and here
+	// it tells "sent and dropped" from "never mentioned".
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
 		if writeIfTooLarge(w, err, s.maxBodyBytes) {
 			return
 		}
+		writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input",
+			"the request body could not be read")
+		return
+	}
+	var body createTaskBody
+	if err := json.Unmarshal(raw, &body); err != nil {
 		writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input", "the request body could not be parsed as JSON")
+		return
+	}
+	present := map[string]json.RawMessage{}
+	if err := json.Unmarshal(raw, &present); err != nil {
+		writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input",
+			"the request body must be a JSON object")
 		return
 	}
 	input, err := parseInput(body.Input)
@@ -379,6 +418,9 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		InputItems:         input.Items,
 		IdempotencyKey:     idempotency,
 		TimeoutSeconds:     body.TimeoutSeconds,
+		Instructions:       body.Instructions,
+		Store:              body.Store,
+		IgnoredFields:      ignoredFields(present),
 	})
 	if err != nil {
 		writeServiceError(w, err)

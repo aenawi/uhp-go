@@ -67,6 +67,24 @@ type Task struct {
 	// key only for a Task nothing ever ran.
 	TimeoutSeconds int
 
+	// IgnoredFields names the request fields this server accepted and did not
+	// act on, and reaches a client the same way the four above do — inside
+	// `metadata`, because Response has nowhere else to put it.
+	//
+	// It is what makes a dropped field audible. Tasks §1.1 requires a server to
+	// ignore a request field it does not implement rather than reject it, which
+	// is why the fields are dropped; nothing required the dropping to be silent,
+	// and silence is what left a caller setting `max_step: 5` with unbounded
+	// work and no way to learn why (#48). Which fields can appear here is the
+	// transport's list, not this package's — only the transport sees the raw
+	// body, and "sent" is a fact about the body rather than about the task.
+	//
+	// Empty for almost every task, and the projection below omits the key
+	// entirely rather than reporting an empty array: absent means "nothing of
+	// yours was dropped", which is a different statement from "here is the
+	// empty list of things that were".
+	IgnoredFields []string
+
 	// The genuinely internal four: nothing below reaches a client on the
 	// response object. InputItems reaches one on its own endpoint.
 	Input string
@@ -116,7 +134,7 @@ type Task struct {
 // is what lets it run twice without the client's own metadata acquiring fields
 // it did not send.
 func (t *Task) SyncMetadata() {
-	meta := make(map[string]any, len(t.Metadata)+4)
+	meta := make(map[string]any, len(t.Metadata)+5)
 	for k, v := range t.Metadata {
 		meta[k] = v
 	}
@@ -133,6 +151,15 @@ func (t *Task) SyncMetadata() {
 	// silent truncation it has to infer.
 	if t.TimeoutSeconds > 0 {
 		meta["timeout_seconds"] = t.TimeoutSeconds
+	}
+
+	// Deleted when empty for the same reason the two model keys below are: a
+	// client may have sent `ignored_fields` in its own metadata, and this
+	// server's answer to the question has to be the one on the response.
+	if len(t.IgnoredFields) > 0 {
+		meta["ignored_fields"] = t.IgnoredFields
+	} else {
+		delete(meta, "ignored_fields")
 	}
 
 	// Tasks §1.3: a client must always be able to answer "did the model I

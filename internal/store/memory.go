@@ -298,6 +298,7 @@ func copyTask(t *domain.Task) *domain.Task {
 		}
 	}
 	cp.Artifacts = copySlice(t.Artifacts)
+	cp.IgnoredFields = copySlice(t.IgnoredFields)
 	// Each item is a byte slice, so copying the outer slice alone would still
 	// hand a reader the writer's bytes. Nothing mutates a stored item today —
 	// they are written once at creation — but this store's contract is that a

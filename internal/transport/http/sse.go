@@ -17,7 +17,7 @@ import (
 )
 
 // waitForResult is the non-streaming path: it waits for the supervised run to
-// reach a terminal state and reads the stored task back.
+// reach a terminal state and reads the finished task back.
 //
 // It consumes nothing and drives nothing. If the client disconnects, this
 // returns and the run carries on — the task still reaches a terminal state,
@@ -25,6 +25,19 @@ import (
 func (s *Server) waitForResult(ctx context.Context, task *domain.Task, run *service.Run) (*domain.Task, error) {
 	if err := run.Wait(ctx); err != nil {
 		return nil, err
+	}
+	// A `store: false` response is gone from the store by the time the run is
+	// terminal, so the run is asked first. It answers for that case and only
+	// that case — Result is nil for a retained response, which then reads from
+	// the store exactly as it always has.
+	//
+	// This is also what makes an idempotent retry work on an unretained
+	// response. Tasks §6 requires a retry to be given the first request's
+	// answer, and the first request's answer was the whole response object; a
+	// 404 here would make the replay differ from the original, which is the one
+	// thing §6 forbids.
+	if final := run.Result(); final != nil {
+		return final, nil
 	}
 	return s.tasks.GetTask(context.WithoutCancel(ctx), task.ID)
 }
