@@ -34,6 +34,30 @@ const (
 // an imperfect number is a client that reads no header and retries in a loop.
 const retryAfterNoCapacity = 5 * time.Second
 
+// retryAfterSessionBusy is the floor for the other refusal that means "later":
+// a second task in a session that already has one (Lifecycle §5, issue #60).
+//
+// Errors §4 makes this one retryable "once in-flight task reaches terminal
+// state", so the client is being told to wait, and `retry_after_ms` is the only
+// part of that it can act on. Lifecycle §6 also says to omit the field rather
+// than guess — and this is not a guess about when the agent finishes, which
+// nothing here can know. It is the same honest minimum the capacity refusal
+// sends: come back, but not immediately.
+//
+// #60 expected better than a floor here, and why there is none is worth
+// writing down. The reasoning was that #54 bounds every run by a wall
+// clock, so the server now knows when the session is free whatever the agent
+// does — the holder's remaining budget — and could send a real number instead.
+// It knows that, and the number is still wrong to send. It is an upper bound on
+// a wait that is usually over in seconds: quoting the half hour a run has left
+// would have a client sleep through the answer. Quoting it only when it falls
+// below this floor is no better, because that is precisely the moment the
+// budget is about to fire and the teardown behind it takes a further moment
+// nothing here can size — so the number would be knowably too short in the one
+// case it applied. A bound that is too long to sleep for and too short to
+// retry on is not a wait, and the floor is what is left.
+const retryAfterSessionBusy = 5 * time.Second
+
 // writeServiceError maps a service-layer error onto the UHP status code and
 // error code the specification requires.
 //
@@ -102,6 +126,29 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		return
 	}
 
+	// 409 with the wait in the body rather than in a header. RFC 9110 §10.2.3
+	// defines Retry-After for 503, 429 and the 3xx redirects, and this is none
+	// of those; `retry_after_ms` is the field Lifecycle §6 names for it, and
+	// `detail` is where the schema has room for it.
+	//
+	// `response_id` is the other half, and the more useful one: a client told
+	// which response holds the session can watch that one go terminal instead
+	// of asking this endpoint again, which is the difference between a wait and
+	// a poll. It is not a key the specification defines — `detail` is an open
+	// object — so it is a courtesy from this implementation, on the same
+	// footing ADR-0004 puts `metadata.ignored_fields`: namespaced by nothing
+	// and promised by nobody.
+	var busy *service.SessionBusyError
+	if errors.As(err, &busy) {
+		writeErrorDetail(w, http.StatusConflict, typeInvalidRequest, "session_busy",
+			"this session already has a task in flight",
+			map[string]any{
+				"retry_after_ms": retryAfterSessionBusy.Milliseconds(),
+				"response_id":    busy.TaskID,
+			})
+		return
+	}
+
 	switch {
 	case errors.Is(err, service.ErrHarnessNotFound):
 		writeError(w, http.StatusNotFound, typeInvalidRequest, "harness_not_found", err.Error())
@@ -118,6 +165,11 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, service.ErrFilesUnsupported):
 		writeFilesUnsupported(w)
 	case errors.Is(err, service.ErrSessionBusy):
+		// The bare sentinel, which nothing produces today: startTask returns
+		// the typed error above and it is the only refusal of this kind there
+		// is. The arm stays because the alternative for anything that later
+		// does is the default arm below, and answering "busy session" with a
+		// `502` would tell a client the server is broken.
 		writeError(w, http.StatusConflict, typeInvalidRequest, "session_busy", err.Error())
 	case errors.Is(err, service.ErrHarnessManagementUnsupported):
 		writeHarnessManagementUnsupported(w)

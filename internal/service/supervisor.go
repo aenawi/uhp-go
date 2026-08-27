@@ -352,21 +352,19 @@ func (s *supervisor) get(taskID string) (*Run, bool) {
 }
 
 // bySessionRun returns the live run for a session, if any.
+//
+// The empty id is nobody's session and is answered before the map is consulted.
+// Nothing reaches here with one today — every task has a session by the time it
+// is checked — and the guard is what keeps a future caller that does from
+// matching the zero key and being told a stranger's run is its own.
 func (s *supervisor) bySessionRun(sessionID string) (*Run, bool) {
+	if sessionID == "" {
+		return nil, false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.bySession[sessionID]
 	return r, ok
-}
-
-func (s *supervisor) sessionBusy(sessionID string) bool {
-	if sessionID == "" {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, ok := s.bySession[sessionID]
-	return ok
 }
 
 // supervise consumes the adapter's updates and is the only writer of this

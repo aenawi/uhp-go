@@ -54,6 +54,29 @@ func (e *NoCapacityError) Error() string {
 	return fmt.Sprintf("service: no capacity: %d harness runs already in flight", e.Limit)
 }
 
+// SessionBusyError is the refusal when a session already has a task in flight
+// (Lifecycle §5).
+//
+// It carries the id of the task that is in the way, and no advice. Errors §4
+// makes this refusal retryable "once in-flight task reaches terminal state", so
+// what the client needs is a way to know when that is — and the task holding
+// the session is the only thing this package knows that answers it. What to
+// tell a client to do with it is the transport's call, for the same reason the
+// capacity refusal carries a limit and not a Retry-After.
+type SessionBusyError struct {
+	SessionID string
+	TaskID    string
+}
+
+func (e *SessionBusyError) Error() string {
+	return fmt.Sprintf("service: session %s already has a task in flight (%s)", e.SessionID, e.TaskID)
+}
+
+// Unwrap keeps the sentinel matching. Every arm written against ErrSessionBusy
+// goes on working, so the type is additional detail rather than a second way of
+// spelling the same refusal.
+func (e *SessionBusyError) Unwrap() error { return ErrSessionBusy }
+
 // TaskService implements the "Tasks" and "Sessions" chapters of UHP.
 type TaskService struct {
 	registry  Registry
@@ -329,8 +352,8 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 
 	// Lifecycle §5: a session has one working directory and one conversation,
 	// so two concurrent tasks in it is not a defined state.
-	if s.runs.sessionBusy(sessionID) {
-		return nil, nil, fmt.Errorf("%w: session %s already has a task in flight", ErrSessionBusy, sessionID)
+	if held, busy := s.runs.bySessionRun(sessionID); busy {
+		return nil, nil, &SessionBusyError{SessionID: sessionID, TaskID: held.TaskID}
 	}
 
 	// Reserved here, ahead of the working directory, the input files and the

@@ -404,7 +404,7 @@ func TestSecondTaskInABusySessionIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("a second concurrent task in the same session was accepted")
 	}
-	if !strings.Contains(err.Error(), "session busy") {
+	if !errors.Is(err, ErrSessionBusy) {
 		t.Fatalf("error = %v, want a session-busy error", err)
 	}
 
