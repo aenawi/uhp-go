@@ -85,6 +85,17 @@ saying so in godoc is what keeps that honest. The gap is worth reporting upstrea
 **A vendored copy of `uhp-2026-08-11.schema.json` gates the package in CI.** Each public
 type is marshalled and validated against the schema on every push.
 
+> Since 2026-08-27 ([#63](https://github.com/aenawi/uhp-go/issues/63)) the gate runs in both
+> directions. It always failed when a schema object had no Go type; it now also fails when a
+> Go type has no schema object and no reason on record — which is how `uhp.Turn` came to sit
+> beside the twenty-three for a release without anything going red, and how `uhp.Share`
+> joined it. Every exported type is sorted into one of four groups: a `$defs` object, a shape
+> the schema describes inline (`Implementation`, `ModelCatalogBackend` — validated against
+> their JSON pointers, not merely allow-listed), a shape the schema leaves untyped (`Turn`,
+> `Share`, each required to carry a "This shape is not normative" godoc heading), or client
+> machinery that never appears on the wire. A type in none of them fails the build. The
+> caveat this ADR asked for in godoc is therefore no longer a step someone remembers.
+
 ## Consequences
 
 **The package will advertise eight request fields this server ignores.** A caller setting
