@@ -24,6 +24,30 @@
 // between "the protocol says so" and "this server does so" is a fact the
 // compiler can see rather than a claim in a comment.
 //
+// # What is here that the schema does not name
+//
+// The sentence above says every schema object has a type here. It does not say
+// the reverse, because the reverse is not quite true, and the difference is
+// worth a client author's attention rather than a silence.
+//
+// Two shapes are the schema's but unnamed by it: [Implementation] and
+// [ModelCatalogBackend] are described inline inside their parents, so the
+// fields are the protocol's and only the Go name is this package's.
+//
+// Two shapes are not the schema's at all. [Turn] and [Share] answer endpoints
+// the specification requires and leaves untyped, so what they contain is this
+// server's reading rather than a protocol guarantee. Each says so under a
+// "This shape is not normative" heading, and a client that reads either must
+// tolerate a different server answering the same endpoint with other fields.
+//
+// The rest — [Client], [Stream], [EventDecoder] and the errors they raise — is
+// the apparatus for exchanging documents rather than a document, and the schema
+// has no more to say about it than about net/http.Client.
+//
+// That list is a test rather than a promise: schema_test.go sorts every
+// exported type into one of those groups and fails on a type in none of them,
+// so a twenty-fifth shape is a line someone writes on purpose.
+//
 // # Use keyed struct literals
 //
 // UHP permits a server to add response fields within a published version, and

@@ -3,6 +3,10 @@ package uhp_test
 import (
 	"bytes"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -23,21 +27,33 @@ import (
 // tag, an omitempty on a field the schema requires, a nil slice marshalling as
 // null where an array is declared.
 //
-// It also fails when a schema object has no Go type at all. See
-// TestEveryDefinitionIsCovered.
+// It also fails when a schema object has no Go type at all, and — since #63 —
+// when a Go type has no schema object and no reason on record. See
+// TestEveryDefinitionIsCovered and TestEveryPublicTypeIsAccountedFor.
 
-// compileDef compiles one object out of the vendored schema.
-func compileDef(t *testing.T, def string) *jsonschema.Schema {
+// compileRef compiles one subschema out of the vendored schema, named by JSON
+// pointer.
+//
+// A pointer rather than a $defs name, because two of the shapes this package
+// publishes are described inside a parent object and have no name to compile.
+// See TestInlineSchemaObjectsValidate.
+func compileRef(t *testing.T, ref string) *jsonschema.Schema {
 	t.Helper()
 	c := jsonschema.NewCompiler()
 	if err := c.AddResource("uhp.json", strings.NewReader(uhp.SchemaJSON)); err != nil {
 		t.Fatalf("add vendored schema: %v", err)
 	}
-	sch, err := c.Compile("uhp.json#/$defs/" + def)
+	sch, err := c.Compile("uhp.json" + ref)
 	if err != nil {
-		t.Fatalf("compile #/$defs/%s: %v", def, err)
+		t.Fatalf("compile %s: %v", ref, err)
 	}
 	return sch
+}
+
+// compileDef compiles one named object out of the vendored schema.
+func compileDef(t *testing.T, def string) *jsonschema.Schema {
+	t.Helper()
+	return compileRef(t, "#/$defs/"+def)
 }
 
 // validate marshals v through the public API — exactly as a consumer would —
@@ -48,9 +64,16 @@ func compileDef(t *testing.T, def string) *jsonschema.Schema {
 // the thing that drifts.
 func validate(t *testing.T, def string, v any) {
 	t.Helper()
+	validateRef(t, "#/$defs/"+def, defGoName(def), v)
+}
+
+// validateRef is validate against any subschema, with the Go name to report
+// passed in because the pointer no longer implies it.
+func validateRef(t *testing.T, ref, goName string, v any) {
+	t.Helper()
 	data, err := json.Marshal(v)
 	if err != nil {
-		t.Fatalf("%s: marshal: %v", def, err)
+		t.Fatalf("%s: marshal: %v", goName, err)
 	}
 
 	// UseNumber, because the validator checks `minimum` and integer-ness. Left
@@ -60,12 +83,12 @@ func validate(t *testing.T, def string, v any) {
 	dec.UseNumber()
 	var doc any
 	if err := dec.Decode(&doc); err != nil {
-		t.Fatalf("%s: decode marshalled bytes: %v", def, err)
+		t.Fatalf("%s: decode marshalled bytes: %v", goName, err)
 	}
 
-	if err := compileDef(t, def).Validate(doc); err != nil {
-		t.Errorf("%s does not validate against #/$defs/%s:\n%v\n\nmarshalled as: %s",
-			defGoName(def), def, err, data)
+	if err := compileRef(t, ref).Validate(doc); err != nil {
+		t.Errorf("%s does not validate against %s:\n%v\n\nmarshalled as: %s",
+			goName, ref, err, data)
 	}
 }
 
@@ -454,5 +477,283 @@ func TestEveryDefinitionIsCovered(t *testing.T) {
 	const wantDefs = 23
 	if len(doc.Defs) != wantDefs {
 		t.Errorf("vendored schema defines %d objects, want %d", len(doc.Defs), wantDefs)
+	}
+}
+
+// The rest of this file is TestEveryDefinitionIsCovered read backwards.
+//
+// That test asks whether every schema object has a Go type. It cannot ask
+// whether every Go type is a schema object, and the difference is not
+// theoretical: [uhp.Turn] shipped as a twenty-fourth type in a package whose
+// premise is that it invented nothing, and no test went red. A client author
+// reading godoc had no way to tell it apart from the twenty-three, which is the
+// defect — not the type's existence, which is defensible, but its silence.
+//
+// So every exported type in the package is sorted into exactly one of four
+// buckets below, and a type in none of them fails. Adding the twenty-fifth
+// shape is then a line a contributor writes on purpose, in a list a reviewer
+// reads, rather than a struct that slips in beside the protocol.
+
+// inlineObject is one shape the schema describes without naming.
+type inlineObject struct {
+	// ref is the JSON pointer at which the schema describes the shape.
+	ref string
+	// value is a fully-populated instance, validated against ref for exactly
+	// the reason populated() gives.
+	value any
+	// invalid is a document the subschema at ref must reject, written as raw
+	// JSON because the point is to say something the Go type cannot.
+	//
+	// Compiling a pointer proves it resolves. It does not prove it resolves to
+	// a *schema*: a pointer one segment short — #/$defs/Discovery/properties —
+	// lands on a JSON object with no keyword the compiler recognises, which
+	// accepts everything, value above included. So each entry also carries
+	// something its own subschema forbids, and a ref that stops rejecting it
+	// has stopped pointing at the shape.
+	invalid string
+}
+
+// inlineSchemaObjects are the types the schema describes inline, inside a
+// parent object, rather than lifting into $defs.
+//
+// These are protocol shapes — a conformant server must produce them, and the
+// fields are the schema's — so they belong in this package as much as the
+// twenty-three do. Only the Go name is this repository's, because the schema
+// gave the shape no name to borrow. Each type's godoc says so.
+var inlineSchemaObjects = map[string]inlineObject{
+	"Implementation": {
+		ref:   "#/$defs/Discovery/properties/implementation",
+		value: uhp.Implementation{Name: "uhp-go", Version: "1.2.3"},
+		// This subschema requires nothing and permits anything extra, so the
+		// only claim it makes is the type of the two fields it names — and
+		// that is all this check can prove. A renamed json tag here is caught
+		// by the Discovery case in populated(), not by this one.
+		invalid: `{"name": 1}`,
+	},
+	"ModelCatalogBackend": {
+		ref: "#/$defs/ModelCatalog/properties/backends/additionalProperties",
+		value: uhp.ModelCatalogBackend{
+			Default: "claude-opus-5",
+			Models:  []uhp.Model{{ID: "claude-opus-5", Available: true, Default: true}},
+		},
+		// Both fields are required here, so dropping either json tag is a
+		// document this rejects.
+		invalid: `{"default": "claude-opus-5"}`,
+	},
+}
+
+// notNormative are the shapes the schema does not describe at all, published
+// here anyway because the endpoint that returns them is specified.
+//
+// This list is the one that must stay short. Every entry is a shape this
+// repository invented and published under the schema's naming convention, so
+// every entry is a way for a client author to mistake one implementation's
+// reading for the protocol. The mitigation is the godoc heading
+// TestNotNormativeTypesSaySo requires; the list is what makes it unmissable
+// that there are two of these and what they cost.
+var notNormative = map[string]string{
+	"Turn": "GET /v1/sessions/{session_id}/turns is required by Sessions §3 and its " +
+		"response item is typed `object` with additionalProperties: true.",
+	"Share": "POST and GET /v1/sessions/{session_id}/share are required of a `full` " +
+		"implementation by Sessions §5, which names neither a share object nor the " +
+		"path the view is served at.",
+}
+
+// clientMachinery is the part of this package that is not wire vocabulary at
+// all.
+//
+// A type here never appears in a document. It is the apparatus for sending and
+// receiving them, and the schema has nothing to say about it — no more than it
+// has to say about net/http.Client. Listing them is not an admission; it is the
+// only way the check above can be about the shapes it is meant to be about.
+var clientMachinery = map[string]string{
+	"Client":               "the HTTP client itself.",
+	"SessionFilter":        "arguments to a listing call, sent as query parameters rather than as a body.",
+	"Stream":               "an open SSE response, not a thing on the wire.",
+	"EventDecoder":         "the SSE framing reader; [uhp.Event] is the shape it yields.",
+	"VersionMismatchError": "a client-side diagnosis, raised from a UHP-Version header.",
+	"GapError":             "a client-side diagnosis, raised from a sequence_number gap.",
+	"FrameError":           "a client-side diagnosis, raised from a malformed SSE frame.",
+}
+
+// declaredTypes returns every exported type this package declares, mapped to
+// the doc comment attached to it.
+//
+// Parsing the source is the only way to ask this question. Reflection reaches a
+// type only from a value of it, so a type nobody wrote a test for — precisely
+// the case this file is here to catch — is invisible to it. The package's own
+// directory is the test's working directory, so the files are simply there.
+func declaredTypes(t *testing.T) map[string]string {
+	t.Helper()
+
+	paths, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("glob package sources: %v", err)
+	}
+
+	fset := token.NewFileSet()
+	out := make(map[string]string)
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok || !ts.Name.IsExported() {
+					continue
+				}
+				// A one-spec declaration carries its comment on the GenDecl and
+				// a grouped one carries it on the spec; godoc reads both, so
+				// this does too.
+				doc := ts.Doc
+				if doc == nil && len(gen.Specs) == 1 {
+					doc = gen.Doc
+				}
+				out[ts.Name.Name] = doc.Text()
+			}
+		}
+	}
+
+	// A glob that matched nothing, or a package that moved out from under this
+	// test, would otherwise report every type as accounted for.
+	if len(out) == 0 {
+		t.Fatal("no exported type declarations found in the package directory; this test found nothing to check rather than nothing wrong")
+	}
+	return out
+}
+
+func keysOf[T any](m map[string]T) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestEveryPublicTypeIsAccountedFor fails when this package publishes a type
+// the schema does not define and no list above claims.
+//
+// The failure message is written for the contributor who hits it, because the
+// answer is a judgement rather than a lookup: the type is either a schema shape
+// spelled wrong, a server extension that belongs in uhpgo, or a genuine
+// twenty-fourth shape that must be documented as one.
+func TestEveryPublicTypeIsAccountedFor(t *testing.T) {
+	var doc struct {
+		Defs map[string]json.RawMessage `json:"$defs"`
+	}
+	if err := json.Unmarshal([]byte(uhp.SchemaJSON), &doc); err != nil {
+		t.Fatalf("parse vendored schema: %v", err)
+	}
+
+	declared := declaredTypes(t)
+	for _, name := range keysOf(declared) {
+		var homes []string
+		if _, ok := doc.Defs[name]; ok {
+			homes = append(homes, "a schema object")
+		}
+		if _, ok := inlineSchemaObjects[name]; ok {
+			homes = append(homes, "inlineSchemaObjects")
+		}
+		if _, ok := notNormative[name]; ok {
+			homes = append(homes, "notNormative")
+		}
+		if _, ok := clientMachinery[name]; ok {
+			homes = append(homes, "clientMachinery")
+		}
+
+		switch len(homes) {
+		case 1:
+		case 0:
+			t.Errorf("uhp.%s is published beside the schema's objects without being one of them.\n"+
+				"Either it mirrors a $defs entry and is misnamed, or it is this server's own "+
+				"addition and belongs in uhp/uhpgo, or it is a shape the schema leaves untyped — "+
+				"in which case add it to notNormative and say so in its godoc.", name)
+		default:
+			t.Errorf("uhp.%s is claimed by more than one list: %v", name, homes)
+		}
+	}
+
+	// The lists are kept honest in the other direction too: an entry naming a
+	// type that no longer exists is a caveat still being advertised for a
+	// shape nobody ships, and it lengthens the list a reviewer is meant to be
+	// able to read at a glance.
+	for _, list := range []struct {
+		name  string
+		types []string
+	}{
+		{"inlineSchemaObjects", keysOf(inlineSchemaObjects)},
+		{"notNormative", keysOf(notNormative)},
+		{"clientMachinery", keysOf(clientMachinery)},
+	} {
+		for _, typ := range list.types {
+			if _, ok := declared[typ]; !ok {
+				t.Errorf("%s names uhp.%s, which this package no longer declares", list.name, typ)
+			}
+		}
+	}
+}
+
+// TestInlineSchemaObjectsValidate is TestPublicTypesValidateAgainstSchema for
+// the two shapes that have no $defs entry to name.
+//
+// Being described inline makes a shape no less normative, so the same check
+// applies: marshal through the public API and validate the bytes, here against
+// the JSON pointer the parent object describes it at. This also resolves the
+// pointer, which is what stops an entry in inlineSchemaObjects from being a
+// claim rather than a check.
+func TestInlineSchemaObjectsValidate(t *testing.T) {
+	for _, name := range keysOf(inlineSchemaObjects) {
+		obj := inlineSchemaObjects[name]
+		t.Run(name, func(t *testing.T) {
+			validateRef(t, obj.ref, "uhp."+name, obj.value)
+
+			// The negative half, for the reason inlineObject.invalid gives: a
+			// subschema that accepts everything passes the line above while
+			// proving nothing.
+			var doc any
+			dec := json.NewDecoder(strings.NewReader(obj.invalid))
+			dec.UseNumber()
+			if err := dec.Decode(&doc); err != nil {
+				t.Fatalf("decode invalid document for uhp.%s: %v", name, err)
+			}
+			if err := compileRef(t, obj.ref).Validate(doc); err == nil {
+				t.Errorf("%s accepts %s, so it constrains nothing this test can see; "+
+					"the pointer resolves but does not name the shape uhp.%s mirrors",
+					obj.ref, obj.invalid, name)
+			}
+		})
+	}
+}
+
+// TestNotNormativeTypesSaySo requires each invented shape to carry the godoc
+// heading that warns a reader it is one.
+//
+// The list above is invisible to a client author; godoc is what they read. A
+// type may be on the list only if the warning is where the reader is, which is
+// what makes "documented" a fact this suite checks rather than a step someone
+// remembered.
+func TestNotNormativeTypesSaySo(t *testing.T) {
+	const heading = "# This shape is not normative"
+
+	declared := declaredTypes(t)
+	for _, name := range keysOf(notNormative) {
+		doc, ok := declared[name]
+		if !ok {
+			continue // TestEveryPublicTypeIsAccountedFor reports the stale entry.
+		}
+		if !strings.Contains(doc, heading) {
+			t.Errorf("uhp.%s is on the notNormative list and its godoc does not contain %q, "+
+				"so a client author reading it cannot tell the shape from the protocol", name, heading)
+		}
 	}
 }
