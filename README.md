@@ -985,22 +985,24 @@ capacity, refusing every later task with a `503` that tells the client to retry 
 condition retrying never clears. Security §5 asks for the other half: **a server MUST bound
 task duration.**
 
-Every task therefore runs under a wall-clock budget, resolved in this order:
+Every task therefore runs under a wall-clock budget: **the shortest of the three bounds
+that are set.**
 
-1. the request's `timeout_seconds`,
-2. the harness's configured `timeout_seconds`,
-3. `UHP_TASK_TIMEOUT`, which defaults to 30 minutes.
+- the request's `timeout_seconds`,
+- the harness's configured `timeout_seconds`,
+- `UHP_TASK_TIMEOUT`, which defaults to 30 minutes.
 
-**The last is a ceiling as well as a default.** A request or a harness may narrow the bound
-the deployment set and may not widen it, because a bound a caller can raise without limit is
-not one. So `timeout_seconds: 86400` against a default server is answered — not refused —
-with a budget of 1800 seconds, and the response says so: the resolved value is on every
-response as `metadata.timeout_seconds`, which is what makes narrowing a fact the client can
-read rather than an override it has to infer from when the work stopped. A `timeout_seconds`
-that is zero or negative *is* refused, with `400 invalid_input` and
-`param: "timeout_seconds"` — there is no reading of "a budget of no seconds" a caller could
-have wanted, and silently substituting the server's own would be the same defect in a
-quieter form.
+**Each is a clamp, and none of them is a preference.** A narrower bound below always wins,
+and a wider one never does: a request may narrow the harness's budget and the deployment's,
+and may not widen either, because a bound a caller can raise without limit is not one. So
+`timeout_seconds: 86400` against a default server is answered — not refused — with a budget
+of 1800 seconds, and the same request against a harness fenced to 60 seconds gets 60. The
+response says so in both cases: the resolved value is on every response as
+`metadata.timeout_seconds`, which is what makes narrowing a fact the client can read rather
+than an override it has to infer from when the work stopped. A `timeout_seconds` that is
+zero or negative *is* refused, with `400 invalid_input` and `param: "timeout_seconds"` —
+there is no reading of "a budget of no seconds" a caller could have wanted, and silently
+substituting the server's own would be the same defect in a quieter form.
 
 When the budget bites, the run is stopped through the same path `POST
 /v1/responses/{id}/cancel` uses — so the process group is torn down once, in one place — and

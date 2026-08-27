@@ -177,7 +177,45 @@ func TestTheResolvedBudgetIsClampedToTheServerCeiling(t *testing.T) {
 	}
 }
 
-func TestBudgetResolutionOrder(t *testing.T) {
+// The reporting half of the same rule. A request that was narrowed by the
+// harness it named has been answered rather than overruled in silence, so the
+// number it is told is the one the supervisor will enforce — the harness's,
+// not the one it asked for.
+func TestARequestNarrowedByItsHarnessIsToldTheHarnessBudget(t *testing.T) {
+	hs, err := store.NewFileHarnesses(filepath.Join(t.TempDir(), "harnesses.json"))
+	if err != nil {
+		t.Fatalf("harness store: %v", err)
+	}
+	svc := NewTaskService(newRegistryWith(echoAdapter{}), newMemStore(), testLogger(),
+		WithHarnessStore(hs), WithTaskBudget(600*time.Second))
+	ctx := context.Background()
+
+	h, err := svc.CreateHarness(ctx, HarnessSpec{Name: "Bounded", Base: "echo", TimeoutSeconds: intp(20)})
+	if err != nil {
+		t.Fatalf("CreateHarness: %v", err)
+	}
+
+	task, run, err := svc.StartTask(ctx, CreateTaskRequest{
+		Input: "x", HarnessID: h.ID, TimeoutSeconds: intp(50),
+	})
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	waitFor(t, run)
+
+	got, err := svc.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.Metadata["timeout_seconds"] != 20 {
+		t.Errorf("metadata.timeout_seconds = %v, want 20: the harness's budget was widened by the request",
+			got.Metadata["timeout_seconds"])
+	}
+}
+
+// Every level is a clamp and none of them is a preference, so the table is one
+// rule read from every direction rather than a precedence to be memorised.
+func TestEveryBudgetLevelClamps(t *testing.T) {
 	const ceiling = 100 * time.Second
 	cases := []struct {
 		name      string
@@ -187,9 +225,15 @@ func TestBudgetResolutionOrder(t *testing.T) {
 	}{
 		{"nothing set falls back to the server's own bound", nil, nil, ceiling},
 		{"the harness budget is used when the request names none", nil, intp(20), 20 * time.Second},
-		{"the request wins over the harness", intp(5), intp(20), 5 * time.Second},
+		{"a request narrows the harness's budget", intp(5), intp(20), 5 * time.Second},
+		// The direction that tells a clamp apart from a preference. Both
+		// doc comments say a request may narrow the harness's budget and may
+		// not widen it, and the case above passes under either reading.
+		{"a request may not widen the harness's budget", intp(50), intp(20), 20 * time.Second},
+		{"a harness may not widen the request's budget", intp(20), intp(50), 20 * time.Second},
 		{"a request budget above the ceiling is clamped", intp(999), nil, ceiling},
 		{"a harness budget above the ceiling is clamped", nil, intp(999), ceiling},
+		{"a request and a harness above the ceiling are both clamped", intp(999), intp(999), ceiling},
 		// Non-positive is not a budget. It reaches here only from stored
 		// harness configuration, because the transport refuses one on a
 		// request, and treating it as "stop immediately" would fail every task
@@ -201,6 +245,56 @@ func TestBudgetResolutionOrder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := resolveBudget(tc.requested, tc.harness, ceiling); got != tc.want {
 				t.Errorf("resolveBudget = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A ceiling that is not a whole number of seconds is still a ceiling a named
+// budget can go under. Truncating it to whole seconds before the comparison
+// makes a request for 20 seconds against a 20.5-second deployment bound come
+// back with 20.5 — half a second more than it asked for, which is the widening
+// of #75 in miniature. Only a duration-string UHP_TASK_TIMEOUT produces one.
+func TestAFractionalCeilingIsStillNarrowedByAWholeSecondBudget(t *testing.T) {
+	const ceiling = 20500 * time.Millisecond
+	cases := []struct {
+		name      string
+		requested *int
+		harness   *int
+		want      time.Duration
+	}{
+		{"a request naming the truncated ceiling", intp(20), nil, 20 * time.Second},
+		{"a harness naming the truncated ceiling", nil, intp(20), 20 * time.Second},
+		{"a request above the ceiling leaves it alone", intp(21), nil, ceiling},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveBudget(tc.requested, tc.harness, ceiling); got != tc.want {
+				t.Errorf("resolveBudget = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The guard the seconds comparison exists for, from the other side: a ceiling
+// under a second has no whole second a named budget could go under, and the
+// arithmetic must leave it alone rather than round it to a budget of nothing.
+// Only a duration-string UHP_TASK_TIMEOUT can produce one.
+func TestASubSecondCeilingIsNotWidenedOrEmptiedByANamedBudget(t *testing.T) {
+	const ceiling = 500 * time.Millisecond
+	cases := []struct {
+		name      string
+		requested *int
+		harness   *int
+	}{
+		{"a request naming whole seconds", intp(1), nil},
+		{"a harness naming whole seconds", nil, intp(60)},
+		{"both naming whole seconds", intp(1), intp(60)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveBudget(tc.requested, tc.harness, ceiling); got != ceiling {
+				t.Errorf("resolveBudget = %v, want %v", got, ceiling)
 			}
 		})
 	}
