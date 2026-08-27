@@ -595,9 +595,10 @@ acts on `max_step` or `timeout_seconds` must stop at or after the budget, report
 `incomplete`, and never report `completed` for truncated work — and #54 took that on for the
 wall clock only:
 
-- **`timeout_seconds` is read and enforced.** Every task runs under a budget resolved from
-  the request, then the harness, then `UHP_TASK_TIMEOUT`, clamped to the last; the resolved
-  value comes back as `metadata.timeout_seconds`; a run that outlives it is stopped, reported
+- **`timeout_seconds` is read and enforced.** Every task runs under a budget resolved as the
+  shortest of the bounds that are set — the request's, the harness's, and `UHP_TASK_TIMEOUT`
+  — so none of the three can be widened by another (#75); the resolved value comes back as
+  `metadata.timeout_seconds`; a run that outlives it is stopped, reported
   `incomplete` with `incomplete_details.reason: "timeout"`, terminated on a stream with
   `response.incomplete`, and keeps whatever it had produced. `error` stays null, because
   Lifecycle §3 forbids `incomplete` for errors and reserves `failed` for work that could not

@@ -1,6 +1,9 @@
 package service
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // DefaultTaskBudget is how long a task may run when nothing narrows it.
 //
@@ -28,44 +31,62 @@ const DefaultTaskBudget = 30 * time.Minute
 // the two are told apart.
 const reasonTimeout = "timeout"
 
-// resolveBudget picks the wall-clock budget for one run: the request's, else
-// the harness's, else the deployment's own — never longer than the last.
+// resolveBudget picks the wall-clock budget for one run: the shortest of the
+// three bounds that are set — the request's, the harness's, and the
+// deployment's own.
 //
-// The order is precedence and the ceiling is not. A client may narrow the bound
-// its deployment set and may not widen it, because a bound a caller can raise
-// without limit is not a bound, and Security §5 asks this server for one rather
-// than for a suggestion. That is also why the resolved value is reported back
-// on the response (`metadata.timeout_seconds`): a request that asked for a day
-// and got half an hour has been answered, not overruled in silence.
+// Every level is a clamp and none of them is a preference. A client may narrow
+// the bound its deployment set and may not widen it, because a bound a caller
+// can raise without limit is not a bound, and Security §5 asks this server for
+// one rather than for a suggestion; the same holds of the harness's own budget,
+// which is how an operator says "this CLI wedges, give it sixty seconds" and is
+// worth nothing if the next request can say otherwise. That is also why the
+// resolved value is reported back on the response
+// (`metadata.timeout_seconds`): a request that asked for a day and got half an
+// hour has been answered, not overruled in silence.
 //
-// A non-positive value is not a budget and falls through to the next level.
-// Zero would mean "stop before starting", which no caller wants and which would
-// fail every task on a harness that carried it.
+// Taking the minimum rather than the first bound set is #75. Precedence between
+// the levels is only ever interesting when they disagree in the direction the
+// rule already forbids, so there is none to express.
 //
-// The two levels are deliberately not treated alike, and the asymmetry is the
-// point rather than an oversight: a request naming a non-positive budget is
-// refused outright at the transport, because a client is present to be told and
-// silently substituting a different number is the defect #54 is about. Stored
-// harness configuration has nobody to tell — it may already be on disk from
-// before any of this existed — and failing every task on such a harness at run
-// time is the worse of the two answers, so it falls through here instead.
+// A non-positive value is not a budget and is skipped rather than applied. Zero
+// would mean "stop before starting", which no caller wants and which would fail
+// every task on a harness that carried it.
+//
+// The two levels are deliberately not treated alike in where they are refused,
+// and the asymmetry is the point rather than an oversight: a request naming a
+// non-positive budget is refused outright at the transport, because a client is
+// present to be told and silently substituting a different number is the defect
+// #54 is about. Stored harness configuration has nobody to tell — it may
+// already be on disk from before any of this existed — and failing every task
+// on such a harness at run time is the worse of the two answers, so it is
+// skipped here instead.
 func resolveBudget(requested, configured *int, ceiling time.Duration) time.Duration {
-	// Compared in seconds rather than as durations, so that a request naming a
-	// number of seconds larger than time.Duration can express is clamped rather
-	// than multiplied into an overflow — which wraps negative and produces a
-	// budget that has already expired.
-	ceilingSeconds := int64(ceiling / time.Second)
+	budget := ceiling
 	for _, seconds := range []*int{requested, configured} {
 		if seconds == nil || *seconds <= 0 {
 			continue
 		}
-		if int64(*seconds) >= ceilingSeconds {
-			return ceiling
+		// Refused before the multiplication rather than after it: a budget
+		// naming more seconds than time.Duration can hold would wrap negative
+		// and become a budget that had already expired — the widest number a
+		// caller can write turning into the narrowest bound there is. It
+		// cannot narrow any representable ceiling anyway, so skipping it is
+		// both safe and the right answer.
+		if int64(*seconds) > maxBudgetSeconds {
+			continue
 		}
-		return time.Duration(*seconds) * time.Second
+		if named := time.Duration(*seconds) * time.Second; named < budget {
+			budget = named
+		}
 	}
-	return ceiling
+	return budget
 }
+
+// maxBudgetSeconds is the largest whole number of seconds time.Duration can
+// hold — about 292 years, and so far outside any budget an operator or a client
+// means that the only values above it are overflow attempts and mistakes.
+const maxBudgetSeconds = int64(math.MaxInt64 / int64(time.Second))
 
 // budgetSeconds renders a budget in the units the wire uses, never as zero.
 //

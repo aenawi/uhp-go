@@ -80,9 +80,10 @@ _Avoid_: Workspace, Bucket, Volume
 
 **Budget**:
 A bound on one Task, enforced rather than recorded: the wall clock it may run for.
-Resolved once per run from the request, the Harness, and the deployment's own ceiling,
-and reported back on the Response so a client can see the number that was applied
-rather than the one it asked for. A Task stopped by one is `incomplete` — never
+Resolved once per run as the shortest of the three bounds that are set — the request's,
+the Harness's, and the deployment's own — so each of them is a ceiling and none is a
+preference, and reported back on the Response so a client can see the number that was
+applied rather than the one it asked for. A Task stopped by one is `incomplete` — never
 `failed`, which means the work could not be done, and never `cancelled`, which means
 someone asked for a stop. UHP names two, `timeout_seconds` and `max_step`; only the
 first is enforced here, and the second is accepted and dropped.
