@@ -84,6 +84,22 @@ type Run struct {
 	// Security §5 requires a task to be bounded, so "no budget" is not a state
 	// a run can be in. See resolveBudget, and supervise for what enforces it.
 	budget time.Duration
+
+	// result is the terminal task of a run whose response was not retained,
+	// and nil for every run whose response was.
+	//
+	// A `store: false` response is deleted from the store the moment it is
+	// terminal, and the client still has to be handed it exactly once — in the
+	// POST body it is waiting on, or in the reply to an idempotent retry. This
+	// is where that copy lives, and the retention window it lives for is the
+	// run's own: it dies with the Run, as the event log beside it does.
+	//
+	// Written by the supervisor goroutine before finish() closes done, and read
+	// only after a Wait on done has returned. That ordering is the whole of the
+	// synchronisation, and it is the same one firstStart uses: closing a channel
+	// happens-before a receive from it, so a reader cannot see a half-written
+	// answer and no lock is held while a run is in flight.
+	result *domain.Task
 }
 
 func newRun(taskID, sessionID string, feed *Feed, budget time.Duration, cancel, release func()) *Run {
@@ -170,6 +186,15 @@ func (r *Run) terminated() bool {
 		return false
 	}
 }
+
+// Result is the terminal task of a run whose response was not retained, or nil
+// when it was — in which case the store holds the answer and is the place to
+// read it from.
+//
+// Only safe to call after Wait has returned; before that it races the
+// supervisor. Every caller does, because a non-terminal task is not the answer
+// anyone is waiting for.
+func (r *Run) Result() *domain.Task { return r.result }
 
 // Wait blocks until the run reaches a terminal state, or ctx is cancelled.
 // Cancelling ctx abandons the wait; it does not abandon the run.
@@ -350,6 +375,13 @@ func (s *supervisor) sessionBusy(sessionID string) bool {
 func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task, updates <-chan harness.RunUpdate, rs *runState) {
 	defer func() {
 		s.runs.remove(run)
+		// Persist terminal, capture, delete — in that order, and the order is
+		// load-bearing rather than incidental. The loop below has already
+		// written the terminal state; this takes the copy the waiting client
+		// will be handed, and only then does the row go. Deleting first would
+		// answer a POST that is still holding its connection open with a 404
+		// for the task it just created.
+		s.dropUnstored(ctx, run, task)
 		run.finish()
 	}()
 
@@ -495,6 +527,45 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 			}
 			return
 		}
+	}
+}
+
+// dropUnstored honours `store: false` by removing the response now that the
+// run is over, having first kept the copy this run still owes its client.
+//
+// Tasks §4 makes the resulting `404 response_not_found` a MAY rather than a
+// MUST, which is what permits a server to retain everything instead — and is
+// why this server did, echoing an accurate `store: true`, until the field was
+// read at all. Reading it means acting on it.
+//
+// What goes is the response and only the response. The Session survives: it
+// owns the working directory and the harness binding, and the harness's own
+// session id is persisted on the session record rather than only here, so
+// dropping the task does not cost the conversation its ability to resume. The
+// run's artifacts survive too, on disk, because `store` is about response
+// retention and erasing a run's files is a different thing that nobody asked
+// for.
+//
+// What the client loses is every later read: GET on the response, its input
+// items, its place in the session's turns, and its usability as a
+// `previous_response_id`. That is the whole of what it asked for.
+//
+// A failed delete is logged and not retried. The alternative is a task that
+// cannot reach a terminal state because its storage will not co-operate, and a
+// response retained against the client's wishes is a smaller fault than a run
+// that never finishes.
+func (s *TaskService) dropUnstored(ctx context.Context, run *Run, task *domain.Task) {
+	if task.Store {
+		return
+	}
+	// A shallow copy, not the pointer: two clients can be handed this — the
+	// original request and an idempotent retry — and neither should be able to
+	// reach the other's object, however read-only both of them are today.
+	snapshot := *task
+	run.result = &snapshot
+	if _, err := s.store.DeleteTask(ctx, task.ID); err != nil {
+		s.log.Error("could not drop a store:false response; it stays readable",
+			"error", err, "task_id", task.ID)
 	}
 }
 

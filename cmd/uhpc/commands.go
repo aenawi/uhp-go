@@ -242,6 +242,7 @@ func (c *cli) runTask(ctx context.Context, args []string) error {
 	key := fs.String("key", "", "Idempotency-Key (generated when empty)")
 	file := fs.String("file", "", "attach a file as an input_file item")
 	instructions := fs.String("instructions", "", "task-specific system guidance")
+	noStore := fs.Bool("no-store", false, "ask the server not to retain the response")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -251,6 +252,13 @@ func (c *cli) runTask(ctx context.Context, args []string) error {
 	}
 
 	req := uhp.CreateResponseRequest{Model: *model, Instructions: *instructions}
+	// Sent only when it is false. `store` defaults to true, so a pointer to
+	// true is a longer way of saying nothing, and leaving the field off keeps
+	// the smallest request the schema permits actually small.
+	if *noStore {
+		store := false
+		req.Store = &store
+	}
 	if *harness != "" {
 		req.Metadata = map[string]any{"harness_id": *harness}
 	}
@@ -404,6 +412,38 @@ func (c *cli) printStatus(resp *uhp.Response) {
 			c.printf("stopped: %s\n", reason)
 		}
 	}
+	if dropped := ignoredFields(resp); len(dropped) > 0 {
+		c.printf("ignored: %s\n", strings.Join(dropped, ", "))
+	}
+	// Said only when it is false, because true is what every response has said
+	// since this server existed and a line repeating the default on every task
+	// is noise. False changes what the reader can do next — this id will not
+	// answer a `uhpc get` — so it is worth a line.
+	if !resp.Store {
+		c.printf("stored: no; this response is not readable after this command\n")
+	}
+}
+
+// ignoredFields reads `metadata.ignored_fields`: the request fields the server
+// accepted and did not act on.
+//
+// A client that never looks at this is a client that cannot tell a budget it
+// set from a budget that was silently discarded, which is the whole reason the
+// server reports it. Metadata is an open object, so the value is asserted
+// rather than assumed: a server that puts something else under the key is not
+// wrong about the protocol, and a panic is not the way to disagree with it.
+func ignoredFields(resp *uhp.Response) []string {
+	raw, ok := resp.Metadata["ignored_fields"].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if name, ok := v.(string); ok && name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 func responseText(resp *uhp.Response) string {

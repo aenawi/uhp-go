@@ -33,11 +33,21 @@ type runtimeConfig struct {
 	McpConfigPath string
 	DisabledTools []string
 
-	// Instructions is prepended to the task input. It holds the system prompt,
-	// plus anything the runtime cannot deliver natively — Harnesses §4.3 is
-	// explicit that a restriction the runtime cannot enforce MUST still reach
-	// the agent, and MUST NOT be dropped.
-	Instructions string
+	// StandingInstructions is the harness's own block, prepended to the task
+	// input. It holds the system prompt, plus anything the runtime cannot
+	// deliver natively — Harnesses §4.3 is explicit that a restriction the
+	// runtime cannot enforce MUST still reach the agent, and MUST NOT be
+	// dropped.
+	//
+	// "Standing" is the qualifier that keeps this apart from a task's own
+	// `instructions`, which is the protocol's word for a different thing: this
+	// one is the operator's and applies to every task on the harness, that one
+	// is the caller's and applies to one. composePrompt joins them, in that
+	// order, and CONTEXT.md carries both terms.
+	//
+	// Every runtime receives it as prompt text today, because no adapter is
+	// asked whether it takes a system prompt natively — see #79.
+	StandingInstructions string
 }
 
 // prepareRuntime materializes a managed harness's configuration into the
@@ -93,7 +103,7 @@ func (s *TaskService) prepareRuntime(
 		}
 	}
 
-	out.Instructions = strings.Join(standing, "\n\n")
+	out.StandingInstructions = strings.Join(standing, "\n\n")
 	return out, nil
 }
 

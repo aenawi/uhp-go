@@ -99,14 +99,20 @@ a MUST *if honoured*: stop at or after the budget, report `incomplete`, and neve
 > eight: `timeout_seconds` is read and enforced, along with the MUST it carries.
 > `max_step` still gets silence, and that split is deliberate and stated — see
 > `docs/conformance.md`. The decision this ADR records is unaffected; only the count is.
+>
+> Since 2026-08-27 ([#80](https://github.com/aenawi/uhp-go/issues/80)) it is five:
+> `instructions` and `store` are read too. And the remaining five no longer get *silence* —
+> a response names them in `metadata.ignored_fields`, which is ADR-0004. The gap this
+> consequence describes is narrower and audible; it is not closed.
 
 **The conformance suite measures none of those eight fields.** Its 52 checks contain no
 reference to `max_step`, `timeout_seconds`, `max_output_tokens`, `instructions` or
-`include`. The 52/52 `full` result is silent about all of them, and the same is true of
-`store`, which is hardcoded `true` at `internal/service/task_service.go:357` with the
-request field never read. That is permitted — `tasks.md` §4 says a server MAY return `404`
-for a `store: false` response, not that it must honour the flag — but it is unmeasured
-rather than verified, which is the distinction `docs/conformance.md` exists to draw.
+`include`. The 52/52 `full` result is silent about all of them, and the same was true of
+`store`, hardcoded `true` with the request field never read until #80. Retaining regardless
+was permitted — `tasks.md` §4 says a server MAY return `404` for a `store: false` response,
+not that it must honour the flag — but it was unmeasured rather than verified, which is the
+distinction `docs/conformance.md` exists to draw, and it is now honoured rather than merely
+permitted.
 
 **Moving `Harness.Capabilities` out of `uhp` is the decision that stings.** Capability
 enforcement is load-bearing here: a `previous_response_id` sent to a harness without

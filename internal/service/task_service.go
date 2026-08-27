@@ -215,6 +215,24 @@ type CreateTaskRequest struct {
 	// It narrows the harness's budget and the deployment's, and cannot widen
 	// either; see resolveBudget.
 	TimeoutSeconds *int
+
+	// Instructions is this task's own system guidance. It is appended to the
+	// harness's standing instructions and never replaces them — see
+	// composePrompt, which is where the reason lives.
+	Instructions string
+
+	// Store is whether this response is retained once the run is over, or nil
+	// for the protocol's default of true.
+	//
+	// A pointer for the same reason the wire field is one: false is a request
+	// and not an absence, and a plain bool could not tell the two apart.
+	Store *bool
+
+	// IgnoredFields names the request fields this server accepted and did not
+	// act on, for `metadata.ignored_fields`. It is the transport's answer
+	// rather than this package's, because only the transport sees the raw body
+	// and can tell a field that was sent from one that was never mentioned.
+	IgnoredFields []string
 }
 
 // StartTask starts a task, or — for a repeated idempotency key — returns the
@@ -374,10 +392,8 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 	if err != nil {
 		return nil, nil, err
 	}
-	input := req.Input + attachmentNote(inputPaths)
-	if runtime.Instructions != "" {
-		input = runtime.Instructions + "\n\n" + input
-	}
+	input := composePrompt(runtime.StandingInstructions, req.Instructions,
+		req.Input+attachmentNote(inputPaths))
 
 	// Tasks §1.3 and issue #43: `model` reports what ran, and a request that
 	// named none still has to be answered.
@@ -433,10 +449,19 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 			Model:              model,
 			PreviousResponseID: previousResponseID(req.PreviousResponseID),
 			Metadata:           req.Metadata,
-			// Tasks §1.1: `store` defaults to true.
-			Store:     true,
+			// Tasks §1.1: `store` defaults to true, so nil is true and only an
+			// explicit false is false.
+			//
+			// Echoed from the request rather than from the outcome, and that is
+			// the decision rather than a shortcut. The field answers "will this
+			// be here afterwards", which is settled now; reporting it as true
+			// until the drop would make a streaming client watch the value
+			// change under it, and would put a claim on `response.created` that
+			// this server already intends to contradict.
+			Store:     req.Store == nil || *req.Store,
 			CreatedAt: now.Unix(),
 		},
+		IgnoredFields:  req.IgnoredFields,
 		RequestedModel: req.Model,
 		HarnessID:      req.HarnessID,
 		SessionID:      sessionID,
@@ -491,6 +516,16 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 		}
 		task.UpdatedAt = time.Now().UTC()
 		_ = s.store.UpdateTask(ctx, task)
+		// Terminal without ever having had a run, so nothing later will drop
+		// it: this is the one path to a finished task that does not go through
+		// the supervisor. The client is answered with the error rather than
+		// with the response object, so there is no copy to keep either.
+		if !task.Store {
+			if _, derr := s.store.DeleteTask(ctx, task.ID); derr != nil {
+				s.log.Error("could not drop a store:false response; it stays readable",
+					"error", derr, "task_id", task.ID)
+			}
+		}
 		return task, nil, err
 	}
 
