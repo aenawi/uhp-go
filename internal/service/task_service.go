@@ -940,7 +940,7 @@ func (s *TaskService) CancelTask(ctx context.Context, taskID string) error {
 		return err
 	}
 
-	run.cancel()
+	run.requestCancel()
 	return nil
 }
 

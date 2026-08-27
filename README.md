@@ -1019,6 +1019,17 @@ rather than `response.failed`. Whatever the agent produced before the deadline i
 the response, artifacts included, because the budget path settles through the same code every
 other terminal path does.
 
+**If somebody does ask for a stop, that outranks the budget.** Stopping a run is not
+instantaneous — the deadline fires, the process group is signalled, and the server waits for
+it — so a `POST /v1/responses/{id}/cancel` or a `POST /v1/sessions/{id}/cancel` can arrive
+seconds after a deadline while the run is still being torn down. A task cancelled in that
+window settles `cancelled`, with no `incomplete_details`, because a stop somebody asked for is
+a fact and `incomplete` is the status a client retries: reporting a deliberate stop as the
+retryable one invites a re-run of the work a user cancelled on purpose. What the cancel does
+not do is take work away from an agent that beat it — an agent that actually finished inside
+that window is still `completed`, on the same reading that leaves a deadline-racing
+`completed` alone above.
+
 **`max_step` is not implemented and is deliberately not implied by this.** It is a budget on
 tool-call rounds, nothing in this server counts one, and only some adapters emit anything a
 round could be counted from — so it stays accepted and dropped, as Tasks §1.1 permits, and is

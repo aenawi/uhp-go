@@ -122,7 +122,7 @@ func (s *TaskService) CancelSession(ctx context.Context, id string) error {
 	if err := s.requireHarnessCapability(ctx, sess.HarnessID, uhpgo.CapCancellation, whyNoCancellation); err != nil {
 		return err
 	}
-	run.cancel()
+	run.requestCancel()
 	return nil
 }
 
@@ -166,7 +166,7 @@ func (s *TaskService) DeleteSession(ctx context.Context, id string) error {
 	}
 
 	if run, running := s.runs.bySessionRun(id); running {
-		run.cancel()
+		run.requestCancel()
 		// The rows first, then the directory once the run lets go of it. A
 		// RemoveAll racing a harness that is still writing removes some of the
 		// files and recreates none of them, so the reaper waits.
@@ -204,7 +204,7 @@ func (s *TaskService) DeleteSession(ctx context.Context, id string) error {
 	// deleting a trace exists to prevent. The window is small and the check is
 	// two map lookups.
 	if run, running := s.runs.bySessionRun(id); running {
-		run.cancel()
+		run.requestCancel()
 		s.reapWhenRunEnds(run, id)
 	}
 	return nil

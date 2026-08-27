@@ -636,3 +636,243 @@ func TestASubSecondBudgetIsStillReported(t *testing.T) {
 		})
 	}
 }
+
+// tearingDownAdapter is the teardown window itself, held open. It stalls until
+// its own Cancel is called, announces that it has started stopping, and then
+// waits to be released before it reports anything terminal.
+//
+// Every real teardown has that window — the adapter's Cancel, the signal, and
+// the Wait that process.run backstops with `cmd.WaitDelay = 5 * time.Second` —
+// and holding it open is what makes a client cancel that lands inside it
+// something a test can arrange rather than sleep through.
+type tearingDownAdapter struct {
+	*slowAdapter
+	stopping chan struct{}
+	release  chan struct{}
+	// terminal is what the adapter finally says, or nil for the adapter bug:
+	// a stream closed without any terminal state at all.
+	terminal *harness.RunUpdate
+}
+
+func newTearingDownAdapter(terminal *harness.RunUpdate) *tearingDownAdapter {
+	return &tearingDownAdapter{
+		slowAdapter: newSlowAdapter(),
+		stopping:    make(chan struct{}),
+		release:     make(chan struct{}),
+		terminal:    terminal,
+	}
+}
+
+func (a *tearingDownAdapter) Info() uhpgo.Harness {
+	return uhpgo.Harness{Harness: uhp.Harness{ID: "tearing-down", Name: "Tearing down"},
+		Capabilities: []uhpgo.Capability{uhpgo.CapStreaming, uhpgo.CapCancellation}}
+}
+
+func (a *tearingDownAdapter) Run(ctx context.Context, req harness.RunRequest) (<-chan harness.RunUpdate, error) {
+	runCtx, cancel := context.WithCancel(ctx)
+	a.mu.Lock()
+	a.cancel[req.TaskID] = cancel
+	a.mu.Unlock()
+
+	ch := make(chan harness.RunUpdate)
+	go func() {
+		defer close(ch)
+		defer cancel()
+		select {
+		case ch <- harness.RunUpdate{Type: harness.UpdateDelta, Delta: "partial"}:
+		case <-ctx.Done():
+			return
+		}
+		<-runCtx.Done()
+		close(a.stopping)
+		<-a.release
+		if a.terminal == nil {
+			return
+		}
+		select {
+		case ch <- *a.terminal:
+		case <-ctx.Done():
+		}
+	}()
+	return ch, nil
+}
+
+// Issue #76: a budget's teardown is not the scheduling quantum the comment
+// defending this used to claim. The run stays in it for the adapter's Cancel,
+// the signal, and the Wait behind them, so a client calling
+// POST /v1/responses/{id}/cancel seconds after a deadline fired was answered
+// `incomplete` with reason `timeout` — the status a client retries, for work
+// somebody stopped on purpose. On a wedged agent that invites a re-run of the
+// thing that wedged.
+//
+// A stop someone asked for is a fact, and it outranks a guess about which
+// goroutine noticed first.
+func TestACancelDuringABudgetTeardownIsReportedAsCancelled(t *testing.T) {
+	cases := []struct {
+		name     string
+		terminal *harness.RunUpdate
+	}{
+		{"the adapter reports the stop", &harness.RunUpdate{Type: harness.UpdateCancelled}},
+		// The teardown that actually happens: a CLI killed mid-sentence comes
+		// back `failed`, and the cancel still outranks it.
+		{"the adapter fails as it is torn down", &harness.RunUpdate{Type: harness.UpdateFailed, Err: errTornDown}},
+		// And the adapter bug on the same path: nothing terminal at all, so
+		// the supervisor settles the task itself.
+		{"the adapter reports nothing at all", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTearingDownAdapter(tc.terminal)
+			svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger(),
+				WithTaskBudget(testBudget))
+			ctx := context.Background()
+
+			task, run, err := svc.StartTask(ctx, CreateTaskRequest{Input: "x", HarnessID: "tearing-down"})
+			if err != nil {
+				t.Fatalf("StartTask: %v", err)
+			}
+
+			// The deadline has fired and the adapter is already stopping, so
+			// the cancel below lands squarely inside the window that used to
+			// relabel it.
+			<-a.stopping
+			if err := svc.CancelTask(ctx, task.ID); err != nil {
+				t.Fatalf("CancelTask: %v", err)
+			}
+			close(a.release)
+			waitFor(t, run)
+
+			got, err := svc.GetTask(ctx, task.ID)
+			if err != nil {
+				t.Fatalf("GetTask: %v", err)
+			}
+			if got.Status != uhp.StatusCancelled {
+				t.Fatalf("status = %q, want %q: a stop the client asked for was reported as the budget's",
+					got.Status, uhp.StatusCancelled)
+			}
+			if got.IncompleteDetails != nil {
+				t.Errorf("incomplete_details = %+v, want null on a cancelled task", got.IncompleteDetails)
+			}
+			if got.Error != nil {
+				t.Errorf("error = %+v, want null: someone asked for this stop", got.Error)
+			}
+			// Lifecycle §3: "Terminal responses MUST retain whatever output
+			// was produced before they became terminal."
+			if got.Text() != "partial" {
+				t.Errorf("text = %q, want %q", got.Text(), "partial")
+			}
+
+			// Streaming §4: a cancelled task terminates with response.failed
+			// carrying status `cancelled`; the status field, not the event
+			// name, is authoritative. What must not be there is
+			// response.incomplete.
+			evs := collect(t, run)
+			if len(evs) == 0 {
+				t.Fatal("the run published no events")
+			}
+			last := evs[len(evs)-1]
+			if last.Type != "response.failed" {
+				t.Errorf("terminal event = %q, want %q", last.Type, "response.failed")
+			}
+			if last.Response == nil || last.Response.Status != uhp.StatusCancelled {
+				t.Errorf("the terminal event does not carry a cancelled response: %+v", last.Response)
+			}
+		})
+	}
+}
+
+// The other direction, and the one the relabel exists for: nobody asked for a
+// stop, so the budget keeps the credit and the task is `incomplete`. A fix that
+// settled every expired run as `cancelled` would pass the test above and invert
+// Lifecycle §3 here.
+func TestABudgetTeardownNobodyCancelledIsStillIncomplete(t *testing.T) {
+	a := newTearingDownAdapter(&harness.RunUpdate{Type: harness.UpdateFailed, Err: errTornDown})
+	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger(),
+		WithTaskBudget(testBudget))
+	ctx := context.Background()
+
+	task, run, err := svc.StartTask(ctx, CreateTaskRequest{Input: "x", HarnessID: "tearing-down"})
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	<-a.stopping
+	close(a.release)
+	waitFor(t, run)
+
+	got, err := svc.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.Status != uhp.StatusIncomplete {
+		t.Fatalf("status = %q, want %q", got.Status, uhp.StatusIncomplete)
+	}
+	if got.IncompleteDetails["reason"] != reasonTimeout {
+		t.Errorf("incomplete_details = %+v, want reason %q", got.IncompleteDetails, reasonTimeout)
+	}
+}
+
+// Cancelling the session is the other way a client asks for the same stop, and
+// Sessions §4 makes it a distinct scope rather than a distinct outcome: what it
+// stops is still a stop somebody asked for, so it must outrank the budget too.
+func TestACancelledSessionDuringABudgetTeardownIsReportedAsCancelled(t *testing.T) {
+	a := newTearingDownAdapter(&harness.RunUpdate{Type: harness.UpdateCancelled})
+	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger(),
+		WithTaskBudget(testBudget))
+	ctx := context.Background()
+
+	task, run, err := svc.StartTask(ctx, CreateTaskRequest{Input: "x", HarnessID: "tearing-down"})
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+
+	<-a.stopping
+	if err := svc.CancelSession(ctx, task.SessionID); err != nil {
+		t.Fatalf("CancelSession: %v", err)
+	}
+	close(a.release)
+	waitFor(t, run)
+
+	got, err := svc.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.Status != uhp.StatusCancelled {
+		t.Fatalf("status = %q, want %q", got.Status, uhp.StatusCancelled)
+	}
+	if got.IncompleteDetails != nil {
+		t.Errorf("incomplete_details = %+v, want null on a cancelled task", got.IncompleteDetails)
+	}
+}
+
+// The carve-out, from the cancel side. An agent that actually finished inside
+// the teardown window produced whole work, and neither the budget nor a cancel
+// racing it takes that away: the MUST is not to report `completed` for work
+// that was truncated, and this work was not.
+func TestAnAgentThatFinishesAsItIsCancelledDuringItsBudgetTeardownIsStillCompleted(t *testing.T) {
+	a := newTearingDownAdapter(&harness.RunUpdate{Type: harness.UpdateCompleted})
+	svc := NewTaskService(newRegistryWith(a), newMemStore(), testLogger(),
+		WithTaskBudget(testBudget))
+	ctx := context.Background()
+
+	task, run, err := svc.StartTask(ctx, CreateTaskRequest{Input: "x", HarnessID: "tearing-down"})
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	<-a.stopping
+	if err := svc.CancelTask(ctx, task.ID); err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+	close(a.release)
+	waitFor(t, run)
+
+	got, err := svc.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.Status != uhp.StatusCompleted {
+		t.Errorf("status = %q, want %q: whole work was reported as stopped", got.Status, uhp.StatusCompleted)
+	}
+	if got.IncompleteDetails != nil {
+		t.Errorf("incomplete_details = %+v, want null on a completed task", got.IncompleteDetails)
+	}
+}

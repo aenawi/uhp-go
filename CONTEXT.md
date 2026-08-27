@@ -85,8 +85,12 @@ the Harness's, and the deployment's own — so each of them is a ceiling and non
 preference, and reported back on the Response so a client can see the number that was
 applied rather than the one it asked for. A Task stopped by one is `incomplete` — never
 `failed`, which means the work could not be done, and never `cancelled`, which means
-someone asked for a stop. UHP names two, `timeout_seconds` and `max_step`; only the
-first is enforced here, and the second is accepted and dropped.
+someone asked for a stop. Where both happen, the asking wins: a cancel that lands while a
+Budget is still tearing the run down settles the Task `cancelled` rather than `incomplete`,
+because `incomplete` is the status a client retries and a deliberate stop is not something
+to re-run. Neither of them touches a Task that finished first, which stays `completed`. UHP
+names two, `timeout_seconds` and `max_step`; only the first is enforced here, and the second
+is accepted and dropped.
 _Avoid_: Timeout, Limit, Deadline, Quota. "Timeout" names one budget and not the
 concept, and it stays where the name is not ours — the wire field
 `timeout_seconds`, the `metadata.timeout_seconds` this server reports it back on, and

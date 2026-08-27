@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aenawi/uhp-go/internal/domain"
@@ -12,7 +13,8 @@ import (
 )
 
 // Run is a supervised task: one goroutine owns the task's lifetime and is the
-// only writer of its state.
+// only writer of its state, cancelAsked below excepted — that one records
+// something only a request goroutine can know.
 //
 // This is the central design decision of the router. Previously the HTTP
 // handler goroutine consumed the adapter's update channel and persisted state,
@@ -60,6 +62,19 @@ type Run struct {
 	cancel func()
 	done   chan struct{}
 
+	// cancelAsked records that somebody asked for this run to stop — a client
+	// cancelling the task or its session, or the session being deleted out
+	// from under it — as opposed to the budget below stopping it on the
+	// server's own initiative.
+	//
+	// It is the one piece of a run's state the supervisor goroutine is not the
+	// only writer of, because the asking happens on a request goroutine, so it
+	// is atomic. What it buys is that a stop somebody asked for stays a fact
+	// for the rest of the run: the teardown a budget starts is seconds long,
+	// and without this a cancel arriving inside it was reported as the budget's
+	// doing (#76).
+	cancelAsked atomic.Bool
+
 	// release gives back the run slot this run holds. The run owns the slot
 	// for exactly as long as it owns the harness process.
 	release func()
@@ -82,6 +97,20 @@ func newRun(taskID, sessionID string, feed *Feed, budget time.Duration, cancel, 
 		release:   release,
 		budget:    budget,
 	}
+}
+
+// requestCancel stops the run and remembers that the stop was asked for.
+//
+// Every caller acting on somebody's behalf goes through here rather than
+// calling cancel directly; the budget in supervise is the one caller that does
+// not, because it is this server stopping the run on its own initiative and
+// the difference between those two is exactly what the flag records.
+func (r *Run) requestCancel() {
+	// Set before the stop, not after: cancel can deliver the adapter's
+	// terminal update before this goroutine runs again, and a flag written
+	// afterwards would be read by the supervisor a moment too late.
+	r.cancelAsked.Store(true)
+	r.cancel()
 }
 
 // publish appends an event to this task's retained log and to its harness's
@@ -345,7 +374,8 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 		select {
 		case u, open := <-updates:
 			if !open {
-				for _, ev := range s.settleUnreported(ctx, task, seq, rs, expired) {
+				stopped := stoppedBy(expired, run.cancelAsked.Load())
+				for _, ev := range s.settleUnreported(ctx, task, seq, rs, stopped) {
 					run.publish(ev)
 				}
 				return
@@ -404,23 +434,37 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 		// produced whole work, and the MUST is not to report `completed` for
 		// work that was *truncated* — this work was not.
 		//
-		// A client cancel that lands in the same instant as the deadline is
-		// reported as incomplete, because the deadline is what this goroutine
-		// observed first. Nothing distinguishes them at this distance and the
-		// window is one scheduling quantum wide; the reverse order — a cancel
-		// applied before the deadline is ever selected — settles the task
-		// terminal and returns below without reaching here at all.
-		if expired && relabelAsIncomplete(upd.Type) {
+		// Which stop it is relabelled as is stoppedBy's decision, and a cancel
+		// outranks the budget there however long after the deadline it landed
+		// (#76).
+		//
+		// That is not the tie-break it looks like. `expired` is set when the
+		// budget fires and stays set for the whole of the teardown that
+		// follows — the adapter's Cancel, the signal, and the Wait that
+		// process.run backstops with `cmd.WaitDelay = 5 * time.Second` — so
+		// the window is seconds wide, not the scheduling quantum this comment
+		// used to claim. A client calling POST /v1/responses/{id}/cancel
+		// inside it was answered `incomplete` with reason `timeout`: the
+		// status that tells a client the work is worth retrying, for work
+		// somebody stopped on purpose, and on a wedged agent an invitation to
+		// re-run the thing that wedged.
+		if stopped := stoppedBy(expired, run.cancelAsked.Load()); stopped != "" && relabelableTerminal(upd.Type) {
 			if upd.Err != nil {
-				// Not lost, only kept out of the response: `incomplete` carries
-				// no error object, and an operator reading the log is the one
-				// who needs to know what the CLI said as it died.
-				s.log.Info("harness reported a failure after its budget expired; reporting incomplete",
+				// Not lost, only kept out of the response: neither `incomplete`
+				// nor `cancelled` carries an error object, and an operator
+				// reading the log is the one who needs to know what the CLI
+				// said as it died.
+				s.log.Info("harness reported a failure after its budget expired",
 					"task_id", task.ID, "harness_error", upd.Err.Error())
 			}
-			upd.Type = harness.UpdateIncomplete
-			upd.Reason = reasonTimeout
 			upd.Err = nil
+			if stopped == uhp.StatusCancelled {
+				upd.Type = harness.UpdateCancelled
+				upd.Reason = ""
+			} else {
+				upd.Type = harness.UpdateIncomplete
+				upd.Reason = reasonTimeout
+			}
 		}
 
 		evs, err := s.applyUpdate(ctx, task, upd, seq, rs)
@@ -460,25 +504,35 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 // end terminal, and a task stuck "in_progress" forever is the exact defect this
 // design exists to prevent.
 //
-// What it settles as depends on whether a budget had already stopped the run.
-// A wedged runtime that is killed on its deadline and then says nothing has not
+// What it settles as depends on whether this server had already stopped the
+// run, and the three answers rank the same way the relabel above does. A
+// wedged runtime that is killed on its deadline and then says nothing has not
 // failed — the budget ended it, and Lifecycle §3 is explicit that a budget is
 // not an error — so reporting `failed` there would tell a client the work was
-// impossible when it was merely cut short.
+// impossible when it was merely cut short. And within that, a stop somebody
+// asked for outranks the budget, for the same reason it does above: silence
+// from the adapter is no evidence against a cancel this server has a record
+// of.
 func (s *TaskService) settleUnreported(
-	ctx context.Context, task *domain.Task, seq *sequencer, rs *runState, expired bool,
+	ctx context.Context, task *domain.Task, seq *sequencer, rs *runState, stopped uhp.ResponseStatus,
 ) []uhpgo.Event {
 	if isTerminalStatus(task.Status) {
 		return nil
 	}
 
 	evType := "response.failed"
-	if expired {
+	switch stopped {
+	case uhp.StatusCancelled:
+		task.Status = uhp.StatusCancelled
+		task.Error = nil
+		// Streaming §4: a cancelled task terminates with response.failed
+		// carrying status "cancelled", so evType stays as it is.
+	case uhp.StatusIncomplete:
 		task.Status = uhp.StatusIncomplete
 		task.Error = nil
 		task.IncompleteDetails = map[string]any{"reason": reasonTimeout}
 		evType = "response.incomplete"
-	} else {
+	default:
 		task.Status = uhp.StatusFailed
 		task.Error = &uhp.Error{
 			Type:    uhp.ErrorTypeHarness,
@@ -499,13 +553,44 @@ func (s *TaskService) settleUnreported(
 	return evs
 }
 
-// relabelAsIncomplete reports whether a terminal update from an adapter whose
-// budget has already expired should be rewritten as `incomplete`.
+// stoppedBy names what stopped a run from outside the work itself, and so what
+// a terminal state reached during the teardown is called. The empty status is
+// "nothing stopped it", and whatever the adapter reports then stands as the
+// work's own answer.
+//
+// The ranking is the whole of it, and it lives here rather than at the two
+// places that read it so that the two cannot come to disagree about the order.
+// A cancel outranks a budget, because what somebody asked for is a fact where
+// which goroutine noticed first is a guess, and because `incomplete` is the
+// status a client retries — the wrong thing to tell one about a stop it asked
+// for on purpose (#76).
+//
+// A cancel on its own ranks nothing, and that asymmetry is the load-bearing
+// part. Everything here rests on this server having caused the teardown, which
+// only the budget establishes: a cancel arriving while an adapter fails for its
+// own reasons has caused nothing, and relabelling that failure would report a
+// real harness error as a stop and discard the error object with it. `expired`
+// is written and read by the supervisor goroutine alone, so it cannot race with
+// the update it is being applied to; a cancel from a request goroutine can.
+func stoppedBy(expired, cancelAsked bool) uhp.ResponseStatus {
+	switch {
+	case expired && cancelAsked:
+		return uhp.StatusCancelled
+	case expired:
+		return uhp.StatusIncomplete
+	default:
+		return ""
+	}
+}
+
+// relabelableTerminal reports whether a terminal update is one the teardown
+// could have produced, rather than the work's own answer — so whether
+// [stoppedBy]'s verdict may overwrite it.
 //
 // Everything terminal except `completed`, and `incomplete` itself — which an
 // adapter that bounds its own steps would send, already carrying the reason
 // that overwriting it would destroy.
-func relabelAsIncomplete(t harness.UpdateType) bool {
+func relabelableTerminal(t harness.UpdateType) bool {
 	switch t {
 	case harness.UpdateCancelled, harness.UpdateFailed:
 		return true
