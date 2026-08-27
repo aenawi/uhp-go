@@ -274,3 +274,51 @@ func TestStoreRefusesAShareForASessionItDoesNotHold(t *testing.T) {
 		}
 	})
 }
+
+// How many links this store is holding, which is the one question an operator
+// asks about shares without holding one (#68).
+//
+// Turning UHP_SESSION_SHARING off suspends every link rather than revoking it,
+// so a server that is not serving sharing may still be sitting on capabilities
+// that resolve the moment the flag comes back. Saying so at startup needs a
+// number, and it is a count rather than a listing because the id is the
+// credential: an operator needs to know there are three, not what they are.
+func TestStoreCountsTheSharesItHolds(t *testing.T) {
+	eachStore(t, func(t *testing.T, s service.Store) {
+		ctx := context.Background()
+		if n, err := s.CountShares(ctx); n != 0 || err != nil {
+			t.Fatalf("empty store counts %d shares (err=%v)", n, err)
+		}
+
+		seed(t, s, shareSession("sess_a"))
+		seed(t, s, shareSession("sess_b"))
+		if _, _, err := s.CreateShare(ctx, &domain.Share{ID: "shr_a", SessionID: "sess_a"}); err != nil {
+			t.Fatalf("create share a: %v", err)
+		}
+		if _, _, err := s.CreateShare(ctx, &domain.Share{ID: "shr_b", SessionID: "sess_b"}); err != nil {
+			t.Fatalf("create share b: %v", err)
+		}
+		if n, err := s.CountShares(ctx); n != 2 || err != nil {
+			t.Fatalf("two shares counted %d (err=%v)", n, err)
+		}
+
+		// A second share of the same session is the existing one, so the count
+		// does not move — the same thing that makes the endpoint idempotent.
+		if _, _, err := s.CreateShare(ctx, &domain.Share{ID: "shr_again", SessionID: "sess_a"}); err != nil {
+			t.Fatalf("create share again: %v", err)
+		}
+		if n, err := s.CountShares(ctx); n != 2 || err != nil {
+			t.Fatalf("re-sharing a session counted %d (err=%v)", n, err)
+		}
+
+		// And a revoked share is gone from the count, as it is from every
+		// other read: the number is what would resolve, not what was ever
+		// minted.
+		if _, _, err := s.DeleteSessionShare(ctx, "sess_a"); err != nil {
+			t.Fatalf("revoke: %v", err)
+		}
+		if n, err := s.CountShares(ctx); n != 1 || err != nil {
+			t.Fatalf("after a revoke the count is %d (err=%v)", n, err)
+		}
+	})
+}

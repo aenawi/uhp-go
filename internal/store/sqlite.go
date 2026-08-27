@@ -686,6 +686,19 @@ func (s *SQLiteStore) readShare(ctx context.Context, query, key string) (*domain
 	return &sh, true, nil
 }
 
+// CountShares reports how many shares this store holds.
+//
+// COUNT(*) rather than a listing for the caller to measure, because the number
+// is all the caller wants and a share id is a credential: rows nobody asked for
+// should not travel to somebody who only wanted to know whether there are any.
+func (s *SQLiteStore) CountShares(ctx context.Context) (int, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM shares`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count shares: %w", err)
+	}
+	return n, nil
+}
+
 // DeleteSessionShare revokes a session's share and reports which id it removed,
 // with found=false for a session that had none.
 //

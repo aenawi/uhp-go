@@ -118,6 +118,20 @@ type Store interface {
 	// idempotent POST reads before minting anything.
 	GetSessionShare(ctx context.Context, sessionID string) (sh *domain.Share, found bool, err error)
 
+	// CountShares reports how many shares this store holds — how many would
+	// still resolve, not how many were ever minted.
+	//
+	// It exists for the one question that is asked with no share id in hand:
+	// whether a deployment that is not serving sharing is nonetheless sitting
+	// on shares. Turning the capability off suspends them rather than revoking
+	// them, so uhpd says so at startup, and saying so needs a number.
+	//
+	// A count and not a listing, deliberately. The id is the credential, so a
+	// method that hands every live one back would be a way to read every shared
+	// conversation without ever having been sent a link — and nothing needs it:
+	// what an operator has to know is that there are three, not what they are.
+	CountShares(ctx context.Context) (int, error)
+
 	// DeleteSessionShare revokes a session's share, reporting found=false for a
 	// session that had none.
 	//

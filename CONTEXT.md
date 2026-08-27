@@ -47,7 +47,9 @@ wire one carries a URL, which is a property of the origin this server is reached
 than of the share — so `domain.Share` does not embed `uhp.Share` and renders it instead.
 The id is a capability, never an identifier for anything else, and it is not a bearer
 token: it is a path segment under `/v1/shares/`, and presenting it as a credential
-anywhere buys nothing.
+anywhere buys nothing. Revocation is the only thing that withdraws one; the deployment's
+sharing capability being turned off suspends every Share instead — the endpoints stop
+answering and the ids survive, so a restart with it back on resolves them all again.
 _Avoid_: Link, Public URL, Share token, Session token
 
 ## Core concepts

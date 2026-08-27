@@ -43,6 +43,24 @@ import (
 // discover. With it off, discovery reports `session_sharing: false` and every
 // method below refuses — which is the honest pair, and is what this server did
 // before any of this existed.
+//
+// # Turning it back off is not revocation
+//
+// It suspends. The share rows outlive the flag, so a deployment restarted with
+// the variable set again resolves every link it ever minted, and there is no
+// way to revoke one while the capability is off — RevokeShare is behind the
+// same check as everything else here.
+//
+// That is a decision, and it is not the one the rest of this file would
+// suggest. Revocation here is absolute, which reads as "a share is a live
+// credential", and a credential that a configuration change suspends rather
+// than withdraws is a weaker promise than that. The alternative is revoking
+// every share when the server starts without the variable, and that destroys
+// state on a restart with a typo'd variable name — the silent-downgrade
+// failure openHarnessStore refuses to make, in its destructive form. So the
+// flag stays a flag, and uhpd says so at startup when it is off and shares are
+// still stored (see warnSuspendedShares there). Withdrawing a link means
+// revoking it, with sharing on.
 
 var (
 	// ErrShareNotFound is a share id that does not resolve, and a session that

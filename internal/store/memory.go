@@ -246,6 +246,16 @@ func (s *MemoryStore) GetSessionShare(_ context.Context, sessionID string) (*dom
 	return &cp, true, nil
 }
 
+// CountShares reports how many shares this store holds.
+//
+// Read under the same lock as everything else, so the number is one this store
+// was in at some instant rather than a walk of a map somebody is writing to.
+func (s *MemoryStore) CountShares(_ context.Context) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.shares), nil
+}
+
 // DeleteSessionShare revokes a session's share and reports which id it removed.
 func (s *MemoryStore) DeleteSessionShare(_ context.Context, sessionID string) (string, bool, error) {
 	s.mu.Lock()

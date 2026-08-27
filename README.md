@@ -620,6 +620,37 @@ uhpc shared shr_9f2…         # read it the way its recipient does
 uhpc unshare sess_abc        # revoke it
 ```
 
+### Turning it off suspends the links; it does not revoke them
+
+`UHP_SESSION_SHARING` is a switch on a capability, not a delete. Unset it and every
+share endpoint answers `501`, discovery reports `session_sharing: false`, and the share
+rows stay exactly where they are — so a restart with the variable set again makes every
+link that was ever minted resolve again. Possibly in a different deployment, possibly for
+someone who was never told it had stopped working.
+
+**Revoking a link means revoking it**: `uhpc unshare <session_id>`, while sharing is on.
+There is no way to withdraw a share with the capability turned off, because revocation is
+behind the same flag as everything else.
+
+That is a decision rather than an oversight. Off means the endpoints are not served, the
+way turning off harness management does not delete the harnesses somebody created; the
+alternative — revoking every share at startup whenever the variable is absent — destroys
+state on a restart with a typo'd variable name, which is the same silent downgrade `uhpd`
+refuses to make when a configured store will not open. What is left is the gap between
+what an operator meant by turning it off and what they got, so a server that starts
+without the variable and is still holding links says so:
+
+```
+{"level":"WARN","msg":"session sharing is off and this server still holds shares; they are suspended, not revoked, and every one of them resolves again if it is turned back on","shares":3,"hint":"to withdraw them, start with UHP_SESSION_SHARING=1 and revoke each one (uhpc unshare <session_id>)"}
+```
+
+It counts rather than lists: the id *is* the credential, so an operator needs to know
+there are three, not what they are. Nothing is logged when there are none, which is
+almost every deployment — a line printed on every start is a line nobody reads on the
+start that mattered. `internal/service/shares_test.go` holds the whole cycle up: minted,
+suspended by a restart without the flag, resolving again after a restart with it, and
+gone for good once revoked.
+
 ### The share id is the credential
 
 A share id is 256 bits of randomness behind a `shr_` prefix, and it is a bearer capability:
@@ -675,10 +706,12 @@ something* when they are empty: `mcpServers: []` means "this harness has none" a
 `maxStep` means "unbounded". A stripped harness would therefore tell a viewer two untrue
 things about a system they cannot see. A separate type says only what it says.
 
-Revocation is absolute: the id stops resolving. Not hidden, not expired, not marked. And
-deleting the trace takes the share with it — Sessions §6 makes a deleted session's files
-unreachable, and a surviving share id would be the anonymous route back to them. Both
-engines are held to that in `internal/store/share_contract_test.go`.
+Revocation is absolute: the id stops resolving. Not hidden, not expired, not marked —
+and it is the only thing that is, since turning the capability off suspends links rather
+than withdrawing them, as above. And deleting the trace takes the share with it —
+Sessions §6 makes a deleted session's files unreachable, and a surviving share id would
+be the anonymous route back to them. Both engines are held to that in
+`internal/store/share_contract_test.go`.
 
 There is no expiry, deliberately. §5 requires revocation and says nothing about expiry, and
 a stored expiry that nothing enforces is a worse promise than none.
@@ -899,7 +932,7 @@ properties of `service.Store`, not of whichever engine a deployment configured.
 | `UHP_MAX_CONCURRENT_RUNS` | `8` | Harness processes allowed to run at once; beyond it, `503 harness_unavailable` |
 | `UHP_TASK_TIMEOUT` | `30m` | Longest a task may run, and the ceiling `timeout_seconds` is clamped to. A Go duration (`30m`) or a bare number of seconds (`1800`) — see [Task budgets](#task-budgets) |
 | `UHP_PUBLIC_URL` | (unset = relative URLs) | Origin used to build absolute artifact download and share URLs |
-| `UHP_SESSION_SHARING` | `false` | `1` or `true` serves the unauthenticated read views of Sessions §5. Off by default — see [Session sharing](#session-sharing) |
+| `UHP_SESSION_SHARING` | `false` | `1` or `true` serves the unauthenticated read views of Sessions §5. Off by default, and turning it back off suspends the links it minted rather than revoking them — see [Session sharing](#session-sharing) |
 | `UHP_DEFAULT_HARNESS` | (unset = the sole ready harness, if there is exactly one) | Harness a task that names none runs on. `uhpd` refuses to start if it names nothing |
 | `UHP_CLAUDE_MODELS` | `claude-sonnet-5,claude-opus-5` | Claude Code models — see [Where the model list comes from](#where-the-model-list-comes-from) |
 | `UHP_CODEX_MODELS` | `gpt-5.6-sol` | Codex fallback models |

@@ -237,3 +237,79 @@ func writeArtifact(t *testing.T, svc *TaskService, taskID, sessionID, name, body
 	t.Fatalf("artifact %q was not captured", name)
 	return ""
 }
+
+// Turning the capability off suspends the links it minted rather than revoking
+// them, and that is the decision rather than an accident (#68).
+//
+// What an operator gets from unsetting UHP_SESSION_SHARING is a suspension:
+// every share ever minted resolves again the next time the variable is set,
+// possibly in another deployment, possibly for someone who was never told it
+// had stopped working. Revoking means revoking, with sharing on. The argument
+// for reading the flag that way is on the package comment in shares.go.
+//
+// Nothing covered the second half of that before this test, which is how a
+// documented-rather-than-decided behaviour stayed a matter of opinion. The
+// store outlives the service here for the same reason a database outlives a
+// process: rebuilding the service over one store is what a restart is.
+func TestTurningSharingOffSuspendsItsLinksRatherThanRevokingThem(t *testing.T) {
+	st := newMemStore()
+	reg := newRegistryWith(echoAdapter{})
+	ctx := context.Background()
+
+	on := NewTaskService(reg, st, testLogger(), WithSessionSharing())
+	task := runOnce(t, on, CreateTaskRequest{Input: "hi", HarnessID: "echo"})
+	sh, err := on.ShareSession(ctx, task.SessionID)
+	if err != nil {
+		t.Fatalf("share: %v", err)
+	}
+
+	// Restarted without the variable. Every share method refuses, including
+	// the one an operator would reach for to make the suspension permanent:
+	// revocation is behind the same flag as everything else, so "turn it off
+	// and then revoke" is not a sequence this server offers.
+	off := NewTaskService(reg, st, testLogger())
+	if off.SessionSharingEnabled() {
+		t.Fatal("sharing survived a restart without the option")
+	}
+	if _, err := off.SharedSession(ctx, sh.ID); !errors.Is(err, ErrSessionSharingUnsupported) {
+		t.Errorf("SharedSession with sharing off = %v", err)
+	}
+	if _, err := off.SharedTurns(ctx, sh.ID); !errors.Is(err, ErrSessionSharingUnsupported) {
+		t.Errorf("SharedTurns with sharing off = %v", err)
+	}
+	if _, err := off.SessionShare(ctx, task.SessionID); !errors.Is(err, ErrSessionSharingUnsupported) {
+		t.Errorf("SessionShare with sharing off = %v", err)
+	}
+	if _, err := off.RevokeShare(ctx, task.SessionID); !errors.Is(err, ErrSessionSharingUnsupported) {
+		t.Errorf("RevokeShare with sharing off = %v", err)
+	}
+
+	// And restarted with it again: the same id, resolving to the same
+	// conversation. This is the half nothing asserted, and it is the whole of
+	// what #68 is about — the link was hidden, not withdrawn.
+	back := NewTaskService(reg, st, testLogger(), WithSessionSharing())
+	view, err := back.SharedSession(ctx, sh.ID)
+	if err != nil {
+		t.Fatalf("the suspended share did not resolve after sharing came back: %v", err)
+	}
+	if view.Session.ID != task.SessionID {
+		t.Fatalf("the share resolved to session %q, want %q", view.Session.ID, task.SessionID)
+	}
+	again, err := back.SessionShare(ctx, task.SessionID)
+	if err != nil {
+		t.Fatalf("SessionShare after sharing came back: %v", err)
+	}
+	if again.ID != sh.ID || again.CreatedAt != sh.CreatedAt {
+		t.Errorf("the share came back changed: %+v, want %+v", again, sh)
+	}
+
+	// Revoking is what withdraws it, and that outlives a restart in the
+	// direction the flag does not: a revoked id does not come back.
+	if _, err := back.RevokeShare(ctx, task.SessionID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	final := NewTaskService(reg, st, testLogger(), WithSessionSharing())
+	if _, err := final.SharedSession(ctx, sh.ID); !errors.Is(err, ErrShareNotFound) {
+		t.Fatalf("a revoked share resolved after a restart: %v", err)
+	}
+}

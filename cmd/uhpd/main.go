@@ -74,6 +74,37 @@ func openTaskStore(cfg config.Config, log *slog.Logger) (service.Store, func()) 
 	}
 }
 
+// warnSuspendedShares says so when this server is holding shares it is not
+// serving.
+//
+// Turning UHP_SESSION_SHARING off suspends the shares it minted rather than
+// revoking them: the endpoints answer 501, the rows stay, and a restart with
+// the variable set again resolves every id ever minted. That is a decision, and
+// the argument for it is in internal/service/shares.go rather than repeated
+// here; what is left for this file is the consequence, which is that an
+// operator who meant "stop serving these" has to be told which of the two they
+// got (#68).
+//
+// Silent when there is nothing suspended, which is nearly every deployment: a
+// line printed on every start is a line nobody reads on the start that
+// mattered. And a store that will not answer is a warning rather than an exit,
+// because this is a courtesy about state the server does not serve — making it
+// a boot dependency would let a read nothing needs stop a server that is
+// otherwise correct.
+func warnSuspendedShares(ctx context.Context, taskStore service.Store, log *slog.Logger) {
+	shares, err := taskStore.CountShares(ctx)
+	if err != nil {
+		log.Warn("could not count the shares this server holds", "error", err)
+		return
+	}
+	if shares == 0 {
+		return
+	}
+	log.Warn("session sharing is off and this server still holds shares; they are suspended, not revoked, and every one of them resolves again if it is turned back on",
+		"shares", shares,
+		"hint", "to withdraw them, start with UHP_SESSION_SHARING=1 and revoke each one (uhpc unshare <session_id>)")
+}
+
 // requireDefaultHarness refuses to start when UHP_DEFAULT_HARNESS names a
 // harness this server does not have.
 //
@@ -161,7 +192,11 @@ func main() {
 		// reading the startup log should be able to see that it is on without
 		// asking the discovery document.
 		log.Info("session sharing enabled; /v1/shares/{id} is served without authentication",
-			"revoke", "DELETE /v1/sessions/{id}/share")
+			"revoke", "DELETE /v1/sessions/{id}/share",
+			// Said here rather than only in the README, because the operator
+			// who needs it is the one reading this line before turning the
+			// variable back off (#68).
+			"note", "turning this off suspends the shares minted here rather than revoking them")
 		if cfg.PublicBaseURL == "" {
 			// A share is a link somebody sends to somebody else, and without an
 			// origin this server emits a relative one. That is still a working
@@ -171,6 +206,10 @@ func main() {
 				"hint", "set UHP_PUBLIC_URL")
 		}
 		opts = append(opts, service.WithSessionSharing())
+	} else {
+		// The other half of that honesty, and the one an operator is more
+		// likely to need: what turning it off did and did not do.
+		warnSuspendedShares(context.Background(), taskStore, log)
 	}
 	taskService := service.NewTaskService(registry, taskStore, log, opts...)
 	requireDefaultHarness(cfg, taskService, log)
