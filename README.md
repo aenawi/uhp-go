@@ -1126,6 +1126,40 @@ tracked separately. A server that honoured `timeout_seconds` and let `max_step` 
 too would be back in the position this section is about; saying which one is enforced is the
 price of enforcing either. Tracked as [#72](https://github.com/aenawi/uhp-go/issues/72).
 
+### One task per session
+
+A session has one working directory and one conversation, so Lifecycle §5 forbids running
+two tasks in it at once. A second one is refused `409`, `code: "session_busy"` — and unlike
+the capacity refusal above, not a 5xx: the request named a session that is busy, and what
+has to change before it works is that session's state rather than the server's.
+
+Errors §4 makes it retryable "once in-flight task reaches terminal state", which makes the
+refusal an instruction to wait, so it carries the two things a client can act on:
+
+```json
+{"error": {"code": "session_busy",
+           "detail": {"retry_after_ms": 5000, "response_id": "resp_…"}}}
+```
+
+`response_id` is the response holding the session, and it is the more useful of the two: a
+client given it can stop guessing entirely and watch that response go terminal instead of
+asking this endpoint again. It is not a key the protocol defines — a `detail` object is open
+— so it is a courtesy from this implementation rather than something to rely on elsewhere.
+
+`retry_after_ms` is a floor and not a prediction: an agent works for minutes and nothing here
+knows when it will stop. **The task budget does not make it a real number, which is worth
+saying because it looks as though it should.** Past a run's remaining budget the session is
+free whatever the agent is doing, so the server does hold an upper bound on the wait — but
+it is an upper bound on something that usually ends in seconds, and a client that slept for
+it would sleep through the answer. Nor is it useful to quote only when it falls under the
+floor: that is exactly the moment the budget is about to fire, and the teardown behind it
+takes a further moment nothing here can size, so the number would be knowably too short in
+the one case it applied. Too long to sleep for and too short to retry on is not a wait, and
+the floor is what is left.
+
+The field goes in the body and not in a `Retry-After` header: RFC 9110 §10.2.3 defines that
+header for `503`, `429` and the redirects, and this is a `409`.
+
 ## Idempotency
 
 **Put an `Idempotency-Key` on every retry of `POST /v1/responses`.** Without one, a retry
