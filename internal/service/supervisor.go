@@ -196,6 +196,21 @@ func (r *Run) terminated() bool {
 // anyone is waiting for.
 func (r *Run) Result() *domain.Task { return r.result }
 
+// Settled is Result for a caller that cannot afford to wait: it reports whether
+// the run is over, and only then hands back what Result would.
+//
+// The pairing is the point. Result is safe only after Wait has returned, and
+// the one caller that must not block — a `background: true` POST, which exists
+// precisely so that nothing waits for the run — would otherwise have to
+// reproduce that check itself from outside this package, where `terminated` is
+// not visible.
+func (r *Run) Settled() (*domain.Task, bool) {
+	if !r.terminated() {
+		return nil, false
+	}
+	return r.result, true
+}
+
 // Wait blocks until the run reaches a terminal state, or ctx is cancelled.
 // Cancelling ctx abandons the wait; it does not abandon the run.
 func (r *Run) Wait(ctx context.Context) error {

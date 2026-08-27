@@ -16,14 +16,14 @@ import (
 //
 // The list is deliberately short and hand-maintained rather than derived from
 // the schema. A field leaves it by being implemented, and the compiler cannot
-// notice that; a test that names all five is what does. Each has an issue:
-// `max_step` is #72, `background` is #78, and the remaining three are #48.
+// notice that; a test that names all four is what does. Each has an issue:
+// `max_step` is #72, and the remaining three are #48. `background` left the
+// list by being implemented — see ADR-0005 and issue #78.
 var droppableFields = []string{
 	"max_output_tokens",
 	"max_step",
 	"tools",
 	"include",
-	"background",
 }
 
 // ignoredFields names which of the above this request actually sent, for
@@ -41,7 +41,7 @@ func ignoredFields(present map[string]json.RawMessage) []string {
 	var out []string
 	for _, name := range droppableFields {
 		raw, sent := present[name]
-		if !sent || !carriesInstruction(name, raw) {
+		if !sent || !carriesInstruction(raw) {
 			continue
 		}
 		out = append(out, name)
@@ -50,25 +50,22 @@ func ignoredFields(present map[string]json.RawMessage) []string {
 }
 
 // carriesInstruction reports whether a field's value asks for something this
-// server did not do. Two values are present on the wire and ask for nothing.
+// server did not do. `null` is a key with no value in it, so reporting one
+// would tell a client its request was diminished when nothing in it was.
 //
-// `null` is the first: a key with no value carries no instruction, so
-// reporting it would tell a client its request was diminished when nothing in
-// it was.
+// There used to be a second case here, `"background": false`, which named the
+// behaviour this server already provided and so was honoured rather than
+// dropped. It went when `background` did (#78): a field this server implements
+// is not on the droppable list at all, and neither of its two values is
+// reported.
 //
-// `"background": false` is the second, and is the one worth spelling out. It
-// names the behaviour this server actually provides — a POST held open until
-// the task is done — so listing it would claim a request was ignored that was
-// in fact honoured exactly. `background: true` is the one that is dropped, and
-// is reported. No other droppable field has a value that means "the default",
-// which is why this is a case on one name rather than a general rule.
-func carriesInstruction(name string, raw json.RawMessage) bool {
+// Nothing replaced it, and the four that remain are reported on presence alone.
+// That is not quite exact — `"tools": []` and `"include": []` ask for nothing
+// and are still named — but an empty list is a client saying something it could
+// have said by omission, where `background: false` was a client saying the one
+// thing this server actually did. Naming an empty list overstates by a word;
+// naming `background: false` would have been false.
+func carriesInstruction(raw json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return false
-	}
-	if name == "background" && bytes.Equal(trimmed, []byte("false")) {
-		return false
-	}
-	return true
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
 }

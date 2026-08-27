@@ -5,10 +5,18 @@ Status: Accepted
 Issue: [#80](https://github.com/aenawi/uhp-go/issues/80),
 from [#48](https://github.com/aenawi/uhp-go/issues/48)
 
+> **Amended 2026-08-27.** `background` has since been implemented
+> ([ADR-0005](0005-background-answers-at-acceptance.md), issue #78) and has left the list,
+> which is exactly how a field is meant to leave it. Four remain:
+> `max_output_tokens`, `max_step`, `tools` and `include`. The decision below is unchanged;
+> only the count and the `background: false` example have moved, and both are marked where
+> they appear.
+
 ## Context
 
 `CreateResponseRequest` has thirteen properties. This server now reads eight of them and
-drops five: `max_output_tokens`, `max_step`, `tools`, `include` and `background`.
+drops five: `max_output_tokens`, `max_step`, `tools`, `include` and `background`. *(As of
+the amendment above: nine read, four dropped, `background` no longer among them.)*
 
 Dropping them is not a defect and is not a choice. Tasks §1.1 marks every field but `input`
 optional and *requires* a server to ignore a request field it does not understand rather
@@ -50,10 +58,15 @@ compatibility into a stream of warnings about perfectly valid protocol. "We do n
 this" is a fact about this server. "We have never heard of this" is a guess about who is out
 of date.
 
-**Only values that ask for something.** `null` is a key with no instruction in it. And
-`background: false` names the behaviour this server actually provides — a POST held open
-until the task is done — so reporting it would claim a request was ignored that was honoured
-exactly. `background: true` is dropped, and is reported.
+**Only values that ask for something.** `null` is a key with no instruction in it, so
+reporting one would claim a request was diminished when nothing in it was.
+
+*(As written, this rule had a second case: `background: false` named the behaviour this
+server actually provided — a POST held open until the task is done — so reporting it would
+have claimed a request was ignored that was honoured exactly, while `background: true` was
+dropped and reported. ADR-0005 implemented the field, which took it off the list entirely;
+neither of its values is reported now. None of the four that remain has a value meaning "the
+default", so the rule is about `null` and nothing else.)*
 
 ## Considered options
 
@@ -83,8 +96,9 @@ server's answer to the question has to be the server's.
 
 **The list is hand-maintained and cannot be derived.** A field leaves it by being
 implemented, and no compiler notices that. `TestTheDroppableListIsTheFieldsThisServerDoesNotRead`
-is what notices: it pins the five names and checks that eight-read-plus-five-dropped is the
-schema's thirteen.
+is what notices: it pins the names and checks that read-plus-dropped is the schema's
+thirteen. It has since done the job it was written for — `background` was implemented and
+had to be taken off the list, and this is the test that failed until it was.
 
 **It reports what a server does, not what a protocol says.** A different conformant UHP
 server will not emit this key, and a client must not read its absence as "nothing was

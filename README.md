@@ -374,8 +374,8 @@ model leaves it untouched: `model` comes back as you spelled it, and
 
 ### Which request fields are read
 
-The schema's `CreateResponseRequest` has thirteen properties. This server reads eight and
-drops five, which is what Tasks §1.1 asks of it: every field but `input` is optional, and a
+The schema's `CreateResponseRequest` has thirteen properties. This server reads nine and
+drops four, which is what Tasks §1.1 asks of it: every field but `input` is optional, and a
 server MUST ignore one it does not implement rather than reject it.
 
 | Field | What it does here |
@@ -388,7 +388,8 @@ server MUST ignore one it does not implement rather than reject it.
 | `instructions` | Appended to the harness's standing instructions, for this task only — never replaces them |
 | `store` | `false` drops the response once the run is terminal; the answer still arrives once |
 | `timeout_seconds` | Narrows the wall-clock budget, never widens it — see [Task budgets](#task-budgets) |
-| `max_output_tokens`, `max_step`, `tools`, `include`, `background` | Accepted and dropped — and named in `metadata.ignored_fields` |
+| `background` | `true` answers the POST as soon as the task is accepted, instead of holding it open |
+| `max_output_tokens`, `max_step`, `tools`, `include` | Accepted and dropped — and named in `metadata.ignored_fields` |
 
 The last row is the one worth reading twice. Dropping a field is specified behaviour;
 dropping it silently was not, and a caller that set `max_step: 5` to bound an agent's
@@ -403,11 +404,48 @@ The key is absent when nothing was dropped, so its presence is the signal. Only 
 server knows and does not act on appear: an unrecognised field is ignored without being
 named, because §1.1's ignore-don't-reject rule is what lets a newer client talk to an older
 server and naming every unknown field would turn that into a stream of warnings about valid
-protocol. A `null` value asks for nothing and is not reported, and neither is
-`background: false`, which names what this server already does. This is an extension rather
+protocol. A `null` value asks for nothing and is not reported. This is an extension rather
 than protocol — see [ADR-0004](docs/adr/0004-ignored-fields-are-declared-in-metadata.md) —
 so a client must not read its absence from some other conformant server as "nothing was
 dropped".
+
+**`background: true` answers the POST at acceptance and leaves the run going.** The body is
+the response object as it stands — normally `status: "in_progress"`, with an empty `output`
+and its `id`, `metadata.session_id` and `metadata.timeout_seconds` already filled in. Two
+ways to collect the result, both of which the server already had:
+
+```bash
+# start it, and carry a key — the second recipe below needs one, and Errors §4 asks for
+# one on every POST /v1/responses anyway
+curl -H 'Idempotency-Key: k1' -d '{"input":"…","background":true}' "$UHP/v1/responses"
+
+# 1. poll the read endpoint, which answers mid-run and every read after
+curl "$UHP/v1/responses/resp_…"
+
+# 2. or repeat the POST with that same key and stream: true — the retry is handed the
+#    first request's own run, so the stream replays from response.created
+curl -N -H 'Idempotency-Key: k1' -d '{"input":"…","background":true,"stream":true}' \
+  "$UHP/v1/responses"
+```
+
+The key is what makes the second recipe follow the first task rather than start a second one:
+without it, or with one this server has forgotten, that curl is a fresh POST — a second CLI
+run, or `session_busy` if it lands in the same session.
+
+With `stream: true` it streams exactly as it always did, and the field is honoured rather
+than dropped: a stream is a held-open POST by construction, and everything else `background`
+asks for is already true of one — the run is detached and survives a disconnect, the response
+is readable by id while it runs, and the stream is rejoinable from a `Last-Event-ID`.
+
+**A background POST is refused when the response it names will not be retained and it is not
+streaming**, `400 invalid_input` with `param: "background"`: the record is dropped when the
+run ends and the request will not be there to receive it, so the answer would be delivered
+nowhere. Sending `background: true` with `store: false` and no `stream` is the direct way to
+get that. The rule is about the *accepted task* rather than the body, which matters in one
+place: an idempotent retry need not repeat `store: false`, so `{"background": true}` against
+a key naming an unretained run is refused too — and a retry whose run has already finished is
+answered with the result instead, because Tasks §6 owes it that. See
+[ADR-0005](docs/adr/0005-background-answers-at-acceptance.md).
 
 **`instructions` are added to the harness's, not swapped for them.** The prompt is composed
 standing-block, then the task's instructions, then the input. A harness's standing block is
