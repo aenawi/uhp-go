@@ -616,8 +616,9 @@ declined**, which is a decision rather than a gap: no base takes a sampling para
 token accounting arrives only once a run is over, the schema describes the `tools` objects no
 further than "object" so any meaning would be invented, and `include` has neither an agreed
 vocabulary nor any extra content to name. [ADR-0007](adr/0007-a-declined-field-is-not-a-pending-one.md)
-records all three and the rule they were measured against; the `tools` question goes upstream
-to the protocol rather than being answered here. `max_step` is the one that is merely
+records all three and the rule they were measured against; the `tools` question went upstream
+to the protocol rather than being answered here, as
+[HarnessRouter/harnessrouter#42](https://github.com/HarnessRouter/harnessrouter/issues/42). `max_step` is the one that is merely
 `pending`, and it is #72.
 
 All thirteen are *published*, on `uhp.CreateResponseRequest`, which widens the distance

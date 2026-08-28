@@ -83,11 +83,22 @@ declined, because the rule that permits per-base behaviour assumes the request i
 Here it is not. #48 asks for a meaning "that is not a lie", and for this field **the guess is
 the lie**.
 
+The two readings do not merely differ, which is the sharpest form of the argument and worth
+stating here rather than only upstream. Under the MCP reading `tools` is implementable on one
+of the five bases today. Under the function-declaration reading it is implementable on none
+of them, because these are agent harnesses rather than model endpoints and not one exposes a
+per-call tool list. Same field, same schema, opposite answers to whether a conformant server
+can support it at all — so this is not a detail an implementer can settle by picking sensibly.
+
 This is the one of the three that is blocked rather than impossible, and the block is not in
-this repository. The question is raised as [#86](https://github.com/aenawi/uhp-go/issues/86)
-and goes upstream to the protocol, as [README.md](../../README.md#L61) already undertakes to
-do for exactly this kind of gap. If UHP describes the shape, this decision is revisited for
-`tools` alone, on its merits.
+this repository. The question is raised upstream as
+[HarnessRouter/harnessrouter#42](https://github.com/HarnessRouter/harnessrouter/issues/42),
+prose-first per their `GOVERNANCE.md`, as [README.md](../../README.md#L61) already undertakes
+to do for exactly this kind of gap; [#86](https://github.com/aenawi/uhp-go/issues/86) tracks
+it here and closes when upstream answers. Three resolutions were offered, and the cheapest is
+worth naming because it needs no schema work: a statement that the field is deliberately
+opaque and servers are expected to ignore it would close the ambiguity outright. If instead
+UHP describes the shape, this decision is revisited for `tools` alone, on its merits.
 
 ### `include` — declined
 
