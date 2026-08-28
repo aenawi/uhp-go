@@ -25,7 +25,8 @@ clients. That is its purpose, not a vulnerability. The security boundary is:
 - Path traversal through artifact or file identifiers.
 - Causing `uhpd` to make outbound network connections of its own (it is designed to make
   none — see "Runs entirely offline" in the README).
-- Leaking one client's task, session, or artifact data to another.
+- Leaking task, session, or artifact data to a caller presenting no credential, or serving
+  it through a share id that does not cover it.
 - Denial of service that is disproportionate to the request: unbounded memory from a
   single request, or unbounded process spawning.
 
@@ -33,6 +34,11 @@ clients. That is its purpose, not a vulnerability. The security boundary is:
 
 - Anything an authenticated client can do that the agent CLI itself permits. A harness
   agent runs commands; a client authorised to start a task is authorised to do that.
+- One holder of a configured key reading another's tasks, sessions, or artifacts. A `uhpd`
+  process serves one principal, and every value in `UHP_API_KEYS` is an equivalent
+  credential for it rather than a tenant of its own — so two people holding two keys are
+  one client and share everything by design. Keeping two tenants apart means running one
+  `uhpd` per tenant. See [ADR-0006](docs/adr/0006-one-principal-per-server.md).
 - Vulnerabilities in the harness CLIs themselves (`claude`, `codex`, `grok`, `opencode`,
   `pi`). Report those to their vendors.
 - Running `uhpd` with `UHP_API_KEYS` unset. That disables authentication by design and is

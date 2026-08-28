@@ -115,6 +115,35 @@ func TestConfiguredKeysAllowAnyAddressAndWarnAboutNothing(t *testing.T) {
 	}
 }
 
+// A second key is a second credential, not a second tenant, and the plural
+// variable name invites the opposite reading. The log line is the only place
+// that catches an operator at the moment they made the assumption — a README
+// paragraph only catches the ones who go back and read it.
+func TestSeveralKeysSayTheyAreOnePrincipal(t *testing.T) {
+	refuseResolver(t)
+	cfg, log, buf := captureConfig("0.0.0.0:8080", []string{"alice", "bob", "carol"})
+	if err := cfg.CheckAuthPosture(log); err != nil {
+		t.Fatalf("three keys were refused: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `"level":"INFO"`) {
+		t.Fatalf("three keys logged nothing: %s", out)
+	}
+	// "principal" is the word CONTEXT.md defines and the word the operator has
+	// to be able to search for; "tenant" is the word they were thinking of.
+	for _, want := range []string{"principal", "tenant"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the several-keys line does not say %q: %s", want, out)
+		}
+	}
+	// No key is a credential to be found in a log, however configured it is.
+	for _, key := range []string{"alice", "bob", "carol"} {
+		if strings.Contains(out, key) {
+			t.Errorf("the several-keys line logged the key %q: %s", key, out)
+		}
+	}
+}
+
 // The one silent failure this change could otherwise cause: a keyed server that
 // was reachable before the default narrowed, and is now bound where nothing can
 // reach it. The keys check passes without ever looking at the address, so the

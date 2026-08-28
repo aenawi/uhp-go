@@ -634,8 +634,9 @@ Artifacts are reachable only through their session's records, so an artifact of 
 this server no longer has is a 404 — which is what the specification asks for when a
 session is deleted, and `DELETE /v1/traces/{id}` is the endpoint that does it. Access is scoped to the server's
 single principal: every configured `UHP_API_KEYS` value is equivalent and carries no
-identity, so a deployment serving several tenants needs a principal on the credential
-before artifact lookup can filter by one.
+identity, so a deployment serving several tenants runs one `uhpd` per tenant rather than
+one server that filters — see
+[`UHP_API_KEYS` is a list of credentials, not a list of tenants](#uhp_api_keys-is-a-list-of-credentials-not-a-list-of-tenants).
 
 ## Authentication
 
@@ -686,10 +687,38 @@ and this section is the obligation instead of a wire field. The recorded conform
 was measured with `UHP_API_KEYS=devkey`; see
 [Conformance](docs/conformance.md) for what that means for the number.
 
-Every configured key is equivalent. This server has one principal, so "scope file access to
-the owning principal" (Files §5) is satisfied by requiring a key at all; a deployment
-serving several tenants needs a principal on the credential first, and artifact lookup
-would then have to filter by it.
+### `UHP_API_KEYS` is a list of credentials, not a list of tenants
+
+**Every configured key is equivalent, and a `uhpd` process serves exactly one principal.** A
+credential authenticates; it does not identify. Nothing downstream learns which key matched,
+so two people holding two keys are one client: they share every session, every transcript
+and every artifact, and no request either of them can make will reveal that.
+
+That is the conformant reading rather than an exemption. "Scope every object to the principal
+that created it" (Architecture), "scope file access to the owning principal" (Files §5) and
+"return `404`, not `403`, for objects outside the caller's scope" are all satisfied by a
+server with one principal the way a rule about every element is satisfied by an empty set —
+there is no second principal for anything to be outside the scope of. What it is not is
+enforcement, which is why `insufficient_scope` is a code this server can never return (see
+the unreachable-codes table in [docs/conformance.md](docs/conformance.md)) and why no
+conformance run says anything about tenancy either way.
+
+**Keeping two tenants apart means running one `uhpd` per tenant** — separate keys, separate
+`UHP_DB`, separate `UHP_WORKSPACE`. That boundary is the operating system's and is stronger
+than a filter this server would have to remember in every query. The alternative — a
+principal on each credential and an owner column on every object — was considered and
+rejected in [ADR-0006](docs/adr/0006-one-principal-per-server.md), which is the thing to
+supersede if one process ever has to serve two tenants.
+
+Because the variable is plural and the obvious reading of a plural is the wrong one here,
+configuring more than one key logs a line saying so:
+
+```
+{"level":"INFO","msg":"several API keys are configured; they are equivalent credentials for one principal, not one tenant each","keys":3,"hint":"run one uhpd per tenant if they must not share sessions, transcripts or artifacts"}
+```
+
+[SECURITY.md](SECURITY.md) puts this out of scope explicitly: one key holder reading another's
+data is the design, not a vulnerability.
 
 ## Session sharing
 
@@ -1018,7 +1047,7 @@ properties of `service.Store`, not of whichever engine a deployment configured.
 | Env var | Default | Purpose |
 |---|---|---|
 | `UHP_ADDR` | `127.0.0.1:8080` | HTTP listen address. Loopback by default — see [Authentication](#authentication) |
-| `UHP_API_KEYS` | (unset = auth disabled, loopback only) | Comma-separated bearer tokens this server accepts. Unset is non-conformant and `uhpd` refuses to start unauthenticated off loopback — see [Authentication](#authentication) |
+| `UHP_API_KEYS` | (unset = auth disabled, loopback only) | Comma-separated bearer tokens this server accepts. Every value is an equivalent credential for the server's one principal, **not a tenant of its own**. Unset is non-conformant and `uhpd` refuses to start unauthenticated off loopback — see [Authentication](#authentication) |
 | `UHP_WORKSPACE` | (unset = router's own cwd, and no file support) | Root for per-session working directories |
 | `UHP_HARNESS_STORE` | `$UHP_WORKSPACE/harnesses.json`, or unset = no harness management | Where harnesses created over the API are kept |
 | `UHP_DB` | `$UHP_WORKSPACE/uhp.db`, or unset = tasks and sessions in memory | SQLite file holding tasks and sessions |
