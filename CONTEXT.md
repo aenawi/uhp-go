@@ -131,7 +131,12 @@ Budget is still tearing the run down settles the Task `cancelled` rather than `i
 because `incomplete` is the status a client retries and a deliberate stop is not something
 to re-run. Neither of them touches a Task that finished first, which stays `completed`. UHP
 names two, `timeout_seconds` and `max_step`; only the first is enforced here, and the second
-is accepted and dropped.
+is accepted and dropped. `max_output_tokens` is not a third, though it reads like one: it
+bounds a single model call, and a Task is many of them, so no value of it is a bound on a
+Task — and the accounting that could make it one arrives only once a run is over, from three
+of the five bases. Declined rather than approximated, because a bound honoured approximately
+is a client believing in a ceiling it does not have — see
+[ADR-0007](docs/adr/0007-a-declined-field-is-not-a-pending-one.md).
 _Avoid_: Timeout, Limit, Deadline, Quota. "Timeout" names one budget and not the
 concept, and it stays where the name is not ours — the wire field
 `timeout_seconds`, the `metadata.timeout_seconds` this server reports it back on, and

@@ -389,9 +389,15 @@ server MUST ignore one it does not implement rather than reject it.
 | `store` | `false` drops the response once the run is terminal; the answer still arrives once |
 | `timeout_seconds` | Narrows the wall-clock budget, never widens it — see [Task budgets](#task-budgets) |
 | `background` | `true` answers the POST as soon as the task is accepted, instead of holding it open |
-| `max_output_tokens`, `max_step`, `tools`, `include` | Accepted and dropped — and named in `metadata.ignored_fields` |
+| `max_output_tokens`, `tools`, `include` | Accepted and **declined** — this server will not implement them, and each is named in `metadata.ignored_fields`. See [ADR-0007](docs/adr/0007-a-declined-field-is-not-a-pending-one.md) |
+| `max_step` | Accepted and dropped, pending a step counter no adapter offers — also named in `metadata.ignored_fields` |
 
-The last row is the one worth reading twice. Dropping a field is specified behaviour;
+The last two rows are the ones worth reading twice, and the difference between them is the
+point: a *declined* field is a decision that will not be revisited without a reason, and a
+*pending* one is work not yet done. Both look identical to a caller, which is why the
+distinction lives in the code and in ADR-0007 rather than on the wire.
+
+Dropping a field at all is specified behaviour;
 dropping it silently was not, and a caller that set `max_step: 5` to bound an agent's
 tool-call rounds got unbounded work and no way to learn why. So a response now says which of
 its fields were dropped:
