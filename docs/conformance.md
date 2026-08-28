@@ -610,9 +610,15 @@ score:
 - **`background` is now read** (#78): `true` answers the POST as soon as the task is
   accepted rather than holding it open. See below.
 
-What is left is four: `max_output_tokens`, `max_step`, `tools` and `include`. #48 is now the
-record of the three of those whose *meaning* across five heterogeneous CLI harnesses is
-undecided; `max_step` is #72.
+What is left is four: `max_output_tokens`, `max_step`, `tools` and `include` — and three of
+those four are no longer undecided. **`max_output_tokens`, `tools` and `include` are
+declined**, which is a decision rather than a gap: no base takes a sampling parameter and
+token accounting arrives only once a run is over, the schema describes the `tools` objects no
+further than "object" so any meaning would be invented, and `include` has neither an agreed
+vocabulary nor any extra content to name. [ADR-0007](adr/0007-a-declined-field-is-not-a-pending-one.md)
+records all three and the rule they were measured against; the `tools` question goes upstream
+to the protocol rather than being answered here. `max_step` is the one that is merely
+`pending`, and it is #72.
 
 All thirteen are *published*, on `uhp.CreateResponseRequest`, which widens the distance
 rather than closing it: a caller can set `MaxStep` in Go, against a server that will ignore

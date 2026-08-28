@@ -95,7 +95,11 @@ sends its own `ignored_fields` finds it replaced — exactly as `session_id` alr
 server's answer to the question has to be the server's.
 
 **The list is hand-maintained and cannot be derived.** A field leaves it by being
-implemented, and no compiler notices that. `TestTheDroppableListIsTheFieldsThisServerDoesNotRead`
+implemented, and no compiler notices that. *(Amended 2026-08-28: three of the four now never
+leave it. [ADR-0007](0007-a-declined-field-is-not-a-pending-one.md) declines
+`max_output_tokens`, `tools` and `include`, so each entry carries a status — `declined` or
+`pending` — and only `max_step` is still expected to move. This sentence read the list as a
+to-do list, which is what kept three undecidable items at the top of it.)* `TestTheDroppableListIsTheFieldsThisServerDoesNotRead`
 is what notices: it pins the names and checks that read-plus-dropped is the schema's
 thirteen. It has since done the job it was written for — `background` was implemented and
 had to be taken off the list, and this is the test that failed until it was.

@@ -125,10 +125,16 @@ func TestTheServersIgnoredFieldsReplaceAClientsOwn(t *testing.T) {
 	}
 }
 
-// The list is hand-maintained: a field leaves it by being implemented, and the
-// compiler cannot notice that. This is what notices.
+// The list is hand-maintained: a `pending` field leaves it by being
+// implemented, a `declined` one does not leave it at all, and the compiler
+// notices neither. This is what notices.
 func TestTheDroppableListIsTheFieldsThisServerDoesNotRead(t *testing.T) {
-	want := []string{"max_output_tokens", "max_step", "tools", "include"}
+	want := []droppedField{
+		{"max_output_tokens", declined},
+		{"max_step", pending},
+		{"tools", declined},
+		{"include", declined},
+	}
 	if !reflect.DeepEqual(droppableFields, want) {
 		t.Errorf("droppableFields = %v, want %v — if a field was implemented, it leaves this list "+
 			"and docs/conformance.md says so; if one was added, it joins it",
@@ -145,10 +151,31 @@ func TestTheDroppableListIsTheFieldsThisServerDoesNotRead(t *testing.T) {
 		t.Errorf("%d read + %d dropped = %d, want the schema's 13 properties",
 			len(read), len(droppableFields), len(read)+len(droppableFields))
 	}
-	for _, name := range droppableFields {
-		if read[name] {
-			t.Errorf("%q is in both lists", name)
+	for _, field := range droppableFields {
+		if read[field.name] {
+			t.Errorf("%q is in both lists", field.name)
 		}
+	}
+}
+
+// The split is the deliverable of #48, so it is pinned rather than left to a
+// comment: three of the four are decisions recorded in ADR-0007, and exactly
+// one is work anybody should expect to move.
+func TestExactlyOneDroppedFieldIsStillPending(t *testing.T) {
+	var stillPending []string
+	for _, field := range droppableFields {
+		switch field.status {
+		case pending:
+			stillPending = append(stillPending, field.name)
+		case declined:
+		default:
+			t.Errorf("%q has status %q, which is neither declined nor pending",
+				field.name, field.status)
+		}
+	}
+	if !reflect.DeepEqual(stillPending, []string{"max_step"}) {
+		t.Errorf("pending = %v, want [max_step] — a field becomes declined by an ADR "+
+			"saying so, and leaves the list entirely by being implemented", stillPending)
 	}
 }
 
