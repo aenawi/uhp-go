@@ -193,9 +193,11 @@ func refuseDotSegments(next http.Handler) http.Handler {
 //
 // Every configured key is equivalent: this server has one principal, so
 // "scope file access to the owning principal" (Files §5) is satisfied by
-// requiring a key at all. A deployment that needs several tenants needs a
-// principal on the credential first, and artifact lookup would then have to
-// filter by it.
+// requiring a key at all, and there is no second principal for anything to be
+// outside the scope of. That is a decision rather than an omission — a
+// deployment needing several tenants runs one `uhpd` per tenant — and the
+// alternative it was chosen over is recorded in ADR-0006, along with why
+// `insufficient_scope` is a code this server can never return. See issue #56.
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if len(s.apiKeys) == 0 {

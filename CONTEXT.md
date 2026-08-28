@@ -108,6 +108,17 @@ A Session's file store, seen from the Files chapter. A Session and its Container
 same thing named from two places, so one id derives from the other.
 _Avoid_: Workspace, Bucket, Volume
 
+**Principal**:
+The identity every object belongs to. A server has exactly one, so a Session, a Task and an
+Artifact are scoped to it by existing at all, and there is never a second one to be outside
+the scope of. A credential authenticates and does not identify: every configured API key is
+an equivalent way of presenting the same Principal, so two people holding two keys are one
+client and share everything. Two Principals means two servers — see
+[ADR-0006](docs/adr/0006-one-principal-per-server.md).
+_Avoid_: Tenant (that is a deployment, not an identity), User, Account, Owner, Caller. "Key"
+and "credential" name what is presented, never who is presenting it, and the two words are
+not interchangeable with this one.
+
 **Budget**:
 A bound on one Task, enforced rather than recorded: the wall clock it may run for.
 Resolved once per run as the shortest of the three bounds that are set — the request's,

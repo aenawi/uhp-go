@@ -440,6 +440,22 @@ repository's tests alone — `internal/service/feed_test.go` and
 single connection cannot show: that a second subscriber attaching at sequence *n* is handed
 exactly the events from *n* onward and none of the ones before it.
 
+**Nothing in the suite runs two credentials.** Every recorded run was made with
+`UHP_API_KEYS=devkey` — one key, one caller — so no check has ever presented a second
+credential and asked whether it can see the first one's sessions, transcripts or artifacts.
+A green run therefore cannot distinguish this server, where every configured key is an
+equivalent credential for one principal, from one that enforces scope per credential.
+
+That is a gap in what the suite can see rather than a defect, because this server serves one
+principal deliberately: the Architecture requirements to scope every object to its creating
+principal and to answer `404` rather than `403` outside a caller's scope are satisfied the
+way a rule about "every element" is satisfied by an empty set. The decision, its rejected
+alternative, and what it costs are in
+[ADR-0006](adr/0006-one-principal-per-server.md); issue #56 is where it was argued. What no
+run can tell you is the part worth writing down here — and the converse holds too: a server
+that *did* enforce scope would score exactly the same 52/52, so this number is no evidence
+either way.
+
 **Four endpoints of the published surface were missing, and no check asked for
 any of them.** The 52 checks contain no request to `GET /v1/responses/{id}/input_items`
 or `DELETE /v1/responses/{id}` — both Tasks-chapter endpoints of class *core* in
@@ -560,7 +576,7 @@ this is the table that says which:
 | Code | Why it is unreachable here | Reachable if |
 |---|---|---|
 | `session_expired` | no retention or expiry exists; a session lives until the database is deleted | a retention policy is implemented |
-| `insufficient_scope` | one principal, so nothing is ever out of scope | #56 takes option (b) |
+| `insufficient_scope` | one principal, so nothing is ever out of scope | [ADR-0006](adr/0006-one-principal-per-server.md) is superseded and a credential carries a principal |
 | `rate_limited` | no rate limiting | a limiter is added |
 | `quota_exhausted` | no quota accounting | quotas exist |
 | `timeout` | a wall-clock budget is enforced since #54, but a budget is not an error: it produces `status: "incomplete"` with `incomplete_details.reason: "timeout"`, and `error` stays null | an adapter reports an *upstream* timeout it can tell apart from a harness failure |

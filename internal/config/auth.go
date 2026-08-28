@@ -31,6 +31,18 @@ import (
 // conformance obligation this leaves as a documented one.
 func (c Config) CheckAuthPosture(log *slog.Logger) error {
 	if len(c.APIKeys) > 0 {
+		if len(c.APIKeys) > 1 {
+			// `UHP_API_KEYS` is plural, and the obvious reading of a plural is
+			// wrong here: the keys are equivalent credentials for one principal,
+			// not one principal each. An operator who hands three keys to three
+			// people has given all three the same sessions, transcripts and
+			// artifacts. The README says so, but the moment to say it is the
+			// moment they configured the second key rather than whenever they
+			// next read the README. See ADR-0006 and issue #56.
+			log.Info("several API keys are configured; they are equivalent credentials for one principal, not one tenant each",
+				"keys", len(c.APIKeys),
+				"hint", "run one uhpd per tenant if they must not share sessions, transcripts or artifacts")
+		}
 		if isLoopback(c.Addr) {
 			// The default bind is loopback, and an operator upgrading from a
 			// build whose default was `:8080` has a keyed, correctly
