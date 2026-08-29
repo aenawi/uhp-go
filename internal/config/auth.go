@@ -134,3 +134,37 @@ func isLoopback(addr string) bool {
 	}
 	return true
 }
+
+// CheckStepBudget reports the deployment-wide step ceiling, and warns when
+// UHP_TASK_MAX_STEP was set to something that could not be read (#72).
+//
+// Silence would be the wrong answer to a typo here, and the asymmetry with the
+// wall clock is why this exists at all: an unreadable UHP_TASK_TIMEOUT falls
+// back to a real bound, so the mistake costs an operator the number they chose
+// and nothing else. An unreadable UHP_TASK_MAX_STEP falls back to *no* ceiling
+// — the one direction a bound must never fail in — so an operator who wrote
+// `UHP_TASK_MAX_STEP=twenty` and believed their agents were capped has to be
+// told, and the startup log is where they are looking.
+//
+// A warning rather than a refusal, because the server is still correct without
+// it: every task remains bounded by the wall clock, which is the obligation
+// Security §5 actually places on this server. Exiting would turn an operator's
+// typo into an outage for a bound nothing required them to set.
+//
+// It is not an error return for the same reason: there is nothing here that
+// should stop a server starting.
+func (c Config) CheckStepBudget(log *slog.Logger) {
+	switch {
+	case c.TaskMaxStepRaw == "":
+		// Unset, which is the ordinary deployment. Nothing to say.
+	case c.TaskMaxStep <= 0:
+		log.Warn("UHP_TASK_MAX_STEP is not a positive whole number and is ignored; "+
+			"agent steps are not bounded on this deployment",
+			"value", c.TaskMaxStepRaw,
+			"note", "tasks are still bounded by UHP_TASK_TIMEOUT; set a positive integer to cap tool calls")
+	default:
+		log.Info("agent steps are bounded on this deployment",
+			"max_step", c.TaskMaxStep,
+			"note", "a task or harness may ask for less; neither can ask for more")
+	}
+}

@@ -157,4 +157,6 @@ from a method whose whole promise is the opposite. It is cleared exactly as `str
 is, for exactly the same reason, and the doc comment now says so.
 
 **Four request fields are still dropped**: `max_output_tokens`, `max_step` (#72), `tools` and
-`include`. Nine of thirteen are now read.
+`include`. Nine of thirteen are now read. *(Amended 2026-08-29: three, and ten. `max_step`
+left the list the same way `background` did — by being implemented,
+[ADR-0009](0009-a-step-is-one-tool-call.md).)*

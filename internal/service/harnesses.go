@@ -404,6 +404,13 @@ func (s *TaskService) writeHarness(
 		ID:        existing.ID,
 		Base:      existing.Base,
 		CreatedAt: existing.CreatedAt,
+		// Carried in so applySpec can tell a *new* step ceiling from the one
+		// this harness already has (#72). Everything else in `keep` is an
+		// immutable field, and this is not one — applySpec overwrites it from
+		// the spec either way. It is here only to be compared against, which is
+		// what keeps a value stored before the field was enforced from making
+		// every later edit a `400`.
+		MaxStep: existing.MaxStep,
 	}, base)
 	if err != nil {
 		return uhpgo.Harness{}, err
@@ -531,6 +538,39 @@ func (s *TaskService) applySpec(spec HarnessSpec, keep domain.HarnessConfig, bas
 	if err != nil {
 		return domain.HarnessConfig{}, err
 	}
+	// The same two refusals a task's own `max_step` gets, applied where the
+	// number is *stored* rather than where it is used (#72). Both exist because
+	// this field is no longer inert: a harness written with one now bounds every
+	// task that runs on it, so a value that cannot be enforced is a bound
+	// advertised and not held — the defect the whole field exists to remove, one
+	// level up.
+	//
+	// Reported as `invalid_input` rather than as the task path's
+	// `uhpgo_step_budget_unsupported`, because the two answer different
+	// questions: there, a client's *task* named a ceiling and the harness it
+	// chose cannot hold it, and here the harness itself is what is wrong.
+	//
+	// Checked only when the value is *changing*, and that guard is the whole
+	// reason this is not two bare `if`s. PATCH rebuilds a full spec from what
+	// the harness already is, so a stored value that predates #72 would
+	// otherwise flow back through here and refuse an unrelated edit — a client
+	// renaming a harness told `400` about a field it never sent, with no way to
+	// fix it, because the fix is a PATCH this rule has just refused. An existing
+	// value is dropped at run time instead (enforceableStepBudget) and named at
+	// startup, which is where somebody who can change it is looking.
+	if changingStepBudget(spec.MaxStep, keep.MaxStep) {
+		if *spec.MaxStep < 0 {
+			return domain.HarnessConfig{}, fmt.Errorf(
+				"%w: `max_step` must not be negative; 0 permits no tool calls and null "+
+					"leaves the agent's steps unbounded", ErrInvalidInput)
+		}
+		if base != nil {
+			if err := requireStepBudget(spec.MaxStep, stepEdgeOf(base), keep.Base); err != nil {
+				return domain.HarnessConfig{}, fmt.Errorf("%w: `max_step` cannot be enforced "+
+					"on base %q: %v", ErrInvalidInput, keep.Base, err)
+			}
+		}
+	}
 
 	keep.Name = spec.Name
 	if keep.Name == "" && base != nil {
@@ -544,6 +584,21 @@ func (s *TaskService) applySpec(spec HarnessSpec, keep domain.HarnessConfig, bas
 	keep.MaxStep = spec.MaxStep
 	keep.TimeoutSeconds = spec.TimeoutSeconds
 	return keep, nil
+}
+
+// changingStepBudget reports whether a write is setting a step ceiling that is
+// not already the harness's, which is the only case worth validating.
+//
+// Clearing one (`nil`) is always allowed: removing a bound this server cannot
+// enforce is the fix, and refusing the fix would be absurd. Re-sending the value
+// a harness already carries is allowed too — PATCH does exactly that for every
+// field the client did not touch, and treating it as a new assertion would make
+// a legacy row uneditable.
+func changingStepBudget(want, have *int) bool {
+	if want == nil {
+		return false
+	}
+	return have == nil || *have != *want
 }
 
 // baseAdapter resolves a base name to the adapter that runs it.

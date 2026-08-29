@@ -33,6 +33,25 @@ type Config struct {
 	// bound task duration, so there is deliberately no way to switch it off.
 	TaskTimeout time.Duration
 
+	// TaskMaxStep is the most agent steps a task may take here: the ceiling a
+	// request's and a harness's own step budget are clamped to. Zero means no
+	// deployment-wide ceiling, and unlike TaskTimeout that really does mean
+	// unbounded — the wall clock already discharges Security §5's obligation to
+	// bound a task, and a step ceiling nobody asked for would break every task
+	// that legitimately takes forty tool calls (#72).
+	TaskMaxStep int
+
+	// TaskMaxStepRaw is what UHP_TASK_MAX_STEP was set to, verbatim, or empty
+	// when it was not set at all. It exists so a value that could not be read
+	// can be reported rather than silently becoming "no ceiling" — see
+	// CheckStepBudget.
+	//
+	// The wall clock needs no equivalent: an unreadable UHP_TASK_TIMEOUT falls
+	// back to a real bound, so the failure direction is safe. An unreadable
+	// ceiling here falls back to *none*, which is the direction a bound must
+	// never fail in.
+	TaskMaxStepRaw string
+
 	// HarnessStore is where harnesses created over the API are kept. Empty
 	// means harness management is off, and discovery reports it as off:
 	// a harness that does not survive a restart is not configuration, so the
@@ -95,9 +114,16 @@ func Load() Config {
 		// own default. Config does not carry a second copy of that number.
 		MaxConcurrentRuns: int(getEnvInt("UHP_MAX_CONCURRENT_RUNS", 0)),
 		TaskTimeout:       envDuration(os.Getenv("UHP_TASK_TIMEOUT")),
-		PublicBaseURL:     strings.TrimSuffix(os.Getenv("UHP_PUBLIC_URL"), "/"),
-		SessionSharing:    envBool(os.Getenv("UHP_SESSION_SHARING")),
-		DefaultHarness:    strings.TrimSpace(os.Getenv("UHP_DEFAULT_HARNESS")),
+		// Zero when unset, and zero is "no ceiling" here rather than "use a
+		// default". getEnvInt already answers the fallback for a value that is
+		// not a positive number, which folds a typo and an unset variable into
+		// the same safe answer: no ceiling of this deployment's own, and every
+		// task still bounded by the wall clock.
+		TaskMaxStep:    int(getEnvInt("UHP_TASK_MAX_STEP", 0)),
+		TaskMaxStepRaw: strings.TrimSpace(os.Getenv("UHP_TASK_MAX_STEP")),
+		PublicBaseURL:  strings.TrimSuffix(os.Getenv("UHP_PUBLIC_URL"), "/"),
+		SessionSharing: envBool(os.Getenv("UHP_SESSION_SHARING")),
+		DefaultHarness: strings.TrimSpace(os.Getenv("UHP_DEFAULT_HARNESS")),
 		// Claude Code cannot be asked what it serves, so this list is the only
 		// answer there will be. Both ids were checked against the real CLI on
 		// 2026-08-21: the previous `claude-sonnet-4.6` / `claude-opus-4.6`
@@ -122,7 +148,14 @@ func Load() Config {
 }
 
 func getEnvInt(key string, fallback int64) int64 {
-	v := os.Getenv(key)
+	// Trimmed, as envDuration already trims. Whitespace around a number in an
+	// environment variable is an accident every time — a trailing space in a
+	// `.env` file, a here-doc, a shell export — and reading it as unparseable
+	// silently substitutes the fallback. For UHP_TASK_MAX_STEP that fallback is
+	// *no ceiling*, which is the one direction a bound must never fail in
+	// (#72), and the same accident on the other two callers costs an operator
+	// the number they chose.
+	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
 		return fallback
 	}

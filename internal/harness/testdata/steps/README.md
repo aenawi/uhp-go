@@ -9,6 +9,10 @@ step can be counted from.
 Captured 2026-08-28. `claude` 2.1.250, `opencode` 1.18.23. Reproduce with
 `make probe-steps`.
 
+`pi.jsonl` is dated separately: captured 2026-08-29 on `pi` **0.84.3**, from a
+probe of its own — `make probe-pi-steps` — and read below under
+[The base that needed its provider replaced](#the-base-that-needed-its-provider-replaced).
+
 `codex.jsonl` is dated separately: captured 2026-08-29 on `codex` **0.150.1**, because
 until that day `codex` could not take a tool call under the shipped invocation
 at all. `codex-read-only.jsonl` and its `.stderr` are the run that could not, kept
@@ -54,7 +58,7 @@ cannot come to assert that this server does.
 ## The measurement
 
 Ground truth is on disk, not in the stream. Each **counted** base — `claude`,
-`opencode` and `codex` — was given one task with a known number of verifiable
+`codex`, `opencode` and `pi` — was given one task with a known number of verifiable
 side effects:
 
 > Create exactly five files in the current directory, named step1.txt …
@@ -69,21 +73,67 @@ failure a step budget cannot survive — a caller told it has a ceiling of five
 while the agent takes twenty.
 
 `grok` is measured against ground truth on disk the same way, for a different
-question and with a different task. Its own is below.
+question and with a different task. Its own is below. `pi` used the same task
+and the same ground truth, from a probe of its own and against a loopback
+provider — see [below](#the-base-that-needed-its-provider-replaced) for what
+that does and does not establish.
 
 ## What is counted
 
-The **start** of a tool call: the model asking for the tool, before its work
-happens. Each base also narrates a finish — `user` tool-result, `step_finish`,
-`item.completed` — and counting both doubles every round. Starting is also what
-makes "allow N, stop before the N+1th" exact: the run is stopped when the next
-call is requested, not after it has run.
+**One edge per call, and only one.** Every base narrates both ends — `user`
+tool-result, `toolcall_end`, `item.completed`, `tool_execution_end` — and a
+counter reading two of them halves every ceiling a client set, silently.
 
-| base | start edge | narrated | files |
-| --- | --- | --- | --- |
-| `claude` | `tool_use` blocks in an `assistant` message | 5 | 5 |
-| `opencode` | `tool_use` event | 5 | 5 |
-| `codex` | `item.started` whose item is a tool | 5 | 5 |
+The **start** is the edge where there is one: the model asking for the tool,
+before its work happens. It is what makes "allow N, stop before the N+1th"
+exact, because the run is stopped when the next call is requested rather than
+after it has run. `claude`, `codex` and `pi` all have one.
+
+`opencode` does not, so it is counted on the finish — and the cost is that a
+ceiling of N there can spend N+1 calls, because the extra one has already run by
+the time `opencode` mentions it. Stopping on the Nth completion instead would
+keep the count exact and kill every run that used exactly its budget before it
+could answer, which is the worse of the two. `harness.StepEdge` records which
+edge each base narrates; ADR-0009 records the trade.
+
+| base | edge | what marks it | narrated | files |
+| --- | --- | --- | --- | --- |
+| `claude` | start | `tool_use` blocks in an `assistant` message | 5 | 5 |
+| `codex` | start | `item.started` whose item is a tool | 5 | 5 |
+| `pi` | start | `assistantMessageEvent.type == "toolcall_start"` | 5 | 5 |
+| `opencode` | **finish** | `tool_use` event | 5 | 5 |
+
+Three of the four narrate the start. `opencode` does not, and that is the one
+row of this table that was assumed before it was checked — see
+[opencode has no start edge](#opencode-has-no-start-edge).
+
+## opencode has no start edge
+
+The design #72 was written on says every base announces a tool call before it
+runs. Four do. `opencode` announces one only when the call is **over**, and this
+was checked rather than assumed because the whole budget hangs on it.
+
+Every `tool_use` in `opencode.jsonl` carries `state.status == "completed"`. That
+on its own proves nothing — five instant file writes could plausibly be reported
+completed because they were already done by the time anything was emitted. So a
+second run was taken, 2026-08-29 on the same 1.18.23, asking for one shell
+command of `sleep 12 && echo SLOW_DONE`:
+
+```text
+step_start
+tool_use    completed   bash
+step_finish
+```
+
+**One event, twelve seconds after the call began, and nothing at all while it
+was running.** There is no earlier moment to count on, so `StepEdgeFinish` is
+what the adapter declares and the supervisor stops on the ceiling'th completion
+rather than on the request after it.
+
+The cost is stated rather than hidden, and it is one call's worth of promptness:
+on `opencode` a further call can already be in flight when the stop lands, where
+on a start-edge base nothing is. The number of calls the client is charged for
+is the same.
 
 ## A step is a tool call, not a round
 
@@ -236,12 +286,50 @@ a signal this server will match. So the reporting fix covers the write route tha
 logs and not this one; what removes the cause for both is
 [ADR-0008](../../../../docs/adr/0008-an-agent-may-write-in-the-directory-it-was-given.md).
 
+## The base that needed its provider replaced
+
+**`pi`** could not be captured by `probe-steps.py` at all. It routes through
+whichever provider the machine is logged in to, and the only one with
+credentials was `groq`, whose on-demand tier caps at 8,000 tokens per minute
+against a request of 71,166. The run never reached a tool call. That is a fact
+about an API key rather than about `pi`, and it is
+[#91](https://github.com/aenawi/uhp-go/issues/91) — which blocked `max_step`
+under ADR-0007's all-five rule.
+
+`make probe-pi-steps` removes the key from the question. `pi` reads a
+`models.json` that can declare a provider outright, base URL and all, so the run
+answers from a loopback OpenAI-compatible server the probe starts itself. This
+is the trick `probe-pi-session.py` already uses for #33, on the same reasoning:
+what is being measured is `pi`'s own event stream, which sits above whatever
+generated the tokens.
+
+**What it costs, stated rather than buried.** On the other three bases a model
+decided to call a tool five times. Here the probe's provider decides, by
+returning five `tool_calls` deltas. So this does not establish that `pi`
+narrates a *model's* calls — it establishes that `pi` narrates the calls it
+*executes*, which is the only thing a counter ever reads. The evidence that
+those are real calls is where it is on every other base: on disk. `pi` ran its
+own `write` tool five times and five files appeared.
+
+The five events `pi` emits for one call, of which exactly one is counted:
+
+```text
+message_update  assistantMessageEvent.type = toolcall_start   ← counted
+message_update  assistantMessageEvent.type = toolcall_delta
+message_update  assistantMessageEvent.type = toolcall_end
+tool_execution_start
+tool_execution_end
+```
+
+`tool_execution_start` is the nearest rival and is still later — it is `pi`
+beginning to run the tool, where `toolcall_start` is the model asking for it,
+which is the edge `claude` and `codex` are counted on.
+
 ## Not here
 
-**`pi`** could not be captured. The only provider with credentials on the capture
-machine was `groq`, whose on-demand tier caps at 8,000 tokens per minute against
-a request of 71,166. The run never reached a tool call, so these captures say
-nothing about `pi` either way — a missing API key, not a fact about the base.
+Nothing. All five bases are established: four narrate a countable call and
+`grok` bounds itself, which is what `TestEveryRegisteredBaseCanBeBounded`
+enforces for the sixth.
 
 ## Redactions
 
@@ -258,6 +346,12 @@ machine's inventory, not facts about `grok` — and those four keys are replaced
 with the same placeholder. Its `cwd` and every absolute path in a `thinking` or
 `tool_result` body are rewritten to `/workspace`, and its `partial_json` is
 replaced for the reason above.
+
+`pi`'s `session` line carries the probe's own temporary directory as `cwd`, and
+that prefix is rewritten to `/workspace`. It is the only line in the file that
+named the capture machine; nothing else was changed, and the declared provider
+carries no host or port on any line. Every other line is byte for byte what `pi`
+wrote.
 
 `codex`'s two captures carry the probe's own temporary directory in every
 `file_change` path, which is a fact about the capture machine and not about

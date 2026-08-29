@@ -1,4 +1,4 @@
-.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps probe-grok-max-turns probes
+.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps probe-pi-steps probe-grok-max-turns probes
 
 # Both binaries, because a server nobody can call is half a delivery: uhpc is
 # how the surface gets exercised over a socket rather than against a handler.
@@ -221,6 +221,28 @@ probe-grok:
 probe-steps:
 	@python3 scripts/probe-steps.py
 
+# pi's half of the step question, and the one that needed a probe of its own
+# (#91). probe-steps asks a real model for five files; it could not ask pi,
+# because pi routes through whichever provider the machine is logged in to and
+# the only one reachable capped at 8,000 tokens per minute against a 71,166-token
+# request. That is a fact about an API key, and it blocked #72 for a week.
+#
+# This asks the same question with the key removed: pi's models.json can declare
+# a provider outright, so the run answers from a loopback OpenAI-compatible
+# server that returns five tool calls and then an answer. The same trick
+# probe-pi-session.py uses, for the same reason — what is measured is pi's own
+# layer, above whatever generated the tokens — and ground truth is on disk
+# either way: pi runs its own `write` tool five times and five files appear.
+#
+# What it does not show is stated in the probe: a model did not choose to call
+# those tools, the provider did. What a counter reads is what pi narrates about
+# the calls it executes, and that is exactly what this measures.
+#
+# Costs nothing and needs no login, so unlike the four below it can be re-run
+# freely — do, after every pi upgrade.
+probe-pi-steps:
+	@python3 scripts/probe-pi-steps.py
+
 # The other half of the step-budget question, and the half only grok owes (#90).
 # grok is the one base uhpd would not count, because it bounds its own steps with
 # `--max-turns` — and an exemption on that basis holds only if a run the flag
@@ -240,4 +262,4 @@ probe-grok-max-turns:
 
 # Every probe that needs a logged-in CLI, in one command. Not part of `test`:
 # `go test` has no logged-in CLI, which is the whole gap these fill.
-probes: capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps probe-grok-max-turns
+probes: capture-claude probe-claude-delivery probe-pi probe-pi-steps probe-codex probe-grok probe-steps probe-grok-max-turns

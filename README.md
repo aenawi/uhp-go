@@ -388,22 +388,24 @@ server MUST ignore one it does not implement rather than reject it.
 | `instructions` | Appended to the harness's standing instructions, for this task only — never replaces them |
 | `store` | `false` drops the response once the run is terminal; the answer still arrives once |
 | `timeout_seconds` | Narrows the wall-clock budget, never widens it — see [Task budgets](#task-budgets) |
+| `max_step` | Narrows the step budget, never widens it — see [Step budgets](#step-budgets) |
 | `background` | `true` answers the POST as soon as the task is accepted, instead of holding it open |
 | `max_output_tokens`, `tools`, `include` | Accepted and **declined** — this server will not implement them, and each is named in `metadata.ignored_fields`. See [ADR-0007](docs/adr/0007-a-declined-field-is-not-a-pending-one.md) |
-| `max_step` | Accepted and dropped, pending a step counter no adapter offers — also named in `metadata.ignored_fields` |
 
-The last two rows are the ones worth reading twice, and the difference between them is the
-point: a *declined* field is a decision that will not be revisited without a reason, and a
-*pending* one is work not yet done. Both look identical to a caller, which is why the
+The last row is the one worth reading twice. A *declined* field is a decision that will not
+be revisited without a reason, not work somebody has yet to do — and every field still
+dropped is now one of those. `max_step` was the only exception, and it left the list by being
+implemented ([ADR-0009](docs/adr/0009-a-step-is-one-tool-call.md)); `background` did the same
+before it (ADR-0005). Both looked identical to a caller either way, which is why the
 distinction lives in the code and in ADR-0007 rather than on the wire.
 
 Dropping a field at all is specified behaviour;
-dropping it silently was not, and a caller that set `max_step: 5` to bound an agent's
-tool-call rounds got unbounded work and no way to learn why. So a response now says which of
-its fields were dropped:
+dropping it silently was not, and a caller that set `max_output_tokens` to cap its spend got
+uncapped work and no way to learn why. So a response now says which of its fields were
+dropped:
 
 ```json
-{ "metadata": { "session_id": "sess_…", "ignored_fields": ["max_step", "tools"] } }
+{ "metadata": { "session_id": "sess_…", "ignored_fields": ["max_output_tokens", "tools"] } }
 ```
 
 The key is absent when nothing was dropped, so its presence is the signal. Only fields this
@@ -415,9 +417,17 @@ than protocol — see [ADR-0004](docs/adr/0004-ignored-fields-are-declared-in-me
 so a client must not read its absence from some other conformant server as "nothing was
 dropped".
 
+**The same caveat covers `metadata.timeout_seconds` and `metadata.max_step`**, which report
+the budgets actually applied. All three keys are this server's own: the schema has nowhere on
+a response to put them, `metadata` is the open object they fit in, and none of the three is
+something another conformant server owes you. Read their absence elsewhere as "this server
+does not say", never as "there was no bound". Naming one extension key and leaving two
+undisclosed would make the inconsistency the rule.
+
 **`background: true` answers the POST at acceptance and leaves the run going.** The body is
 the response object as it stands — normally `status: "in_progress"`, with an empty `output`
-and its `id`, `metadata.session_id` and `metadata.timeout_seconds` already filled in. Two
+and its `id`, `metadata.session_id` and `metadata.timeout_seconds` already filled in (plus
+`metadata.max_step`, when the task asked for a step ceiling). Two
 ways to collect the result, both of which the server already had:
 
 ```bash
@@ -1060,6 +1070,7 @@ properties of `service.Store`, not of whichever engine a deployment configured.
 | `UHP_MAX_BODY_BYTES` | `8388608` | Maximum accepted request body, and the upload limit |
 | `UHP_MAX_CONCURRENT_RUNS` | `8` | Harness processes allowed to run at once; beyond it, `503 harness_unavailable` |
 | `UHP_TASK_TIMEOUT` | `30m` | Longest a task may run, and the ceiling `timeout_seconds` is clamped to. A Go duration (`30m`) or a bare number of seconds (`1800`) — see [Task budgets](#task-budgets) |
+| `UHP_TASK_MAX_STEP` | unset | Most tool calls a task may make, and the ceiling `max_step` is clamped to. A positive whole number; anything else is ignored **and warned about at startup**, because unset here means unbounded rather than a default. Unlike the row above, which has no "off" — see [Step budgets](#step-budgets) |
 | `UHP_PUBLIC_URL` | (unset = relative URLs) | Origin used to build absolute artifact download and share URLs |
 | `UHP_SESSION_SHARING` | `false` | `1` or `true` serves the unauthenticated read views of Sessions §5. Off by default, and turning it back off suspends the links it minted rather than revoking them — see [Session sharing](#session-sharing) |
 | `UHP_DEFAULT_HARNESS` | (unset = the sole ready harness, if there is exactly one) | Harness a task that names none runs on. `uhpd` refuses to start if it names nothing |
@@ -1192,12 +1203,104 @@ not do is take work away from an agent that beat it — an agent that actually f
 that window is still `completed`, on the same reading that leaves a deadline-racing
 `completed` alone above.
 
-**`max_step` is not implemented and is deliberately not implied by this.** It is a budget on
-tool-call rounds, nothing in this server counts one, and only some adapters emit anything a
-round could be counted from — so it stays accepted and dropped, as Tasks §1.1 permits, and is
-tracked separately. A server that honoured `timeout_seconds` and let `max_step` look honoured
-too would be back in the position this section is about; saying which one is enforced is the
-price of enforcing either. Tracked as [#72](https://github.com/aenawi/uhp-go/issues/72).
+**`max_step` is the other budget, and it is enforced too** — see
+[Step budgets](#step-budgets). The two are ranked here rather than left to chance: whichever
+fires first wins, a cancel outranks both, and the reason travels with the stop, so a step
+ceiling reports `reason: "max_step"` rather than telling a client to wait for a clock that
+had not run out.
+
+### Step budgets
+
+`max_step` bounds how many tool calls an agent may make in one task. A task stopped by it is
+`incomplete` with `incomplete_details.reason` of `"max_step"` — never `failed`, which would
+say the work could not be done rather than that it was cut short.
+
+```jsonc
+// POST /v1/responses
+{ "input": "refactor this package", "max_step": 20 }
+
+// the response, once the ceiling bites
+{ "status": "incomplete",
+  "incomplete_details": { "reason": "max_step" },
+  "metadata": { "max_step": 20 } }
+```
+
+Three rules, and each is the wall clock's:
+
+- **Every level is a ceiling, none is a preference.** The resolved budget is the shortest of
+  the three that are set — the request's, the harness's `maxStep`, and `UHP_TASK_MAX_STEP`.
+  A client may narrow what its operator set and may not widen it.
+- **The number applied comes back**, on `metadata.max_step`, so a caller that asked for 100
+  against a harness capped at 10 reads 10 rather than finding out by being stopped early.
+- **`0` is a real request** — run, but call no tools — and is accepted on `claude-code`,
+  `codex` and `pi`, which announce a call before making it. On `opencode` and `grok-cli` it
+  is refused `422`: neither says anything about a call until it has happened, so a single
+  overshoot is the whole of that budget. Every *positive* ceiling works on all five. A
+  negative value is a `400`, and omitting the field leaves the agent unbounded.
+
+**There is no default, and that is the one place this differs from the wall clock.** Every
+task has a timeout because Security §5 makes bounding task duration this server's obligation;
+almost no task has a step ceiling, because the wall clock already stops a runaway agent and a
+surprise step budget would break every task that legitimately takes forty calls.
+
+**A step is one tool call, and the unit is not identical across bases.** The schema calls
+`max_step` a "tool-call round" budget and defines a round no further, so this server says
+plainly which reading is in use, per base:
+
+| base | what one step is | when the ceiling stops the run | `max_step: 0` |
+| --- | --- | --- | --- |
+| `claude-code` | one tool call | when the call after the ceiling is asked for | yes |
+| `codex` | one tool call | when the call after the ceiling is asked for | yes |
+| `pi` | one tool call | when the call after the ceiling is asked for | yes |
+| `opencode` | one tool call | one call **past** the ceiling finishes — it announces no earlier | `422` |
+| `grok-cli` | one **turn**, counted by `grok --max-turns` | grok stops itself and reports it | `422` |
+
+**A ceiling stops a run, not a call, so it can be overshot.** This server reads a CLI's
+stdout and kills its process group; nothing makes the CLI wait. By the time a tool call has
+been read and counted, the agent has already dispatched it. So `max_step: N` means "stop this
+run as soon as it goes past N", and the run may have taken a call or two more:
+
+- `claude-code`, `codex` and `pi` act at the first possible moment — the call is seen as it
+  is *requested* — so the overshoot is whatever runs in the moment before the kill lands.
+  `claude-code` also puts a whole parallel batch of calls on one line, so a ceiling can be
+  overshot by the size of one batch.
+- `opencode` overshoots by at least one, always, because it says nothing until a call is over.
+- `grok-cli` bounds itself and stops on its own turn boundary.
+
+Overshooting is the tolerable direction — a run stops early rather than never, which is the
+failure this field exists to prevent — and it is the reason `max_step` is a budget rather
+than a guarantee of a call count. It is not a licence to run away: the ceiling stops the
+*next* round of work in every case.
+
+`grok` is the row to read twice. It bounds its own agent loop, so `max_step: 5` there buys
+five turns rather than five calls — a coarser ceiling, and one that can cover several calls
+made in parallel. Every other base counts calls. Neither reading is wrong against a schema
+that declines to define a round; only silence about which is in use would be.
+
+`opencode`'s row is the other measured surprise: it narrates a tool call only once the call is
+over, established by running a twelve-second shell command and watching it say nothing until
+the command finished. **So `max_step: 5` on `opencode` can cost six calls**, because the sixth
+has already run by the time `opencode` mentions it. Stopping a call earlier is not available
+— the alternative is to stop on the fifth call's own completion, which would kill a run that
+used exactly its budget before it could answer, and a bound that breaks the runs obeying it is
+worse than one that overshoots by a call. It is also why `max_step: 0` is the one ceiling
+`opencode` cannot take at all.
+
+A turn in which the agent only talks is not a step, so `max_step: 1` does not break a task
+that answers without touching anything.
+
+**Retries are not capped.** A client handed `incomplete` can send another task in the same
+session for another N steps. That is how `timeout_seconds` already behaves, and per-task is
+the only thing the wire lets a client express: `max_step` stops a runaway agent, it does not
+cap a client's spend.
+
+**A harness that cannot hold the bound refuses the task**, `422` with
+`code: "uhpgo_step_budget_unsupported"`, rather than accepting a ceiling nobody enforces. No
+base shipped today fails this outright — all five either narrate a countable call or bound
+themselves — and the refusal exists so that adding a sixth cannot quietly un-honour the
+field. The cases it reaches today are the two `max_step: 0` rows above. The
+reasoning is [ADR-0009](docs/adr/0009-a-step-is-one-tool-call.md), and the rule it applies is
+ADR-0007's: a grant may be per-base, a bound may not.
 
 ### One task per session
 

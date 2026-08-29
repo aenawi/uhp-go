@@ -85,6 +85,19 @@ type Run struct {
 	// a run can be in. See resolveBudget, and supervise for what enforces it.
 	budget time.Duration
 
+	// maxStep is the step ceiling this run has, resolved once at creation from
+	// the request, the harness and the deployment — or nil for unbounded, which
+	// is the ordinary case and is not the wall clock's situation at all (#72).
+	//
+	// Zero is a real ceiling and means no tool call is permitted, so it cannot
+	// stand in for "no ceiling". See resolveStepBudget.
+	maxStep *int
+
+	// stepEdge is which end of a tool call this run's base narrates, and so
+	// whether maxStep is reached when a call is asked for or when one finishes.
+	// StepEdgeNative is the base that enforces its own and is not counted here.
+	stepEdge harness.StepEdge
+
 	// result is the terminal task of a run whose response was not retained,
 	// and nil for every run whose response was.
 	//
@@ -102,7 +115,14 @@ type Run struct {
 	result *domain.Task
 }
 
-func newRun(taskID, sessionID string, feed *Feed, budget time.Duration, cancel, release func()) *Run {
+func newRun(
+	taskID, sessionID string,
+	feed *Feed,
+	budget time.Duration,
+	maxStep *int,
+	stepEdge harness.StepEdge,
+	cancel, release func(),
+) *Run {
 	return &Run{
 		TaskID:    taskID,
 		SessionID: sessionID,
@@ -112,6 +132,60 @@ func newRun(taskID, sessionID string, feed *Feed, budget time.Duration, cancel, 
 		done:      make(chan struct{}),
 		release:   release,
 		budget:    budget,
+		maxStep:   maxStep,
+		stepEdge:  stepEdge,
+	}
+}
+
+// stepBudgetSpent reports whether a run that has narrated `steps` tool calls has
+// used up its ceiling, and so must be stopped.
+//
+// **One comparison for every counted base**: the ceiling is spent by the event
+// *after* the last one allowed, and the run is stopped then.
+//
+// What that stop can and cannot do is worth being exact about, because the
+// obvious reading is too strong. This server reads a CLI's stdout and kills its
+// process group; it has no way to make the CLI *wait*. By the time a `tool_use`
+// line has been read, parsed and counted, the agent has already dispatched that
+// tool. So `max_step` bounds how far a run proceeds — it does not guarantee a
+// number of tool calls, and no arrangement of this loop could:
+//
+//   - On a **start** edge the tripping event is a request, so the stop is issued
+//     at the earliest moment anything downstream could know about the call. The
+//     call may still run; what it will not do is lead to another.
+//   - On a **finish** edge it is a completion, so that call has certainly run.
+//     `opencode` therefore overshoots by at least one.
+//   - A base that narrates several calls on one line overshoots by up to a
+//     batch. claude puts every tool of a parallel batch in a single `assistant`
+//     message, so `max_step: 1` against a three-call batch counts one, two,
+//     trips — and all three were dispatched before the first was counted.
+//
+// Overshooting is the tolerable direction: a run stops early rather than never,
+// which is the failure a step budget exists to prevent. It is documented per
+// base in the README rather than implied away here.
+//
+// The alternative for the finish edge was `steps >= max`, stopping on the
+// ceiling'th call's own completion. It is wrong in the way that matters most: it
+// kills a run that *complied*. An agent given five calls that uses exactly five
+// is torn down at the moment the fifth finishes, before it can write its answer,
+// and the client gets `incomplete` with nothing in it — while the identical
+// request on claude completes. A bound that breaks the runs obeying it is worse
+// than one that overshoots.
+//
+// So the edge does not change the comparison. What it changes is which of the
+// two bases cannot honour `max_step: 0` at all — where a single overshot call is
+// the whole of the budget — and requireStepBudget refuses those rather than
+// letting one through as a matter of course.
+func stepBudgetSpent(steps int, max int, edge harness.StepEdge) bool {
+	switch edge {
+	case harness.StepEdgeStart, harness.StepEdgeFinish:
+		return steps > max
+	default:
+		// StepEdgeNative bounds itself and StepEdgeNone cannot be bounded at
+		// all. Neither is counted here, and a base reaching this with a ceiling
+		// set is refused at task creation rather than run unbounded — see
+		// requireStepBudget.
+		return false
 	}
 }
 
@@ -412,15 +486,38 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 	timer := time.NewTimer(run.budget)
 	defer timer.Stop()
 	budget := timer.C
-	expired := false
+
+	// budgetStop is which of this run's budgets stopped it, and "" while none
+	// has. It replaces the bare `expired` flag now that there are two of them
+	// (#72), and holding the *reason* rather than a boolean per budget is what
+	// makes "first to fire wins" a property of the code rather than a claim
+	// about it: both arms below write it only when it is empty, so the second
+	// budget to fire finds the answer already given and changes nothing.
+	//
+	// No tie-break is needed beyond that. This goroutine is the task's only
+	// writer and runs one `select`, so one of the two genuinely arrives first.
+	// A cancel still outranks both, and that ranking lives in stoppedBy.
+	budgetStop := ""
+
+	// The step count, kept here for the same reason the wall clock is armed
+	// here: this goroutine is the task's only writer, so it needs no
+	// synchronisation at all.
+	//
+	// The counting is the supervisor's rather than each adapter's on purpose.
+	// It already holds the resolved ceiling and already owns the
+	// cancel-and-relabel path #54 built, where four adapter-local counters would
+	// be four chances to disagree about what a step is — and the one base that
+	// does count for itself, grok, is the one whose runtime enforces the
+	// ceiling too.
+	steps := 0
 
 	for {
 		var upd harness.RunUpdate
 		select {
 		case u, open := <-updates:
 			if !open {
-				stopped := stoppedBy(expired, run.cancelAsked.Load())
-				for _, ev := range s.settleUnreported(ctx, task, seq, rs, stopped) {
+				stopped := stoppedBy(budgetStop, run.cancelAsked.Load())
+				for _, ev := range s.settleUnreported(ctx, task, seq, rs, stopped, budgetStop) {
 					run.publish(ev)
 				}
 				return
@@ -448,7 +545,14 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 			// captured as some later task's artifacts. What bounds the wait is
 			// the teardown itself: process.run kills the group and gives it
 			// WaitDelay before closing the pipes regardless.
-			expired = true
+			//
+			// Written only when nothing has stopped this run yet, which is what
+			// gives the step budget below the same claim on being first: a wall
+			// clock that expires during a step budget's teardown finds the
+			// answer already given and leaves it alone.
+			if budgetStop == "" {
+				budgetStop = reasonTimeout
+			}
 			// Disarmed, so a second firing cannot re-enter this and cancel a
 			// run that has since been given back.
 			budget = nil
@@ -456,6 +560,38 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 				"task_id", task.ID, "budget", run.budget)
 			run.cancel()
 			continue
+		}
+
+		// One step, counted before anything else looks at this update (#72).
+		//
+		// The ceiling is checked on the way past rather than in applyUpdate,
+		// which never sees an UpdateToolCall as anything but a no-op: a step is
+		// not a change to the task's state, it is a fact about how much of a
+		// budget the run has spent, and the only thing that acts on it is the
+		// stop below.
+		//
+		// Counting stops the moment anything has stopped the run, which is what
+		// keeps this from re-entering. A base can narrate several more calls
+		// between the cancel going out and the process actually dying — the
+		// teardown is a signal, a wait and a WaitDelay wide — and cancelling
+		// again for each of them would stop a run already given back.
+		if upd.Type == harness.UpdateToolCall && run.maxStep != nil && budgetStop == "" {
+			steps++
+			if stepBudgetSpent(steps, *run.maxStep, run.stepEdge) {
+				budgetStop = harness.ReasonMaxStep
+				// Stopped through the adapter's own Cancel, for the reasons the
+				// wall clock is: process-group teardown is not reimplemented
+				// here, and a runtime needing more than a signal gets what an
+				// explicit cancel would have given it.
+				//
+				// The run is not settled here either. The adapter still owes a
+				// terminal update, and taking the answer from it is what keeps
+				// this from reporting a task finished while its process is
+				// still writing into the session's working directory.
+				s.log.Info("task step budget spent; stopping the run",
+					"task_id", task.ID, "max_step", *run.maxStep, "steps", steps)
+				run.cancel()
+			}
 		}
 
 		// Once a budget has stopped a run, the terminal update the adapter
@@ -483,7 +619,7 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 		// outranks the budget there however long after the deadline it landed
 		// (#76).
 		//
-		// That is not the tie-break it looks like. `expired` is set when the
+		// That is not the tie-break it looks like. `budgetStop` is set when a
 		// budget fires and stays set for the whole of the teardown that
 		// follows — the adapter's Cancel, the signal, and the Wait that
 		// process.run backstops with `cmd.WaitDelay = 5 * time.Second` — so
@@ -493,7 +629,12 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 		// status that tells a client the work is worth retrying, for work
 		// somebody stopped on purpose, and on a wedged agent an invitation to
 		// re-run the thing that wedged.
-		if stopped := stoppedBy(expired, run.cancelAsked.Load()); stopped != "" && relabelableTerminal(upd.Type) {
+		//
+		// The reason travels with the relabel rather than being assumed to be
+		// the wall clock's (#72). There are two budgets now, and a step ceiling
+		// reported as `reason: "timeout"` would tell a client to wait and retry
+		// where what it needs to do is ask for more steps.
+		if stopped := stoppedBy(budgetStop, run.cancelAsked.Load()); stopped != "" && relabelableTerminal(upd.Type) {
 			if upd.Err != nil {
 				// Not lost, only kept out of the response: neither `incomplete`
 				// nor `cancelled` carries an error object, and an operator
@@ -508,7 +649,7 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 				upd.Reason = ""
 			} else {
 				upd.Type = harness.UpdateIncomplete
-				upd.Reason = reasonTimeout
+				upd.Reason = budgetStop
 			}
 		}
 
@@ -597,8 +738,12 @@ func (s *TaskService) dropUnstored(ctx context.Context, run *Run, task *domain.T
 // asked for outranks the budget, for the same reason it does above: silence
 // from the adapter is no evidence against a cancel this server has a record
 // of.
+// `reason` is which budget did the stopping, and is read only when `stopped` is
+// `incomplete` — the two always arrive together from the one caller, because
+// stoppedBy derives the first from the second.
 func (s *TaskService) settleUnreported(
-	ctx context.Context, task *domain.Task, seq *sequencer, rs *runState, stopped uhp.ResponseStatus,
+	ctx context.Context, task *domain.Task, seq *sequencer, rs *runState,
+	stopped uhp.ResponseStatus, reason string,
 ) []uhpgo.Event {
 	if isTerminalStatus(task.Status) {
 		return nil
@@ -614,7 +759,7 @@ func (s *TaskService) settleUnreported(
 	case uhp.StatusIncomplete:
 		task.Status = uhp.StatusIncomplete
 		task.Error = nil
-		task.IncompleteDetails = map[string]any{"reason": reasonTimeout}
+		task.IncompleteDetails = map[string]any{"reason": reason}
 		evType = "response.incomplete"
 	default:
 		task.Status = uhp.StatusFailed
@@ -651,16 +796,23 @@ func (s *TaskService) settleUnreported(
 //
 // A cancel on its own ranks nothing, and that asymmetry is the load-bearing
 // part. Everything here rests on this server having caused the teardown, which
-// only the budget establishes: a cancel arriving while an adapter fails for its
+// only a budget establishes: a cancel arriving while an adapter fails for its
 // own reasons has caused nothing, and relabelling that failure would report a
-// real harness error as a stop and discard the error object with it. `expired`
-// is written and read by the supervisor goroutine alone, so it cannot race with
-// the update it is being applied to; a cancel from a request goroutine can.
-func stoppedBy(expired, cancelAsked bool) uhp.ResponseStatus {
+// real harness error as a stop and discard the error object with it.
+// `budgetStop` is written and read by the supervisor goroutine alone, so it
+// cannot race with the update it is being applied to; a cancel from a request
+// goroutine can.
+//
+// It takes the budget's *reason* rather than a boolean per budget (#72). Two of
+// them now stop a run and a third is imaginable, and a signature that grew a
+// parameter each time would put the ranking's correctness in the hands of every
+// caller remembering to pass them in the right order. Empty is "no budget
+// stopped this run", which is every ordinary run.
+func stoppedBy(budgetStop string, cancelAsked bool) uhp.ResponseStatus {
 	switch {
-	case expired && cancelAsked:
+	case budgetStop != "" && cancelAsked:
 		return uhp.StatusCancelled
-	case expired:
+	case budgetStop != "":
 		return uhp.StatusIncomplete
 	default:
 		return ""

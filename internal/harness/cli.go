@@ -141,6 +141,13 @@ type CLIHarness struct {
 	// ParseLine turns one line of stdout into zero or more updates.
 	ParseLine func(line string) []RunUpdate
 
+	// Steps says which edge of a tool call ParseLine emits UpdateToolCall on,
+	// or that this base is not counted here at all. See [StepEdge]; the zero
+	// value is StepEdgeNone, which means no `max_step` budget can be honoured
+	// on this base — and step_capture_test.go refuses to let a registered base
+	// ship that way.
+	Steps StepEdge
+
 	// NewWatch, if non-nil, is called once per run to create that run's
 	// [RunWatch]. Nil means this runtime says everything it has to say on
 	// stdout, and its stderr is kept only for the exit-code failure message.
@@ -387,6 +394,16 @@ func (h *CLIHarness) Delivery() Delivery {
 		Skills:     h.SkillArgs != nil,
 	}
 }
+
+// StepEdge reports which edge of a tool call this base narrates, so the
+// supervisor knows when a `max_step` budget has been spent (#72).
+//
+// Unlike Delivery it is declared rather than derived, because nothing about a
+// declaration reveals it: the answer is a property of the CLI's output, and the
+// only honest source for it is a capture. Each value is set beside a fixture in
+// testdata/steps/, and step_capture_test.go fails the build for a base that
+// sets one without one.
+func (h *CLIHarness) StepEdge() StepEdge { return h.Steps }
 
 // status reports whether the harness can actually run right now.
 //

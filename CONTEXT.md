@@ -106,8 +106,28 @@ _Avoid_: Conversation, Thread, Trace
 **Turn**:
 One Task in a Session's history, carrying enough to rebuild a transcript. Derived from the
 stored Task rather than recorded beside it, so a response the client asked not to retain
-(`store: false`) is not a Turn and appears in no transcript and no Share.
-_Avoid_: Message, Exchange, Step
+(`store: false`) is not a Turn and appears in no transcript and no Share. Many Steps happen
+inside one Turn.
+_Avoid_: Message, Exchange. Not Step: a Step is a real and different thing here — see
+below — and this entry used to say otherwise.
+
+**Step**:
+One tool call an agent makes inside a Task. The unit `max_step` bounds, and it is a call
+rather than a round because rounds do not survive contact with the CLIs: `opencode` grouped
+the same five writes into five of its own "steps" in one capture and into one in the next, so
+a ceiling counted that way would never fire. A turn in which the agent only talks is not a
+Step, or `max_step: 1` would break a task that answers without touching anything.
+"Step" over "Round" because the wire word is the protocol's and not ours to change, even
+though the schema calls the field a "tool-call round" budget and defines a round no further.
+Established per base by capture rather than assumed — see
+[internal/harness/testdata/steps/](internal/harness/testdata/steps/) and
+[ADR-0009](docs/adr/0009-a-step-is-one-tool-call.md) — because three bases announce a Step
+before it runs and `opencode` announces one only when it is over, which changes when a
+ceiling is reached and nothing but a measurement could have said so. `grok`'s own
+`--max-turns` is a third use of the word: it really does count turns, and it lives in a
+vendor flag, which is where the glossary puts names that are not ours.
+_Avoid_: Round, Iteration, Tool use. Not Turn — a Turn is one Task in a Session, and a Step
+is one call inside a Task.
 
 **Container**:
 A Session's file store, seen from the Files chapter. A Session and its Container are the
@@ -136,8 +156,12 @@ someone asked for a stop. Where both happen, the asking wins: a cancel that land
 Budget is still tearing the run down settles the Task `cancelled` rather than `incomplete`,
 because `incomplete` is the status a client retries and a deliberate stop is not something
 to re-run. Neither of them touches a Task that finished first, which stays `completed`. UHP
-names two, `timeout_seconds` and `max_step`; only the first is enforced here, and the second
-is accepted and dropped. `max_output_tokens` is not a third, though it reads like one: it
+names two, `timeout_seconds` and `max_step`, and both are enforced here. They differ in one
+thing worth stating: every Task has a wall clock, because Security §5 makes bounding a Task's
+duration this server's obligation and there is no spelling of "unbounded"; almost no Task has
+a step ceiling, because nothing supplies a default and a surprise one would break every Task
+that legitimately takes forty Steps. `max_output_tokens` is not a third, though it reads like
+one: it
 bounds a single model call, and a Task is many of them, so no value of it is a bound on a
 Task — and the accounting that could make it one arrives only once a run is over, from three
 of the five bases. Declined rather than approximated, because a bound honoured approximately
@@ -147,7 +171,9 @@ _Avoid_: Timeout, Limit, Deadline, Quota. "Timeout" names one budget and not the
 concept, and it stays where the name is not ours — the wire field
 `timeout_seconds`, the `metadata.timeout_seconds` this server reports it back on, and
 the `UHP_TASK_TIMEOUT` an operator sets. Everywhere the name is ours it is Budget:
-`service.DefaultTaskBudget`, `WithTaskBudget`, `resolveBudget`, `Run.budget`.
+`service.DefaultTaskBudget`, `WithTaskBudget`, `resolveBudget`, `Run.budget` — and the step
+Budget beside it, `WithTaskMaxStep`, `resolveStepBudget`, `Run.maxStep`, where the wire's
+`max_step` is likewise kept only where the name is not ours.
 
 **Capability**:
 Something a Harness or the server advertises before a client relies on it. Advertised

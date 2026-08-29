@@ -2,6 +2,7 @@ package harness
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/aenawi/uhp-go/uhp"
@@ -89,9 +90,29 @@ func NewGrok(models []string) *CLIHarness {
 				// so using it to continue would fail every second turn.
 				args = append(args, "--resume", req.NativeSessionID)
 			}
+			// The step budget, enforced by grok rather than by the router
+			// (#72). grok is the one base of five that bounds its own agent
+			// loop, and — measured by `make probe-grok-max-turns` on 1.0.13 —
+			// says so afterwards, which is the half that makes the flag usable:
+			// a truncated run that looked like a success would reach a client
+			// as `completed` and nothing downstream could repair it.
+			//
+			// The unit is grok's, and it is not this server's unit. `--max-turns`
+			// counts *turns*, where the other four are counted in tool calls, so
+			// the same `max_step: 5` buys a coarser ceiling here. That spread is
+			// documented per base in the README rather than papered over — the
+			// schema calls the field a "tool-call round" budget and defines a
+			// round no further, so neither reading is the wrong one and only
+			// silence about which is in use would be.
+			if req.MaxStep > 0 {
+				args = append(args, "--max-turns", strconv.Itoa(req.MaxStep))
+			}
 			return args, nil
 		},
 		ParseLine: parseGrokLine,
+		// Not counted here. grok enforces its own ceiling above and reports its
+		// own stop below; a base may claim this only by doing both.
+		Steps: StepEdgeNative,
 
 		// Verified against `grok --help`: "--disallowed-tools <TOOLS>  Built-in
 		// tools to remove (comma-separated)". A real block, so the router does
@@ -109,6 +130,17 @@ func NewGrok(models []string) *CLIHarness {
 		// deliver for a single turn, which §4.1 forbids.
 	}).Build()
 }
+
+// grokMaxTurnsSubtype is what grok puts on the terminal `result` event of a run
+// its own `--max-turns` ceiling stopped.
+//
+// Measured on 1.0.13 by `make probe-grok-max-turns`, against a chained task
+// that produced one artifact of five so the run was genuinely truncated. The
+// capture is testdata/steps/grok-max-turns.jsonl and
+// TestGrokReportsItsOwnMaxTurnsStop pins this value against the success line,
+// so a grok that stops distinguishing the two fails the build rather than
+// quietly reporting truncated work as finished.
+const grokMaxTurnsSubtype = "error_max_turns"
 
 // grokStreamEvent is the subset of `grok --output-format
 // streaming-messages-json --include-partial-messages` this server reads.
@@ -252,11 +284,43 @@ func parseGrokLine(line string) []RunUpdate {
 			}})
 		}
 
+		// The step budget, read *before* IsError, and the ordering is the whole
+		// of this branch rather than a style choice (#72, #90).
+		//
+		// grok labels its own `--max-turns` stop an error: measured on 1.0.13,
+		// the terminal line carries `"subtype":"error_max_turns"` alongside
+		// `"is_error":true`, `"stop_reason":"cancelled"` and an `errors` array
+		// reading "Reached the maximum number of turns", and the process exits
+		// 1. Read in the other order it would reach a client as `failed`, and
+		// Lifecycle §3 requires `incomplete` for a budget and forbids it for an
+		// error — a run somebody's ceiling truncated is work worth continuing,
+		// not work that could not be done.
+		//
+		// `stop_reason` is deliberately not what this keys on. It says
+		// "cancelled", the same word a client's own cancel produces, and
+		// reading it would make a budget stop and a cancellation
+		// indistinguishable — the exact confusion UpdateIncomplete exists to
+		// avoid. `subtype` is a dedicated field with a dedicated value, and
+		// TestGrokReportsItsOwnMaxTurnsStop pins it against the success line so
+		// a grok that collapses the two fails the build.
+		//
+		// Emitted by the adapter rather than inferred by the supervisor because
+		// grok did the stopping: the router passed `--max-turns` and counted
+		// nothing, so it has no number of its own to compare and nothing to
+		// relabel. `errors` is dropped here on purpose — `incomplete` carries
+		// no error object, and the reason a client can act on is the one below.
+		switch {
+		case ev.Subtype == grokMaxTurnsSubtype:
+			updates = append(updates, RunUpdate{
+				Type:   UpdateIncomplete,
+				Reason: ReasonMaxStep,
+			})
+
 		// Read after the usage, so a failed run still reports what it spent.
 		// grok exits 1, so the task fails either way; `errors` is the only
 		// place on stdout the reason appears. Joined rather than picking one,
 		// because nothing observed says the array holds only ever one.
-		if ev.IsError {
+		case ev.IsError:
 			updates = append(updates, harnessFailure("grok-cli", strings.Join(ev.Errors, "; ")))
 		}
 	}

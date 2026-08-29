@@ -478,10 +478,30 @@ func TestParseOpenCodeLine(t *testing.T) {
 	// usage last-write-wins, so emitting it would publish one step's tokens as
 	// the run's total. UHP allows a null usage; it does not allow a wrong one.
 	t.Run("nothing is invented from events that carry no answer", func(t *testing.T) {
-		for _, line := range []string{openCodeStepFinishEvent, openCodeToolUseEvent} {
+		for _, line := range []string{openCodeStepFinishEvent} {
 			if got := parseOpenCodeLine(line); len(got) != 0 {
 				t.Errorf("line produced %+v, want nothing:\n  %s", got, line)
 			}
+		}
+	})
+
+	// One step, and no answer text (#72). The event is opencode's whole
+	// narration of a tool call — it carries the tool's output in
+	// `state.output`, and publishing that as a delta would put the shell's
+	// stdout in the model's answer.
+	//
+	// `step_start`/`step_finish` above stay uncounted, and that is the measured
+	// half rather than an oversight: the same five writes arrived as five pairs
+	// in one capture and one pair in the next, so counting them would leave
+	// `max_step` unfireable on the second run.
+	t.Run("a tool_use event is one step and nothing else", func(t *testing.T) {
+		got := parseOpenCodeLine(openCodeToolUseEvent)
+		if len(got) != 1 || got[0].Type != UpdateToolCall {
+			t.Fatalf("parseOpenCodeLine = %+v, want exactly one UpdateToolCall", got)
+		}
+		if got[0].Delta != "" {
+			t.Errorf("the step carries delta %q — a tool's own output is not the answer",
+				got[0].Delta)
 		}
 	})
 
@@ -626,7 +646,6 @@ func TestParseCodexLine(t *testing.T) {
 	t.Run("nothing is invented from events that carry no answer", func(t *testing.T) {
 		for _, line := range []string{
 			codexTurnStartedEvent,
-			codexCommandStartedEvent,
 			codexCommandCompletedEvent,
 			codexErrorItemEvent,
 			codexErrorEvent,
@@ -634,6 +653,28 @@ func TestParseCodexLine(t *testing.T) {
 			if got := parseCodexLine(line); len(got) != 0 {
 				t.Errorf("line produced %+v, want nothing:\n  %s", got, line)
 			}
+		}
+	})
+
+	// One step, counted on the start and not on the finish (#72). Both edges
+	// are in the list of fixtures — `item.started` here and `item.completed`
+	// among the silent ones above — because the pair is the assertion: a parser
+	// that read both would halve every ceiling a client set, and one that read
+	// only the finish would let a run take one call more than it was allowed.
+	t.Run("a tool item.started is one step and its completion is not", func(t *testing.T) {
+		got := parseCodexLine(codexCommandStartedEvent)
+		if len(got) != 1 || got[0].Type != UpdateToolCall {
+			t.Fatalf("parseCodexLine = %+v, want exactly one UpdateToolCall", got)
+		}
+	})
+
+	// `item.started` also fires for the model writing its answer, and a run
+	// whose only work was talking must not spend a client's step budget on its
+	// own prose.
+	t.Run("an item.started that is not a tool is not a step", func(t *testing.T) {
+		line := `{"type":"item.started","item":{"id":"item_0","type":"agent_message","text":""}}`
+		if got := parseCodexLine(line); len(got) != 0 {
+			t.Errorf("an agent_message start produced %+v, want nothing", got)
 		}
 	})
 

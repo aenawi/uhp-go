@@ -589,8 +589,8 @@ was that nothing said so, which left a client author writing a `switch` over `uh
 with seven arms that never fire and no way to learn it from either the package or these
 docs. Issue #61.
 
-**Nothing in the suite sends four of the thirteen request fields.**
-`CreateResponseRequest` has 13 properties in the schema; `createTaskBody` reads nine. The 52
+**Nothing in the suite sends three of the thirteen request fields.**
+`CreateResponseRequest` has 13 properties in the schema; `createTaskBody` reads ten. The 52
 checks contain no reference to `max_step`, `timeout_seconds`, `max_output_tokens`,
 `instructions` or `include`, so the 52/52 `full` result is silent about every one of them —
 and about `tools`, `store` and `background` besides. Dropping the ones this server does not
@@ -599,8 +599,8 @@ and requires a server to ignore request fields it does not understand rather tha
 them. So this is not a check that fails, and not a check that passes; it is a column of the
 request surface the suite never fills in. Issue #48.
 
-The count has moved four times and is worth stating precisely, because "eight dropped
-fields" is the sentence #48 was filed under and not one of the four movements shows up in the
+The count has moved five times and is worth stating precisely, because "eight dropped
+fields" is the sentence #48 was filed under and not one of the five movements shows up in the
 score:
 
 - **`timeout_seconds` is read and enforced** (#54, #75, #77). See below.
@@ -609,17 +609,20 @@ score:
   — a correction to the count rather than a field moving.
 - **`background` is now read** (#78): `true` answers the POST as soon as the task is
   accepted rather than holding it open. See below.
+- **`max_step` is read and enforced** (#72). See below, and note the heading it is under:
+  this is the one movement most likely to be mistaken for a score change.
 
-What is left is four: `max_output_tokens`, `max_step`, `tools` and `include` — and three of
-those four are no longer undecided. **`max_output_tokens`, `tools` and `include` are
-declined**, which is a decision rather than a gap: no base takes a sampling parameter and
-token accounting arrives only once a run is over, the schema describes the `tools` objects no
-further than "object" so any meaning would be invented, and `include` has neither an agreed
-vocabulary nor any extra content to name. [ADR-0007](adr/0007-a-declined-field-is-not-a-pending-one.md)
+What is left is three: `max_output_tokens`, `tools` and `include` — and none of the three is
+undecided. All three are **declined**, which is a decision rather than a gap: no base takes a
+sampling parameter and token accounting arrives only once a run is over, the schema describes
+the `tools` objects no further than "object" so any meaning would be invented, and `include`
+has neither an agreed vocabulary nor any extra content to name.
+[ADR-0007](adr/0007-a-declined-field-is-not-a-pending-one.md)
 records all three and the rule they were measured against; the `tools` question went upstream
 to the protocol rather than being answered here, as
-[HarnessRouter/harnessrouter#42](https://github.com/HarnessRouter/harnessrouter/issues/42). `max_step` is the one that is merely
-`pending`, and it is #72.
+[HarnessRouter/harnessrouter#42](https://github.com/HarnessRouter/harnessrouter/issues/42).
+Nothing is `pending` any more: `max_step` was the last one, and
+[ADR-0009](adr/0009-a-step-is-one-tool-call.md) implemented it.
 
 All thirteen are *published*, on `uhp.CreateResponseRequest`, which widens the distance
 rather than closing it: a caller can set `MaxStep` in Go, against a server that will ignore
@@ -627,11 +630,11 @@ it, and get no error from either side. That is the deliberate consequence record
 ADR-0002 — the package models the protocol, not this server — and it is why the gap is
 written down here instead of being hidden by a narrower type.
 
-**The four that are still dropped are no longer dropped in silence.** A response now names
+**The three that are still dropped are no longer dropped in silence.** A response now names
 them, in `metadata.ignored_fields`, when the request actually sent one:
 
 ```json
-{ "metadata": { "session_id": "sess_…", "ignored_fields": ["max_step", "tools"] } }
+{ "metadata": { "session_id": "sess_…", "ignored_fields": ["max_output_tokens", "tools"] } }
 ```
 
 Absent entirely when there is nothing to report. Only fields this server knows and does not
@@ -641,11 +644,11 @@ every unknown field would turn that into a stream of warnings about valid protoc
 values that ask for something: `null` is a key with no instruction in it. This is an
 extension, not protocol — a different conformant server will not emit the key, and a client
 must not read its absence as "nothing was dropped". ADR-0004 records the decision; issue #80
-records the work. No check in the suite sends any of the four, so none of this shows up in
+records the work. No check in the suite sends any of the three, so none of this shows up in
 the score either.
 
 **`background` was the last field that needed no machinery,** and the reason it took its own
-issue is that it is not a parameter of the run at all. The other four ask for the work to be
+issue is that it is not a parameter of the run at all. The other four asked for the work to be
 done differently — a bound, a tool list, extra content in the result — and `background` asks
 only when this request stops waiting for it. Everything it needed was already here: the run
 is detached from the request with `context.WithoutCancel`, a run retains its whole event log,
@@ -674,16 +677,29 @@ never report `completed` for truncated work — and #54 took that on for the wal
   `response.incomplete`, and keeps whatever it had produced. `error` stays null, because
   Lifecycle §3 forbids `incomplete` for errors and reserves `failed` for work that could not
   be done. See [Task budgets](../README.md#task-budgets).
-- **`max_step` is not, and is deliberately not implied by it.** Nothing in this server counts
-  tool-call rounds and only some adapters emit anything a round could be counted from, so it
-  is still accepted and dropped. That split is written down rather than left to be inferred:
-  a server honouring one budget and silently discarding the other is the same defect #54 was
-  about, one field over. Tracked as #72. It is now named in `ignored_fields` when a request
-  sets it, which is a smaller thing than enforcing it and is the honest interim.
+- **`max_step` is now read and enforced too** (#72), on the same terms: the resolved ceiling
+  is the shortest of the request's, the harness's and `UHP_TASK_MAX_STEP`; it comes back as
+  `metadata.max_step`; a run that exceeds it is stopped, reported `incomplete` with
+  `incomplete_details.reason: "max_step"`, terminated on a stream with `response.incomplete`,
+  and keeps whatever it had produced. `error` stays null, for the same Lifecycle §3 reason.
+  See [Step budgets](../README.md#step-budgets).
 
-No check in the suite sends either, so none of this shows up in the score. It is measured by
-`internal/service/budget_test.go` and `internal/transport/http/budget_test.go` instead —
-which is the honest place for it, and not a substitute for a check that does not exist.
+  The split that used to be here — one budget honoured, the other dropped — is closed, and
+  the reason it took its own issue is that a step had to be *defined* before it could be
+  counted. The schema says "tool-call round" and stops there; what a round is turned out to
+  vary between two runs of the same CLI, so a step is one tool call, established per base by
+  capture. [ADR-0009](adr/0009-a-step-is-one-tool-call.md) records that and the two bases
+  that made it awkward: `opencode`, which narrates a call only once it is over, and `grok`,
+  which bounds its own turns and reports its own stop.
+
+**Implementing `max_step` does not move the score.** 52/52 before, 52/52 after. This is worth
+stating loudly because it is exactly the kind of change a reader assumes filled in a column:
+no check in the suite sends the field, so the suite is as silent about it now as it was when
+the field was dropped on the floor. The same is true of `timeout_seconds`. Both are measured
+by `internal/service/budget_test.go`, `internal/service/step_budget_test.go`,
+`internal/transport/http/budget_test.go` and `internal/transport/http/max_step_test.go`
+instead — which is the honest place for them, and not a substitute for checks that do not
+exist.
 
 **`instructions` and `store` were the second and third to move** (#80), and neither needed a
 decision the protocol had not already made:

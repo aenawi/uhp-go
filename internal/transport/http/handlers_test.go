@@ -48,6 +48,15 @@ func (echoAdapter) Delivery() harness.Delivery {
 	return harness.Delivery{MCPServers: true, ToolBlock: true, Skills: true}
 }
 
+// A step budget can be held on this double, as it can on all five real bases
+// (#72). Without this, every request here setting `max_step` would be answered
+// 422 and would be exercising the refusal rather than the field.
+//
+// StepEdgeStart is what this adapter actually is rather than a convenience: it
+// answers with one delta and calls no tool, so it narrates no step and takes
+// none. That makes it the double for the run a ceiling must not break.
+func (echoAdapter) StepEdge() harness.StepEdge { return harness.StepEdgeStart }
+
 func newTestServer() *Server {
 	reg := harness.NewRegistry()
 	reg.Register(echoAdapter{})

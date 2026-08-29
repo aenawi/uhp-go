@@ -70,6 +70,10 @@ func NewOpenCode(models []string) *CLIHarness {
 			return args, nil
 		},
 		ParseLine: parseOpenCodeLine,
+		// The one base of the five whose narration arrives at the *end* of a
+		// tool call rather than the start, established by execution rather than
+		// assumed — see StepEdgeFinish and parseOpenCodeLine's `tool_use` case.
+		Steps: StepEdgeFinish,
 	}).Build()
 }
 
@@ -121,6 +125,26 @@ func parseOpenCodeLine(line string) []RunUpdate {
 		// opencode's own renderer prints between those same two parts.
 		return []RunUpdate{{Type: UpdateDelta, Delta: ev.Part.Text + "\n"}}
 
+	case ev.Type == "tool_use":
+		// One step (#72). opencode emits exactly one of these per tool call,
+		// whatever step it decided to group that call into — and the grouping
+		// is deliberately not read: the same five writes arrived as five
+		// `step_start`/`step_finish` pairs in one capture and a single pair in
+		// the next, so a counter reading steps would leave `max_step: 5`
+		// unfireable on the second run.
+		//
+		// It is the *finish* edge, unlike every other base here, and that was
+		// measured rather than assumed. Every `tool_use` in the capture carries
+		// `state.status == "completed"`, and a deliberate run of a twelve-second
+		// shell command produced exactly one `tool_use`, also `completed`, and
+		// nothing at all while the command was running. So there is no earlier
+		// moment to count on, and StepEdgeFinish is what the supervisor is told.
+		//
+		// `state` is not read here. Counting is the whole use, one event is one
+		// call, and a status this parser tested for would be a second thing to
+		// keep true across an opencode release for no gain.
+		return []RunUpdate{{Type: UpdateToolCall}}
+
 	case ev.Type == "error":
 		// The reason the run failed, which no exit code can carry. On 1.14.41
 		// this was also the only signal that it had failed at all: opencode
@@ -141,8 +165,8 @@ func parseOpenCodeLine(line string) []RunUpdate {
 	// is not observable from here. If a later version names it on an event,
 	// reading it is a strictly better answer than the list.
 	//
-	// Everything else — step_finish, tool_use, and any event type a later
-	// opencode adds — is deliberately dropped.
+	// Everything else — step_start's grouping, step_finish, and any event type a
+	// later opencode adds — is deliberately dropped.
 	//
 	// step_finish carries tokens, and they are not this run's totals: it fires
 	// once per step, and in a captured two-step run the second reported

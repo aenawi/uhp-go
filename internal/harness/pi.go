@@ -81,6 +81,11 @@ func NewPi(models []string) *CLIHarness {
 			return args, nil
 		},
 		ParseLine: parsePiLine,
+		// `toolcall_start` — the model asking, before pi runs the tool. Five
+		// narrated for five files written: testdata/steps/pi.jsonl, taken by
+		// `make probe-pi-steps` against a loopback provider, which is how #91
+		// stopped blocking this (a missing API key, never a fact about pi).
+		Steps: StepEdgeStart,
 
 		// Both verified against `pi --help`:
 		//   --exclude-tools, -xt <tools>  Comma-separated denylist of tool names
@@ -138,9 +143,12 @@ type piEvent struct {
 
 	// AssistantMessageEvent is the model-level event that produced this
 	// update: `text_delta` for the answer, `thinking_delta` for the model's
-	// private working, `toolcall_delta` for a tool call's arguments. Only the
+	// private working, `toolcall_start` when a tool is asked for and
+	// `toolcall_delta`/`toolcall_end` for its arguments arriving. Only the
 	// first is the answer; publishing the others as output_text would tell the
 	// client they were part of it.
+	//
+	// `toolcall_start` is read, and only counted — it is pi's step edge (#72).
 	AssistantMessageEvent *struct {
 		Type  string `json:"type"`
 		Delta string `json:"delta"`
@@ -172,6 +180,20 @@ func parsePiLine(line string) []RunUpdate {
 		// boundaries, and inserting anything between them would rewrite the
 		// text mid-word.
 		return []RunUpdate{{Type: UpdateDelta, Delta: ev.AssistantMessageEvent.Delta}}
+
+	case ev.Type == "message_update" && ev.AssistantMessageEvent != nil &&
+		ev.AssistantMessageEvent.Type == "toolcall_start":
+		// One step (#72). pi announces a call four more times — `toolcall_delta`
+		// per fragment of its arguments, `toolcall_end` when they are complete,
+		// then `tool_execution_start` and `tool_execution_end` around the run —
+		// so this is the one of five that must be read, and reading any second
+		// one would multiply every ceiling a client set.
+		//
+		// It is the start edge: the model asking, before pi executes anything.
+		// `tool_execution_start` is the nearer of the two remaining candidates
+		// and is still later, and neither is what claude and codex are counted
+		// on.
+		return []RunUpdate{{Type: UpdateToolCall}}
 
 	case ev.Type == "message_end" && ev.Message != nil && ev.Message.Role == "assistant":
 		var updates []RunUpdate
