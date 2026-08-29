@@ -45,8 +45,14 @@ type runtimeConfig struct {
 	// is the caller's and applies to one. composePrompt joins them, in that
 	// order, and CONTEXT.md carries both terms.
 	//
-	// Every runtime receives it as prompt text today, because no adapter is
-	// asked whether it takes a system prompt natively — see #79.
+	// Every runtime receives it as prompt text, and that is the delivery rather
+	// than a default awaiting a better one. Three of the five bases ship a flag
+	// that would carry it as a native system prompt instead; none is wired, and
+	// the reason is this field's other job. The composed prompt is the
+	// Task.Input a session's turns report, so it is the only record of what a
+	// run ran under: a block moved into argv either reaches the model twice or
+	// vanishes from that record. See ADR-0010, and #79, which is closed against
+	// it.
 	StandingInstructions string
 }
 

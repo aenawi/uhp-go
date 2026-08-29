@@ -79,6 +79,48 @@ func TestTaskInstructionsAreAppendedToTheHarnessesAndNeverReplaceThem(t *testing
 	}
 }
 
+// The mechanism, which the test above does not pin: it fixes the *order* of
+// the blocks and would keep passing if the standing block left the prompt
+// entirely for a system-prompt flag.
+//
+// echoAdapter enforces everything natively — tool block, skills, per-run MCP —
+// so this is the strongest case for handing it the system prompt some other
+// way, and the standing block still travels as prompt text. ADR-0010 records
+// why (#79): the composed prompt is the Task.Input a session's turns report,
+// so it is the only record of what a run ran under. A block moved into argv
+// either reaches the model twice or leaves that record with nothing to show.
+//
+// Fails the day an adapter grows a system-prompt argv branch, which is the
+// edit the ADR exists to meet.
+func TestStandingInstructionsTravelAsPromptTextEvenWhereARuntimeCouldTakeThem(t *testing.T) {
+	svc, _ := deliveringService(t)
+	ctx := context.Background()
+	h, err := svc.CreateHarness(ctx, HarnessSpec{
+		Name: "native", Base: "echo", SystemPrompt: "you are a careful assistant",
+	})
+	if err != nil {
+		t.Fatalf("CreateHarness: %v", err)
+	}
+	// Guards the premise rather than assuming it: if echoAdapter ever stops
+	// enforcing natively, this test still passes and proves nothing.
+	if d := deliveryOf(echoAdapter{}); !d.Skills || !d.ToolBlock || !d.MCPServers {
+		t.Fatalf("echoAdapter no longer enforces natively (%+v), so this test proves nothing", d)
+	}
+
+	task, run, err := svc.StartTask(ctx, CreateTaskRequest{Input: "the work", HarnessID: h.ID})
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if err := run.Wait(ctx); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+
+	if !strings.Contains(task.Input, "you are a careful assistant") {
+		t.Errorf("the standing block is not in the prompt, so the turn record no longer "+
+			"says what this run ran under:\n%s", task.Input)
+	}
+}
+
 // "For this task only" is the specification's phrase, and it is a decision
 // rather than an omission: stickiness would be session state the wire has no
 // field to report, so a client could not ask what its session is running under.

@@ -933,12 +933,21 @@ below.
 How much of that the runtime enforces itself differs per base, and this server does not
 overstate it:
 
-| Base | Tool block | Skill loading | Per-run MCP |
-|---|---|---|---|
-| `claude-code` | `--disallowedTools` (executed) | standing instruction | `--mcp-config` (executed) |
-| `grok-cli` | `--disallowed-tools` (verified) | standing instruction | none — refused at config time |
-| `pi` | `--exclude-tools` (verified) | `--skill` (verified) | none — refused at config time |
-| `codex`, `opencode` | standing instruction | standing instruction | none — refused at config time |
+| Base | Tool block | Skill loading | Per-run MCP | System prompt |
+|---|---|---|---|---|
+| `claude-code` | `--disallowedTools` (executed) | standing instruction | `--mcp-config` (executed) | prompt text — by decision |
+| `grok-cli` | `--disallowed-tools` (verified) | standing instruction | none — refused at config time | prompt text — by decision |
+| `pi` | `--exclude-tools` (verified) | `--skill` (verified) | none — refused at config time | prompt text — by decision |
+| `codex`, `opencode` | standing instruction | standing instruction | none — refused at config time | prompt text — no flag exists |
+
+The last column is the one that is uniform, and deliberately. `claude-code`
+(`--append-system-prompt`), `grok-cli` (`--rules`) and `pi` (`--append-system-prompt`) each
+ship a flag that would carry the standing block as a native system prompt; none is wired.
+The composed prompt is the `Task.Input` that `GET /v1/sessions/{id}/turns` reports, so it is
+also the only record of what a run actually ran under — a block moved into argv either
+reaches the model twice or disappears from that record. See
+[ADR-0010](docs/adr/0010-instructions-reach-the-agent-as-prompt-text.md); issue #79 is closed
+against it rather than open as a gap.
 
 "Verified" means the flag was read from that CLI's own `--help` on a machine where it is
 installed — re-read for `grok-cli` on 1.0.5 (2026-08-23, issue #34), where it is still
