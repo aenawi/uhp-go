@@ -11,6 +11,13 @@ from [#48](https://github.com/aenawi/uhp-go/issues/48)
 > `max_output_tokens`, `max_step`, `tools` and `include`. The decision below is unchanged;
 > only the count and the `background: false` example have moved, and both are marked where
 > they appear.
+>
+> **Amended 2026-08-29.** `max_step` has since been implemented
+> ([ADR-0009](0009-a-step-is-one-tool-call.md), issue #72) and has left the list the same
+> way. Three remain, and all three are `declined`, so the list is now entirely decisions —
+> see the amendment on "The list is hand-maintained" below. Every example here spelling a
+> dropped field `max_step` should be read as `max_output_tokens`, which is declined and will
+> not date.
 
 ## Context
 
@@ -99,7 +106,11 @@ implemented, and no compiler notices that. *(Amended 2026-08-28: three of the fo
 leave it. [ADR-0007](0007-a-declined-field-is-not-a-pending-one.md) declines
 `max_output_tokens`, `tools` and `include`, so each entry carries a status — `declined` or
 `pending` — and only `max_step` is still expected to move. This sentence read the list as a
-to-do list, which is what kept three undecidable items at the top of it.)* `TestTheDroppableListIsTheFieldsThisServerDoesNotRead`
+to-do list, which is what kept three undecidable items at the top of it.)* *(Amended
+2026-08-29: `max_step` did move — [ADR-0009](0009-a-step-is-one-tool-call.md) — so the
+`pending` bucket is empty and every remaining entry is a decision. The status stays in the
+code: a list of nothing but declines would make "declined" look like the only answer a
+dropped field can get.)* `TestTheDroppableListIsTheFieldsThisServerDoesNotRead`
 is what notices: it pins the names and checks that read-plus-dropped is the schema's
 thirteen. It has since done the job it was written for — `background` was implemented and
 had to be taken off the list, and this is the test that failed until it was.

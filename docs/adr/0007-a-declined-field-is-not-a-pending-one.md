@@ -114,7 +114,8 @@ adapter and read by nothing. Implementing `include` is inventing a vocabulary no
 
 `droppableFields` carries a status per entry — `declined` for these three, `pending` for
 `max_step` (#72, which needs a step counter no adapter offers, on top of the `incomplete`
-path #54 built). Nothing on the wire changes: `metadata.ignored_fields` is the same array of names
+path #54 built). *(Amended 2026-08-29: the adapters offer one now, and `max_step` has left
+the list entirely — [ADR-0009](0009-a-step-is-one-tool-call.md).)* Nothing on the wire changes: `metadata.ignored_fields` is the same array of names
 in the same schema order, because the distinction is a fact about this server's intentions and
 not about the caller's request.
 
@@ -153,7 +154,14 @@ a regression to be fixed later.
 
 **The `pending` bucket now has one member.** `max_step` is the only field on the list that
 anyone should expect to move, which makes #72 legible as the one open piece of work rather
-than one of four.
+than one of four. *(Amended 2026-08-29: it moved.
+[ADR-0009](0009-a-step-is-one-tool-call.md) implements `max_step`, so the bucket is empty and
+the list is entirely decisions. The rule in the Decision above was what decided it: a step can be counted as
+a call is requested and the run cancelled before it runs, which is exactly what
+`max_output_tokens` could not do — so the same test that declined one admitted the other.
+ADR-0009 also records where the rule bit hardest: `pi` had no reachable provider and `grok`
+counts turns rather than calls, and neither could be waved through on the grounds that the
+other four were fine.)*
 
 **A declined field is still accepted.** Tasks §1.1 requires ignore-don't-reject, and nothing
 here rejects anything: a request setting all three succeeds, runs, and is answered. Declining

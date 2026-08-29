@@ -39,9 +39,12 @@ Not covered, and both deliberate:
     distinguishable from an ordinary success — which is a different probe, and
     is `probe-grok-max-turns.py`. It answers yes: `result.subtype ==
     "error_max_turns"`.
-  - `pi` needs a provider with a token budget large enough to run an agent at
-    all. On the capture machine only `groq` was authed, at 8,000 TPM against a
-    71,166-token request.
+  - `pi` routes through whichever provider the machine is logged in to, and the
+    only one authed on the capture machine capped at 8,000 tokens per minute
+    against a 71,166-token request. That is a fact about an API key rather than
+    about `pi`, so its narration is established by a probe of its own —
+    `probe-pi-steps.py`, which answers from a loopback provider declared in
+    `pi`'s own models.json and needs no credentials at all.
 
 Usage: probe-steps.py [--timeout SEC] [--keep] [--base NAME]
 

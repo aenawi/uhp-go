@@ -97,6 +97,10 @@ func NewClaude(models []string) *CLIHarness {
 			return args, nil
 		},
 		ParseLine: parseClaudeLine,
+		// The `tool_use` blocks of an `assistant` message, which is claude
+		// asking for the tools before any of them runs. Five narrated for five
+		// files written — testdata/steps/claude.jsonl.
+		Steps: StepEdgeStart,
 
 		// Both flags were declared from Claude Code's documentation and, unlike
 		// grok's and pi's, had never been run against the real binary (#19).
@@ -151,6 +155,17 @@ type claudeStreamEvent struct {
 	// answer.
 	IsError bool   `json:"is_error"`
 	Result  string `json:"result"`
+
+	// Message is the finished assistant message. Only its content blocks are
+	// read, and only to count `tool_use` — the model asking for a tool, which
+	// is claude's start edge and one step of a `max_step` budget (#72). Its
+	// text is deliberately not read: the deltas below already carry the answer,
+	// and reading both would publish every answer twice.
+	Message struct {
+		Content []struct {
+			Type string `json:"type"`
+		} `json:"content"`
+	} `json:"message"`
 
 	// Event is the raw Anthropic Messages API streaming event, carried
 	// verbatim inside a `stream_event` envelope. Only the text deltas of a
@@ -243,6 +258,25 @@ func parseClaudeLine(line string) []RunUpdate {
 		ev.Event.Delta.Type == "text_delta" &&
 		ev.Event.Delta.Text != "" {
 		updates = append(updates, RunUpdate{Type: UpdateDelta, Delta: ev.Event.Delta.Text})
+	}
+
+	// One step per tool the model asked for (#72). The `assistant` message
+	// carrying `tool_use` blocks is the request, before any of them runs; the
+	// `user` message carrying the matching `tool_result` is the finish, and is
+	// deliberately not read — a capture of five writes narrates five of each,
+	// so counting both would halve every ceiling a client set.
+	//
+	// Blocks are counted rather than messages, because claude puts several
+	// `tool_use` blocks in one message when it calls tools in parallel and each
+	// of those is a call the agent made. Establised against ground truth on
+	// disk: five files asked for, five files written, five blocks narrated —
+	// see testdata/steps/claude.jsonl and TestCapturedToolCallsMatchGroundTruth.
+	if ev.Type == "assistant" {
+		for _, block := range ev.Message.Content {
+			if block.Type == "tool_use" {
+				updates = append(updates, RunUpdate{Type: UpdateToolCall})
+			}
+		}
 	}
 
 	// The result event carries the run totals.

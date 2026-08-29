@@ -25,6 +25,12 @@ const (
 
 	// pending: no decision against the field, just not built yet. Expect this
 	// one to move; that is the whole difference from declined.
+	//
+	// Nothing carries it today. `max_step` was the only entry and left the list
+	// by being implemented (#72), which is exactly what this status predicted
+	// and is the reason it is kept rather than deleted with its last member: a
+	// list of nothing but declines would make "declined" look like the only
+	// answer a dropped field can get.
 	pending droppedStatus = "pending"
 )
 
@@ -47,13 +53,18 @@ type droppedField struct {
 // The list is deliberately short and hand-maintained rather than derived from
 // the schema. A `pending` field leaves it by being implemented, a `declined`
 // one does not leave it at all, and the compiler notices neither; a test that
-// names all four and both statuses is what does. `background` left the list by
-// being implemented — see ADR-0005 and issue #78.
+// names them and both statuses is what does. Two have left it by being
+// implemented: `background` (ADR-0005, #78) and `max_step` (ADR-0009, #72).
+//
+// What remains is the three ADR-0007 declined, and the list is now entirely
+// decisions. That is worth reading as a fact rather than as a to-do: the
+// obstacle is the same one three times over — this server drives five CLIs
+// rather than talking to a model — and none of the three is waiting on
+// somebody's afternoon.
 var droppableFields = []droppedField{
 	{"max_output_tokens", declined}, // ADR-0007: no base takes it, and nothing
 	// can count tokens before the run that generated them is over.
-	{"max_step", pending}, // #72: needs a step counter no adapter offers.
-	{"tools", declined},   // ADR-0007: the schema does not describe these
+	{"tools", declined}, // ADR-0007: the schema does not describe these
 	// objects, and guessing what they are would be inventing protocol.
 	{"include", declined}, // ADR-0007: no agreed vocabulary, and no extra
 	// content to return even if there were one.
@@ -92,7 +103,7 @@ func ignoredFields(present map[string]json.RawMessage) []string {
 // is not on the droppable list at all, and neither of its two values is
 // reported.
 //
-// Nothing replaced it, and the four that remain are reported on presence alone.
+// Nothing replaced it, and the three that remain are reported on presence alone.
 // That is not quite exact — `"tools": []` and `"include": []` ask for nothing
 // and are still named — but an empty list is a client saying something it could
 // have said by omission, where `background: false` was a client saying the one

@@ -116,6 +116,22 @@ func deliveryOf(a harness.Adapter) harness.Delivery {
 	return harness.Delivery{}
 }
 
+// stepEdgeOf asks an adapter which edge of a tool call it narrates, so the
+// supervisor knows when a `max_step` ceiling has been spent (#72).
+//
+// An adapter that cannot say is taken to narrate nothing countable, which is
+// deliberately the *refusing* direction rather than the permissive one: the
+// answer decides whether a bound a client set can be held, and a bound
+// accepted without being enforced is the defect the whole field exists to
+// remove. deliveryOf's silent default is the safe answer for a grant; this is
+// the safe answer for a bound, and they point opposite ways for that reason.
+func stepEdgeOf(a harness.Adapter) harness.StepEdge {
+	if c, ok := a.(harness.StepCounter); ok {
+		return c.StepEdge()
+	}
+	return harness.StepEdgeNone
+}
+
 // enabledSkills drops the suppressed ones. `enabled: false` suppresses a
 // skill, and a suppressed skill must not be materialized at all — a folder on
 // disk is readable whether or not anyone pointed the agent at it.

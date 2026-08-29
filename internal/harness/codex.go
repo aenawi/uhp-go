@@ -90,7 +90,11 @@ func NewCodex(models []string) *CLIHarness {
 			return args, nil
 		},
 		ParseLine: parseCodexLine,
-		NewWatch:  func() RunWatch { return &codexWatch{} },
+		// `item.started` on a tool item — the model asking, before the tool
+		// runs. Five narrated for five files written, on 0.150.1 and under the
+		// invocation ADR-0008 settled: testdata/steps/codex.jsonl.
+		Steps:    StepEdgeStart,
+		NewWatch: func() RunWatch { return &codexWatch{} },
 	}).Build()
 }
 
@@ -237,6 +241,18 @@ func parseCodexLine(line string) []RunUpdate {
 		// name, not a property of this parser.
 		return []RunUpdate{{Type: UpdateDelta, Delta: ev.Item.Text + "\n"}}
 
+	case ev.Type == "item.started" && codexToolItems[ev.Item.Type]:
+		// One step (#72). `item.started` is the model asking for a tool;
+		// `item.completed` is the same tool finishing, and is not counted —
+		// counting both would halve every ceiling a client set.
+		//
+		// The item type is checked rather than the event alone, because
+		// `item.started` also fires for `agent_message` and `reasoning`, which
+		// are the answer being written rather than a tool being used. A run
+		// whose only work was talking would otherwise spend a client's whole
+		// step budget on its own prose.
+		return []RunUpdate{{Type: UpdateToolCall}}
+
 	case ev.Type == "turn.completed" && ev.Usage != nil:
 		return []RunUpdate{{Type: UpdateUsage, Usage: &uhp.Usage{
 			InputTokens:      ev.Usage.InputTokens,
@@ -266,8 +282,9 @@ func parseCodexLine(line string) []RunUpdate {
 	// confirms what it chose. If a later codex names the model on an event,
 	// reading it here is a strictly better answer than the catalogue.
 	//
-	// Everything else — turn.started, item.started, and any event type a later
-	// codex adds — is deliberately dropped. Two of those are worth naming,
+	// Everything else — turn.started, item.started for an item that is not a
+	// tool, and any event type a later codex adds — is deliberately dropped.
+	// Two of those are worth naming,
 	// because both look like failures and neither may be treated as one:
 	//
 	//   - The top-level `{"type":"error","message":…}`. On the captured failure
@@ -334,6 +351,22 @@ const (
 // Verified 2026-08-29 on 0.150.1: five `item.started`/`item.completed` pairs of
 // this type for five files that appeared on disk.
 const codexFileChangeItem = "file_change"
+
+// codexToolItems are the item types that are a tool doing something, as against
+// the model talking: `agent_message` and `reasoning` are the answer being
+// written, and are not steps.
+//
+// The list is a whitelist rather than a "not the two talking types" test, and
+// that direction is the safe one for a budget: an item type a later codex adds
+// goes uncounted, which spends a client's ceiling more slowly than it should,
+// where the inverse would spend it on something that was never a tool call.
+// step_capture_test.go reads the same set, against the capture.
+var codexToolItems = map[string]bool{
+	codexFileChangeItem: true,
+	"command_execution": true,
+	"mcp_tool_call":     true,
+	"web_search":        true,
+}
 
 // codexWatch decides whether a codex run that ended cleanly nevertheless could
 // not do the work it was asked to do.

@@ -29,6 +29,17 @@ var (
 	ErrSessionBusy      = errors.New("service: session busy")
 	ErrHarnessMismatch  = errors.New("service: harness mismatch")
 
+	// ErrStepBudgetUnsupported is a task asking for a step ceiling on a base
+	// whose output no tool call can be counted from, and which does not bound
+	// its own (#72).
+	//
+	// Refused rather than dropped, which is the opposite of what Tasks §1.1
+	// says to do with a field a server does not implement — and the exception
+	// is ADR-0007's: this server *does* implement `max_step`, and a bound
+	// accepted on a base that cannot hold it is the silence ADR-0004 removed,
+	// wearing the appearance of success. No base registered today produces it.
+	ErrStepBudgetUnsupported = errors.New("service: harness cannot bound agent steps")
+
 	// ErrStorage is a store that failed. It is the server's fault, not the
 	// client's, and the distinction decides whether retrying is worth anything.
 	ErrStorage = errors.New("service: storage failure")
@@ -104,6 +115,12 @@ type TaskService struct {
 	// applied when nothing narrows it, and the ceiling every narrower budget is
 	// clamped to. See resolveBudget.
 	taskBudget time.Duration
+
+	// taskMaxStep is the most agent steps a task may take on this deployment,
+	// or zero for no deployment-wide ceiling — which is the default and the
+	// ordinary case (#72). See resolveStepBudget for why this one has no
+	// fallback where taskBudget does.
+	taskMaxStep int
 
 	// idempotency remembers which Idempotency-Key started which run (Tasks §6).
 	idempotency *idempotencyKeys
@@ -198,6 +215,29 @@ func WithTaskBudget(d time.Duration) Option {
 	}
 }
 
+// WithTaskMaxStep bounds how many agent steps a task may take on this
+// deployment (#72).
+//
+// A value of zero or less means *no* deployment-wide ceiling, which is the
+// exact opposite of what WithTaskBudget does with the same number — and the
+// asymmetry is the decision rather than an inconsistency. Security §5 makes
+// bounding a task's duration this server's obligation, so there is no spelling
+// of "unbounded" there; it says nothing about tool calls, the wall clock
+// already stops a runaway agent, and a step ceiling nobody asked for would
+// break every task that legitimately takes forty calls.
+//
+// So this is an operator's ceiling on what clients may ask for, not a floor
+// under what they get. An operator wanting every task bounded sets it; one who
+// does not, is not silently given one.
+func WithTaskMaxStep(n int) Option {
+	return func(s *TaskService) {
+		if n < 0 {
+			n = 0
+		}
+		s.taskMaxStep = n
+	}
+}
+
 // WithDefaultHarness names the harness a task that names none runs on.
 //
 // It is an id or an alias and is not validated here: whether it resolves
@@ -238,6 +278,16 @@ type CreateTaskRequest struct {
 	// It narrows the harness's budget and the deployment's, and cannot widen
 	// either; see resolveBudget.
 	TimeoutSeconds *int
+
+	// MaxStep is the step budget this request asked for, or nil for none. It
+	// narrows the harness's and the deployment's on the same rule; see
+	// resolveStepBudget.
+	//
+	// Zero is a request rather than an absence — "run, but call no tools" —
+	// which is why this is a pointer even though the wall clock's zero is
+	// refused. A negative value never arrives: the transport turns it into a
+	// 400, because it is not something a caller could have meant.
+	MaxStep *int
 
 	// Instructions is this task's own system guidance. It is appended to the
 	// harness's standing instructions and never replaces them — see
@@ -349,6 +399,35 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 			return nil, nil, err
 		}
 	}
+
+	// The step ceiling, resolved here and refused here if this base cannot hold
+	// it (#72).
+	//
+	// Resolved early because the refusal below depends on the number, and
+	// *refused* early for the reason the capability check above is: this is a
+	// permanent, deterministic no, and every line under it does work — a session
+	// row, a working directory, the caller's input files, the harness's
+	// scaffolding. A request refused after those leaves all of them behind, one
+	// set per attempt, for an answer that will be identical forever.
+	//
+	// Only the *request's* ceiling is refused. A ceiling that came from
+	// configuration — the harness's or the deployment's — is dropped instead
+	// when this base cannot hold it, because refusing it would answer every task
+	// on that harness with a `422` naming a field its client never sent, and the
+	// person who can fix the configuration is told at startup rather than
+	// through somebody else's failed request. See enforceableStepBudget.
+	stepEdge := stepEdgeOf(adapter)
+	if err := requireStepBudget(req.MaxStep, stepEdge, req.HarnessID); err != nil {
+		return nil, nil, err
+	}
+	maxStep := resolveStepBudget(
+		req.MaxStep,
+		enforceableStepBudget(harnessCfg.MaxStep, stepEdge),
+		// UHP_TASK_MAX_STEP is only ever positive — config reads anything else
+		// as unset — so the only edge that can fail to hold it is one that
+		// counts nothing at all, and no registered base is that.
+		derefOr(enforceableStepBudget(&s.taskMaxStep, stepEdge), 0),
+	)
 
 	// Lifecycle §5: a session has one working directory and one conversation,
 	// so two concurrent tasks in it is not a defined state.
@@ -491,6 +570,7 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 		Input:          input,
 		InputItems:     req.InputItems,
 		TimeoutSeconds: budgetSeconds(budget),
+		MaxStep:        maxStep,
 		UpdatedAt:      now,
 	}
 	// The first of the two sync points ADR-0003 names. Everything the wire
@@ -525,6 +605,11 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 		SkillDirs:       runtime.SkillDirs,
 		McpConfigPath:   runtime.McpConfigPath,
 		DisabledTools:   runtime.DisabledTools,
+		// Zero unless a base enforces its own ceiling, which is grok alone.
+		// The four the supervisor counts are deliberately not told the number:
+		// a second place for it to live is a second place for it to be wrong,
+		// and none of the four has a flag to put it in anyway.
+		MaxStep: nativeMaxStep(maxStep, stepEdge),
 	})
 	if err != nil {
 		task.Status = uhp.StatusFailed
@@ -556,7 +641,7 @@ func (s *TaskService) startTask(ctx context.Context, req CreateTaskRequest) (*do
 	// still shows up on the stream a client opened against the harness itself.
 	feed := s.runs.feed(canonicalHarnessID(harnessCfg, req.HarnessID, s.registry))
 
-	run := newRun(task.ID, sessionID, feed, budget, func() {
+	run := newRun(task.ID, sessionID, feed, budget, maxStep, stepEdge, func() {
 		if err := adapter.Cancel(runCtx, task.ID); err != nil {
 			s.log.Debug("adapter cancel", "error", err, "task_id", task.ID)
 		}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aenawi/uhp-go/internal/config"
+	"github.com/aenawi/uhp-go/internal/domain"
 	"github.com/aenawi/uhp-go/internal/harness"
 	"github.com/aenawi/uhp-go/internal/service"
 	"github.com/aenawi/uhp-go/internal/store"
@@ -45,6 +46,93 @@ func openHarnessStore(cfg config.Config, log *slog.Logger) service.HarnessStore 
 		os.Exit(1)
 	}
 	return harnesses
+}
+
+// announceLiveStepBudgets names every stored harness whose `maxStep` became a
+// real bound on the day #72 landed.
+//
+// `POST /v1/harnesses` has accepted and stored `max_step` since harness
+// management existed, and until now nothing read it. An operator who set 12
+// meant 12, so those values are honoured retroactively rather than
+// grandfathered to null — destroying a stated intent to avoid a surprise is the
+// worse of the two, and a bound that appears from nowhere is only a surprise
+// while nobody has said so.
+//
+// This is that saying, and it is a log line rather than a data migration for
+// the reason the migration would be wrong: nothing about the stored values
+// needs changing, only somebody needs telling. It is Info rather than Warn
+// because the configuration is not a mistake, and it prints nothing at all on
+// the ordinary deployment where no harness carries one.
+//
+// A store that cannot be listed is not fatal here. The server is about to serve
+// harnesses from it and will report that failure where a client can see it;
+// exiting over an announcement would turn a read hiccup into an outage.
+// It needs the registry because whether a stored ceiling can be *held* is a fact
+// about the base underneath, not about the number — so a value this deployment
+// will silently drop has to be named as dropped rather than announced as live.
+func announceLiveStepBudgets(harnesses service.HarnessStore, registry *harness.Registry, log *slog.Logger) {
+	configs, err := harnesses.ListHarnesses(context.Background())
+	if err != nil {
+		log.Warn("could not read stored harnesses to report their step budgets", "error", err)
+		return
+	}
+	for _, cfg := range configs {
+		if cfg.MaxStep == nil {
+			continue
+		}
+		// Announcing a value this server will not act on would be the lie the
+		// whole change is about, in the one place an operator is most likely to
+		// believe it. Three things fall into that: a negative, which is not a
+		// bound; a ceiling the base cannot hold; and a base that is not compiled
+		// into this binary at all.
+		//
+		// None of the three can be *written* any more — the harness handlers
+		// refuse them — so every one of these is a row that predates the field
+		// meaning anything, and Warn is what a row nothing else will ever
+		// mention deserves.
+		if reason := unenforceableStepBudget(cfg, registry); reason != "" {
+			log.Warn("harness carries a step budget this server cannot enforce; it is ignored",
+				"harness_id", cfg.ID, "name", cfg.Name, "base", cfg.Base,
+				"max_step", *cfg.MaxStep, "reason", reason,
+				"note", "PATCH max_step to null to say so explicitly, or to a value this base can hold")
+			continue
+		}
+		// Deliberately not phrased as a migration notice. Nothing on a harness
+		// records when it was written, so "stored before max_step was enforced"
+		// — which this line used to say — would go on being printed for every
+		// harness created afterwards, where it is simply false. What is true on
+		// every run is the bound and how to remove it, and that is what an
+		// operator wondering why their tasks stop early needs from this line.
+		log.Info("harness bounds agent steps",
+			"harness_id", cfg.ID, "name", cfg.Name, "max_step", *cfg.MaxStep,
+			"note", "tasks on this harness may ask for fewer steps and not more; PATCH max_step to null to remove the bound")
+	}
+}
+
+// unenforceableStepBudget says why a stored ceiling will be ignored, or "" when
+// it will be honoured. It is the reporting side of service.enforceableStepBudget
+// and has to agree with it; the service drops the value, and this is what says
+// so out loud.
+func unenforceableStepBudget(cfg domain.HarnessConfig, registry *harness.Registry) string {
+	if *cfg.MaxStep < 0 {
+		return "a negative number of steps is not a bound"
+	}
+	base, ok := registry.Get(cfg.Base)
+	if !ok {
+		return "base " + cfg.Base + " is not compiled into this server, so nothing can run it"
+	}
+	edge := harness.StepEdgeNone
+	if c, ok := base.(harness.StepCounter); ok {
+		edge = c.StepEdge()
+	}
+	switch {
+	case edge == harness.StepEdgeNone:
+		return "base " + cfg.Base + " narrates no countable tool call and bounds nothing itself"
+	case *cfg.MaxStep == 0 && edge != harness.StepEdgeStart:
+		return "base " + cfg.Base + " cannot stop a tool call before it runs, so it cannot " +
+			"permit none"
+	}
+	return ""
 }
 
 // openTaskStore picks where tasks and sessions live, and returns the function
@@ -153,6 +241,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	cfg.CheckStepBudget(log)
+
 	registry := harness.NewRegistry()
 	for _, h := range []*harness.CLIHarness{
 		harness.NewClaude(cfg.ClaudeModels),
@@ -175,11 +265,17 @@ func main() {
 		// Security §5 makes bounding task duration this server's obligation,
 		// and before #54 nothing here did it.
 		service.WithTaskBudget(cfg.TaskTimeout),
+		// Zero when UHP_TASK_MAX_STEP is unset, and zero here means *no*
+		// deployment-wide step ceiling rather than a default one — the opposite
+		// of the line above, and deliberately so. See WithTaskMaxStep.
+		service.WithTaskMaxStep(cfg.TaskMaxStep),
 	}
 	if cfg.Workspace != "" {
 		opts = append(opts, service.WithWorkspace(cfg.Workspace))
 	}
-	opts = append(opts, service.WithHarnessStore(openHarnessStore(cfg, log)))
+	harnessStore := openHarnessStore(cfg, log)
+	announceLiveStepBudgets(harnessStore, registry, log)
+	opts = append(opts, service.WithHarnessStore(harnessStore))
 	if cfg.PublicBaseURL != "" {
 		opts = append(opts, service.WithPublicBaseURL(cfg.PublicBaseURL))
 	}

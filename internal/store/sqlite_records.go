@@ -49,7 +49,14 @@ type taskRecord struct {
 	Artifacts       []artifactRecord  `json:"artifacts"`
 	NativeSessionID string            `json:"native_session_id"`
 	TimeoutSeconds  int               `json:"timeout_seconds"`
-	IgnoredFields   []string          `json:"ignored_fields"`
+
+	// MaxStep is the step ceiling this run was given, or absent for none (#72).
+	// `omitempty` is deliberately not set: a pointer to zero is a real ceiling —
+	// "call no tools" — and omitting it would read back as unbounded, which is
+	// the one direction a budget must never be wrong in.
+	MaxStep *int `json:"max_step"`
+
+	IgnoredFields []string `json:"ignored_fields"`
 }
 
 // artifactRecord is domain.Artifact's fields rather than its wire object, which
@@ -138,6 +145,7 @@ func encodeTask(t *domain.Task) (string, error) {
 		RequestedModel:     t.RequestedModel,
 		NativeSessionID:    t.NativeSessionID,
 		TimeoutSeconds:     t.TimeoutSeconds,
+		MaxStep:            t.MaxStep,
 		IgnoredFields:      t.IgnoredFields,
 	}
 	if t.Artifacts != nil {
@@ -187,6 +195,7 @@ func decodeTask(id, data string) (*domain.Task, error) {
 		RequestedModel:  rec.RequestedModel,
 		NativeSessionID: rec.NativeSessionID,
 		TimeoutSeconds:  rec.TimeoutSeconds,
+		MaxStep:         rec.MaxStep,
 		IgnoredFields:   rec.IgnoredFields,
 	}
 	if rec.Artifacts != nil {

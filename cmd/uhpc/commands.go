@@ -243,6 +243,10 @@ func (c *cli) runTask(ctx context.Context, args []string) error {
 	file := fs.String("file", "", "attach a file as an input_file item")
 	instructions := fs.String("instructions", "", "task-specific system guidance")
 	noStore := fs.Bool("no-store", false, "ask the server not to retain the response")
+	// -1 rather than 0 as "unset", because 0 is a request this server honours:
+	// run, but call no tools. A flag whose zero meant "omit" could not express
+	// the tightest bound the field has (#72).
+	maxStep := fs.Int("max-step", -1, "bound the agent's tool calls (0 permits none)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -258,6 +262,11 @@ func (c *cli) runTask(ctx context.Context, args []string) error {
 	if *noStore {
 		store := false
 		req.Store = &store
+	}
+	// Sent only when asked for, so the smallest request stays small — and sent
+	// for 0, which is the whole reason the flag's "unset" is negative.
+	if *maxStep >= 0 {
+		req.MaxStep = maxStep
 	}
 	if *harness != "" {
 		req.Metadata = map[string]any{"harness_id": *harness}

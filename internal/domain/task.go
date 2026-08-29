@@ -67,6 +67,28 @@ type Task struct {
 	// key only for a Task nothing ever ran.
 	TimeoutSeconds int
 
+	// MaxStep is the step ceiling this run was given, or nil for none, and
+	// reaches a client inside `metadata` the same way TimeoutSeconds does (#72).
+	//
+	// Reported for the reason the wall clock is: the resolved value is not
+	// necessarily the one asked for, so a caller that requested 100 against a
+	// harness capped at 10 reads 10 here rather than discovering it by being
+	// stopped early.
+	//
+	// A pointer where TimeoutSeconds is a plain int, because their zeroes mean
+	// opposite things. Every task has a wall clock, so zero there can only be
+	// "no budget was resolved" and the key is omitted; `max_step: 0` is a real
+	// ceiling a client can ask for — run, but call no tools — and reporting it
+	// as absent would tell that client its bound was dropped.
+	//
+	// The *unit* deliberately stays off the wire. The schema calls the field a
+	// "tool-call round" budget and defines a round no further, and this server
+	// counts calls on four bases while grok counts its own turns; naming which
+	// on the response would mean inventing the vocabulary the schema lacks,
+	// which is what got `include` declined in ADR-0007. It is in the README,
+	// per base.
+	MaxStep *int
+
 	// IgnoredFields names the request fields this server accepted and did not
 	// act on, and reaches a client the same way the four above do — inside
 	// `metadata`, because Response has nowhere else to put it.
@@ -151,6 +173,15 @@ func (t *Task) SyncMetadata() {
 	// silent truncation it has to infer.
 	if t.TimeoutSeconds > 0 {
 		meta["timeout_seconds"] = t.TimeoutSeconds
+	}
+	// The step ceiling actually applied, when there is one (#72). Deleted
+	// rather than left alone when there is not, for the reason ignored_fields
+	// below is: a client may have sent `max_step` in its own metadata, and this
+	// server's answer to the question has to be the one on the response.
+	if t.MaxStep != nil {
+		meta["max_step"] = *t.MaxStep
+	} else {
+		delete(meta, "max_step")
 	}
 
 	// Deleted when empty for the same reason the two model keys below are: a

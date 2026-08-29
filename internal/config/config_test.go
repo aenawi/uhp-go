@@ -105,3 +105,37 @@ func TestTaskTimeoutIsParsed(t *testing.T) {
 		})
 	}
 }
+
+// UHP_TASK_MAX_STEP falls back to *no* ceiling rather than to a default one, so
+// a typo silently unbounds the deployment — the one direction a bound must never
+// fail in. The value is kept verbatim so CheckStepBudget can say so (#72).
+func TestAnUnreadableStepCeilingIsRecorded(t *testing.T) {
+	for _, tc := range []struct {
+		raw     string
+		want    int
+		flagged bool
+	}{
+		{"", 0, false},        // unset: the ordinary deployment, and nothing to warn about
+		{"20", 20, false},     // a real ceiling
+		{"twenty", 0, true},   // a typo that would otherwise mean "unbounded"
+		{"0", 0, true},        // not a ceiling; a deployment permitting no tool calls at all
+		{"-1", 0, true},       // meaningless
+		{"  20  ", 20, false}, // whitespace is not a typo
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			t.Setenv("UHP_TASK_MAX_STEP", tc.raw)
+			cfg := Load()
+			if cfg.TaskMaxStep != tc.want {
+				t.Errorf("TaskMaxStep = %d, want %d", cfg.TaskMaxStep, tc.want)
+			}
+			// Set-but-unusable is the case that must be distinguishable from
+			// unset, because only one of the two is worth telling an operator
+			// about.
+			flagged := cfg.TaskMaxStepRaw != "" && cfg.TaskMaxStep <= 0
+			if flagged != tc.flagged {
+				t.Errorf("flagged = %v, want %v: TaskMaxStepRaw = %q",
+					flagged, tc.flagged, cfg.TaskMaxStepRaw)
+			}
+		})
+	}
+}

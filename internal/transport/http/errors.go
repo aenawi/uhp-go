@@ -197,6 +197,19 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, service.ErrMcpUndeliverable):
 		writeErrorParam(w, http.StatusUnprocessableEntity, typeInvalidRequest,
 			vendorCodeMcpUndeliverable, err.Error(), "mcp_servers")
+	case errors.Is(err, service.ErrStepBudgetUnsupported):
+		// 422 rather than 400: the request is well-formed and `max_step` is a
+		// number this server understands — what cannot be done is holding that
+		// bound on the harness the client named. The parameter is `max_step`
+		// rather than `metadata.harness_id`, because dropping the budget is the
+		// change that makes the request work and switching harness is a
+		// different task.
+		//
+		// Vendor-prefixed because the specification has no entry for it, and
+		// nothing registered today produces it: all five bases either narrate a
+		// countable tool call or bound themselves (#72).
+		writeErrorParam(w, http.StatusUnprocessableEntity, typeInvalidRequest,
+			vendorCodeStepBudgetUnsupported, err.Error(), "max_step")
 	case errors.Is(err, service.ErrStorage):
 		// The server failed, not the request. Errors §4: this is the class a
 		// client may retry, and calling it a 4xx would tell it not to.
@@ -259,6 +272,7 @@ const (
 	vendorCodeInvalidSkill                 = "uhpgo_invalid_skill"
 	vendorCodeInvalidMcpServer             = "uhpgo_invalid_mcp_server"
 	vendorCodeMcpUndeliverable             = "uhpgo_mcp_undeliverable"
+	vendorCodeStepBudgetUnsupported        = "uhpgo_step_budget_unsupported"
 	vendorCodeMethodNotAllowed             = "uhpgo_method_not_allowed"
 	vendorCodeRouteNotFound                = "uhpgo_route_not_found"
 	vendorCodeSessionSharingUnsupported    = "uhpgo_session_sharing_unsupported"

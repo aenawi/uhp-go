@@ -273,14 +273,36 @@ type createTaskBody struct {
 	// something the transport knows, so a budget longer than the server allows
 	// is narrowed there and reported back rather than refused here.
 	//
-	// The sixth of thirteen schema properties this server reads. Four are
-	// still accepted and dropped, which Tasks §1.1 permits — `max_step` (#72)
-	// and the three in #48 whose meaning across five heterogeneous CLI
-	// harnesses is still undecided. `max_step` is the one that carries the
-	// same MUST this field does; see docs/conformance.md. What a dropped one
-	// now gets is a mention in `metadata.ignored_fields`; see
-	// ignored_fields.go.
+	// The sixth of thirteen schema properties this server reads. Three are
+	// still accepted and dropped, which Tasks §1.1 permits — the three ADR-0007
+	// declined, whose meaning across five heterogeneous CLI harnesses is
+	// undecided or uninventable. What a dropped one gets is a mention in
+	// `metadata.ignored_fields`; see ignored_fields.go.
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+
+	// MaxStep is the agent-step budget for this task, and the seventh property
+	// read (#72). A pointer because absent and zero are different requests:
+	// absent asks for whatever the harness and the deployment allow, and zero
+	// asks for a run that answers without calling a tool — which is coherent,
+	// and which this server can honour exactly.
+	//
+	// That is why `0` is accepted here where `timeout_seconds: 0` is refused.
+	// "Stop before you start" is not something a caller could have meant; "do
+	// not touch anything" is, and refusing it would deny a client the tightest
+	// bound the field can express.
+	//
+	// Accepted *here* is not the same as honoured everywhere: two of the five
+	// bases cannot stop a tool call before it runs, and a `max_step: 0` naming
+	// one of those is refused `422` by the service. The transport cannot tell —
+	// which base a task lands on depends on the harness, the default, and the
+	// store — so the value-shaped refusal is here and the base-shaped one is
+	// where the base is known.
+	//
+	// How far the number gets is service.resolveStepBudget's answer: the
+	// harness's ceiling and the deployment's are not things the transport can
+	// see, so a request above either is narrowed there and reported back on
+	// `metadata.max_step` rather than refused here.
+	MaxStep *int `json:"max_step,omitempty"`
 
 	// Instructions is additional system guidance for this task, and is
 	// appended to the harness's standing instructions rather than replacing
@@ -413,6 +435,22 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 			"timeout_seconds must be a positive number of seconds", "timeout_seconds")
 		return
 	}
+	// Negative only, where the wall clock refuses zero as well (#72). §1.1's
+	// ignore-don't-reject rule covers fields a server does not understand, not
+	// values with no meaning, and a negative number of steps is the second: it
+	// is not a stricter ceiling, and reading it as one would turn a client's
+	// typo into a task that silently refused to use a tool.
+	//
+	// Zero is left to pass, and is the whole reason this is a separate check
+	// rather than a second clause on the one above. `max_step: 0` asks for an
+	// answer with no tool calls in it, which this server enforces on the first
+	// call any base narrates.
+	if body.MaxStep != nil && *body.MaxStep < 0 {
+		writeErrorParam(w, http.StatusBadRequest, typeInvalidRequest, "invalid_input",
+			"max_step must not be negative; 0 permits no tool calls and omitting it "+
+				"leaves the agent's steps unbounded", "max_step")
+		return
+	}
 	// The one combination of the two that has no honest answer, refused rather
 	// than half-done. `background` says "do not deliver the result here, I will
 	// come back for it"; `store: false` says "there will be nothing here to come
@@ -465,6 +503,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		InputItems:         input.Items,
 		IdempotencyKey:     idempotency,
 		TimeoutSeconds:     body.TimeoutSeconds,
+		MaxStep:            body.MaxStep,
 		Instructions:       body.Instructions,
 		Store:              body.Store,
 		IgnoredFields:      ignoredFields(present),

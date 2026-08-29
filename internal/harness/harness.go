@@ -51,7 +51,100 @@ type RunRequest struct {
 	// them to a runtime that can block them; where it cannot, the router has
 	// already conveyed them as a standing instruction instead.
 	DisabledTools []string
+
+	// MaxStep is the resolved step budget for this run, or zero for unbounded.
+	//
+	// It is here for the one base that enforces its own (grok, `--max-turns`),
+	// and for no other reason: on the four the router counts, the ceiling is the
+	// supervisor's business and an adapter that also knew it would be a second
+	// place for the number to be wrong. A negative value never reaches here —
+	// the transport refuses it — so zero is the only non-positive case and it
+	// means unbounded, matching the wire's `null`.
+	//
+	// The distinction between "unbounded" and "no tool calls permitted" is
+	// therefore not expressible here, and does not need to be: the only base
+	// this field reaches is one the router does not count, and `max_step: 0` on
+	// such a base is refused before a run starts — see service.requireStepBudget
+	// for why a turn budget cannot express it.
+	MaxStep int
 }
+
+// StepEdge names which end of a tool call a base narrates, and so when a step
+// budget may be tripped on it. It is a measurement, not a preference — see
+// testdata/steps/README.md and `make probe-steps`, which is where each value
+// below comes from.
+//
+// It exists because the assumption #72 was designed on did not survive being
+// checked: three of the four counted bases announce a tool call when the model
+// asks for it, and opencode announces one only when it has finished. Counting
+// both kinds with the same comparison would spend one call more or fewer than
+// the client asked for, in a way nothing in the code said out loud.
+type StepEdge string
+
+const (
+	// StepEdgeNone is a base whose output no tool call can be counted from.
+	// It is the zero value on purpose: a new adapter that says nothing is
+	// assumed to be uncountable rather than assumed safe, and the registry gate
+	// in step_capture_test.go fails the build rather than letting a task on it
+	// carry a ceiling nobody enforces.
+	StepEdgeNone StepEdge = ""
+
+	// StepEdgeStart is a base that announces a tool call before it runs —
+	// claude's `tool_use` block, codex's `item.started`, pi's `toolcall_start`.
+	// The budget is tripped when the *next* call after the ceiling is asked
+	// for, which is the earliest moment anything downstream could act on it.
+	//
+	// Not the same as stopping the call: the router reads stdout and kills a
+	// process group, and the agent has already dispatched the tool by the time
+	// the line naming it has been parsed. See service.stepBudgetSpent for what a
+	// ceiling therefore does and does not promise.
+	StepEdgeStart StepEdge = "start"
+
+	// StepEdgeFinish is a base that announces a tool call only once it is over.
+	// That is opencode, and it was established by execution rather than
+	// assumed: `--format json` emits exactly one `tool_use` per call, carrying
+	// `state.status == "completed"`, even for a call that took twelve seconds.
+	//
+	// The budget is therefore tripped by the completion of a call one past the
+	// ceiling — which has, by construction, already run. So opencode overshoots
+	// a ceiling by at least one where a start-edge base overshoots only by
+	// whatever the teardown races. It is also why opencode cannot take
+	// `max_step: 0`: there, one overshot call is the whole budget.
+	StepEdgeFinish StepEdge = "finish"
+
+	// StepEdgeNative is a base that bounds its own steps and is not counted
+	// here. That is grok: it takes `--max-turns`, and — measured on 1.0.13,
+	// `make probe-grok-max-turns` — reports the stop as
+	// `result.subtype == "error_max_turns"`, which is what lets a truncated run
+	// reach a client as `incomplete` rather than as a success.
+	//
+	// It is not an exemption from being bounded. It is an exemption from being
+	// bounded *by the router*, and a base may only claim it by also reporting
+	// its own stop; a flag that stops a run while looking like an ordinary
+	// success is worse than no flag, because nothing downstream can repair it.
+	StepEdgeNative StepEdge = "native"
+)
+
+// StepCounter is implemented by adapters that can say which edge of a tool call
+// they narrate. An adapter that does not implement it counts as StepEdgeNone —
+// the safe direction, and the one the registry gate refuses to ship.
+type StepCounter interface {
+	StepEdge() StepEdge
+}
+
+// ReasonMaxStep is what `incomplete_details.reason` says when a step budget
+// stopped the work.
+//
+// It lives here rather than beside the wall clock's `reasonTimeout` in the
+// service package because both sides need it: the supervisor writes it for the
+// four bases it counts, and grok's adapter writes it for itself. A second copy
+// of the string in the adapter is how a client ends up reading two different
+// words for one outcome depending on which base ran.
+//
+// Not an error code, and not vendor-prefixed. `incomplete_details` is an open
+// object in the schema, and `incomplete` means the work was stopped part-way —
+// a different claim from an error, which means it could not be done at all.
+const ReasonMaxStep = "max_step"
 
 // Delivery reports which parts of a harness's configuration a runtime enforces
 // itself, as opposed to what the router has to convey as a standing
@@ -91,8 +184,21 @@ type Deliverer interface {
 type UpdateType string
 
 const (
-	UpdateDelta    UpdateType = "delta"
+	UpdateDelta UpdateType = "delta"
+
+	// UpdateToolCall says the agent took one tool call — one *step*, in the
+	// wire's word. It is emitted once per call, on the edge [StepEdge] names
+	// for that base, and never on the other edge: every base narrates both, and
+	// reading both would halve every step budget silently.
+	//
+	// It carries no name, no arguments and no id, and that is a decision rather
+	// than an omission (#72). The supervisor counts these and nothing else
+	// reads them, because naming a step on the wire would mean inventing the
+	// vocabulary the schema lacks — the mistake that got `tools` and `include`
+	// declined in ADR-0007. A client learns its budget stopped the run from
+	// `incomplete_details.reason`, which is the field for it.
 	UpdateToolCall UpdateType = "tool_call"
+
 	UpdateArtifact UpdateType = "artifact"
 
 	// UpdateSessionID carries the harness's own session/thread id, discovered

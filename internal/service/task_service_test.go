@@ -44,6 +44,17 @@ func (echoAdapter) Info() uhpgo.Harness {
 	}
 }
 
+// StepEdge makes this double one a step budget can be held on, which every real
+// base is (#72). Without it `max_step` on the echo harness would be refused
+// rather than honoured, and every test that sets one would be exercising the
+// refusal path instead of the field.
+//
+// StepEdgeStart is honest rather than convenient: this adapter answers without
+// calling a tool, narrates no UpdateToolCall, and so takes zero steps. That
+// makes it the double for the case worth pinning on its own — a ceiling of
+// three does not break a run that never touches anything.
+func (echoAdapter) StepEdge() harness.StepEdge { return harness.StepEdgeStart }
+
 // otherAdapter is a second, distinct harness, for the mismatch test.
 type otherAdapter struct{ echoAdapter }
 

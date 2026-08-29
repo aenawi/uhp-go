@@ -151,6 +151,26 @@ func (m *Managed) Delivery() Delivery {
 	return Delivery{}
 }
 
+// StepEdge forwards the base's answer, for the reason Delivery does: a wrapper
+// narrates nothing of its own, so what a step can be counted on is entirely the
+// runtime's underneath (#72).
+//
+// A nil base — a configuration whose runtime is not compiled into this server —
+// answers StepEdgeNone, which is the safe direction and costs nothing real: such
+// a harness cannot run a task at all, so the refusal a ceiling would earn is
+// reached slightly earlier than the one the run itself would have given.
+//
+// Forwarding matters more here than anywhere else in this file, because the
+// harness store is where `maxStep` has been accumulating. A wrapper that
+// answered for itself would refuse every task on every harness a client
+// created — including the stored budgets #72 makes live.
+func (m *Managed) StepEdge() StepEdge {
+	if c, ok := m.base.(StepCounter); ok {
+		return c.StepEdge()
+	}
+	return StepEdgeNone
+}
+
 func (m *Managed) Cancel(ctx context.Context, taskID string) error {
 	if m.base == nil {
 		return fmt.Errorf("%w: %q", ErrNoBase, m.cfg.Base)

@@ -146,3 +146,31 @@ func TestManagedAvailabilityFollowsTheBase(t *testing.T) {
 		t.Fatal("a model the base does not advertise was reported available")
 	}
 }
+
+// A managed harness narrates nothing of its own, so what a step budget can be
+// counted on is entirely the base's (#72).
+//
+// This is the case most likely to break in the quiet direction: the harness
+// store is where `maxStep` has been accumulating, and a wrapper answering for
+// itself would refuse every task on every harness a client ever created — with a
+// 422 naming a field the client may not even have sent this time.
+func TestManagedForwardsTheBasesStepEdge(t *testing.T) {
+	cfg := domain.HarnessConfig{ID: "chrn_managed", Base: "claude-code", Name: "Managed"}
+
+	base := NewClaude([]string{"m"})
+	m := NewManaged(cfg, base)
+	if got, want := m.StepEdge(), base.StepEdge(); got != want {
+		t.Errorf("StepEdge = %q, want the base's %q — a wrapper that answered for itself "+
+			"would refuse every max_step task on every created harness", got, want)
+	}
+	if m.StepEdge() == StepEdgeNone {
+		t.Error("the base declares no edge, so this test is asserting nothing")
+	}
+
+	// A configuration whose runtime is not compiled in cannot run a task at
+	// all, so the safe answer is the refusing one.
+	if got := NewManaged(cfg, nil).StepEdge(); got != StepEdgeNone {
+		t.Errorf("a harness with no base reports edge %q, want none: nothing is there to "+
+			"narrate a call, and a ceiling accepted here would be held by nobody", got)
+	}
+}
