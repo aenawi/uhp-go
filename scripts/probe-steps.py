@@ -29,7 +29,9 @@ Not covered, and both deliberate:
 
   - `grok` enforces a step budget natively with `--max-turns`, so nothing here
     counts it. What it owes instead is a *report* — whether tripping the flag is
-    distinguishable from an ordinary success — which is a different probe.
+    distinguishable from an ordinary success — which is a different probe, and
+    is `probe-grok-max-turns.py`. It answers yes: `result.subtype ==
+    "error_max_turns"`.
   - `pi` needs a provider with a token budget large enough to run an agent at
     all. On the capture machine only `groq` was authed, at 8,000 TPM against a
     71,166-token request.

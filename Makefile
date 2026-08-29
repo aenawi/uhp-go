@@ -1,4 +1,4 @@
-.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps probes
+.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps probe-grok-max-turns probes
 
 # Both binaries, because a server nobody can call is half a delivery: uhpc is
 # how the surface gets exercised over a socket rather than against a handler.
@@ -221,6 +221,23 @@ probe-grok:
 probe-steps:
 	@python3 scripts/probe-steps.py
 
+# The other half of the step-budget question, and the half only grok owes (#90).
+# grok is the one base uhpd would not count, because it bounds its own steps with
+# `--max-turns` — and an exemption on that basis holds only if a run the flag
+# stopped is distinguishable from one that finished. If it is not, a truncated
+# run reaches the client as `completed` and the router cannot repair it, having
+# neither done the stopping nor anything to relabel.
+#
+# Ground truth is on disk here too: the task is chained so it cannot be collapsed
+# into one turn, and fewer files than it asked for is what makes the run a
+# truncation rather than an early finish. It spends real tokens — grok takes no
+# per-run base URL — which is why the ceiling is one turn.
+#
+# Re-run it after every grok upgrade. A release that collapsed the stop into the
+# success subtype would take grok's exemption from #72 down with it.
+probe-grok-max-turns:
+	@python3 scripts/probe-grok-max-turns.py
+
 # Every probe that needs a logged-in CLI, in one command. Not part of `test`:
 # `go test` has no logged-in CLI, which is the whole gap these fill.
-probes: capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps
+probes: capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps probe-grok-max-turns
