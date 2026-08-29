@@ -92,19 +92,24 @@ func TestBuildArgs(t *testing.T) {
 			name: "codex: plain exec carries --skip-git-repo-check",
 			h:    NewCodex(models),
 			req:  RunRequest{Input: "hello"},
-			want: []string{"exec", "--json", "--skip-git-repo-check"},
+			want: []string{"exec", "--json", "--skip-git-repo-check", "-c", "sandbox_mode=workspace-write"},
 		},
 		{
+			// The sandbox setting is on the resume form too, and this is where
+			// that is pinned. ADR-0008: `--sandbox` is rejected outright by
+			// `codex exec resume`, so a resumed turn granted write access by a
+			// flag the fresh form alone accepts would quietly be read-only —
+			// issue #89 again, on every turn after the first.
 			name: "codex: resume is a subcommand directly after exec",
 			h:    NewCodex(models),
 			req:  RunRequest{Input: "hello", NativeSessionID: "s1"},
-			want: []string{"exec", "resume", "--json", "--skip-git-repo-check", "s1"},
+			want: []string{"exec", "resume", "--json", "--skip-git-repo-check", "-c", "sandbox_mode=workspace-write", "s1"},
 		},
 		{
 			name: "codex: options precede the session positional",
 			h:    NewCodex(models),
 			req:  RunRequest{Input: "hi", Model: "m2", NativeSessionID: "s9"},
-			want: []string{"exec", "resume", "--json", "--skip-git-repo-check", "--model", "m2", "s9"},
+			want: []string{"exec", "resume", "--json", "--skip-git-repo-check", "-c", "sandbox_mode=workspace-write", "--model", "m2", "s9"},
 			checkFn: func(t *testing.T, args []string) {
 				if index(args, "--model") > index(args, "s9") {
 					t.Fatalf("option after positional: %v", args)

@@ -72,8 +72,8 @@ import time
 # the adapter: a probe that measured an argv uhpd does not send would verify
 # nothing about uhpd. TestCodexAndGrokProbesRunTheShippedInvocation reads both
 # lists against NewCodex's BuildArgs, substituting the same two placeholders.
-HARNESS_ARGV = ["codex", "exec", "--json", "--skip-git-repo-check"]
-RESUME_ARGV = ["codex", "exec", "resume", "--json", "--skip-git-repo-check", "--model", "<model>", "<session>"]
+HARNESS_ARGV = ["codex", "exec", "--json", "--skip-git-repo-check", "-c", "sandbox_mode=workspace-write"]
+RESUME_ARGV = ["codex", "exec", "resume", "--json", "--skip-git-repo-check", "-c", "sandbox_mode=workspace-write", "--model", "<model>", "<session>"]
 
 WORD = "ZEPHYR"
 FIRST_PROMPT = f"Remember this word: {WORD}. Just say OK."

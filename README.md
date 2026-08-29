@@ -1284,6 +1284,14 @@ actually reads a prompt from stdin — grok does not, and a `--` terminator that
 claude and codex does not work for grok or pi. Every one of those facts was established
 by executing the CLI, and none of them is guessable from its `--help`.
 
+**Check that the agent can write.** Ask a new harness to create a file and look on disk,
+because "it defaults to something sensible" is not a default any two CLIs share. `codex`
+defaults to a read-only workspace and refused every write for as long as nobody looked, and
+it did so while reporting the run `completed` — issue #89, and
+[ADR-0008](docs/adr/0008-an-agent-may-write-in-the-directory-it-was-given.md) is the policy
+a sixth harness inherits: write access to the session's working directory, granted by
+whatever argument that runtime needs, or none if it needs none.
+
 **The `Capabilities` list is enforced, so declare only what the harness delivers.** Listing
 `sessions` on a harness that cannot resume turns every continuation into a silent fresh
 conversation. `cancellation` needs no declaring: `Build` adds it, because the shared runner

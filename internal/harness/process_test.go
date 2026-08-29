@@ -21,12 +21,22 @@ func shHarness(t *testing.T, script string, prompt PromptMode) *CLIHarness {
 // into the process, so a later `h.ParseLine = …` is silently ignored.
 func shHarnessParsing(t *testing.T, script string, prompt PromptMode, parse func(string) []RunUpdate) *CLIHarness {
 	t.Helper()
+	return shHarnessWatching(t, script, prompt, parse, nil)
+}
+
+// shHarnessWatching is shHarnessParsing plus a real adapter's RunWatch, for the
+// tests that need the child's stderr read the way one CLI's would be. Passed in
+// for the same reason the parser is: Build captures it into the process, so
+// assigning it afterwards is silently ignored.
+func shHarnessWatching(t *testing.T, script string, prompt PromptMode, parse func(string) []RunUpdate, watch func() RunWatch) *CLIHarness {
+	t.Helper()
 	return (&CLIHarness{
 		ID:        "sh",
 		Binary:    "/bin/sh",
 		Prompt:    prompt,
 		BuildArgs: func(RunRequest) ([]string, error) { return []string{"-c", script}, nil },
 		ParseLine: parse,
+		NewWatch:  watch,
 	}).Build()
 }
 

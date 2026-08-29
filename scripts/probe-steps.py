@@ -18,12 +18,19 @@ on disk is the number its narration has to match:
                              never; tolerable, and recorded
 
 Every run uses the shipped invocation — exactly `CLIHarness.BuildArgs` with the
-prompt on stdin, and no permission, sandbox or approval flag, because uhpd sends
-none. An earlier pass of this probe added `--permission-mode bypassPermissions`,
-`--auto` and `--sandbox workspace-write` and passed the prompt as argv. It
-measured a server that does not exist. `TestStepProbeRunsTheShippedInvocation`
-pins CLAUDE_ARGV, OPENCODE_ARGV and CODEX_ARGV below to each adapter's BuildArgs
-so that cannot happen quietly again.
+prompt on stdin. An earlier pass of this probe added `--permission-mode
+bypassPermissions`, `--auto` and `--sandbox workspace-write` and passed the
+prompt as argv, none of which uhpd sent. It measured a server that does not
+exist. `TestStepProbeRunsTheShippedInvocation` pins CLAUDE_ARGV, OPENCODE_ARGV
+and CODEX_ARGV below to each adapter's BuildArgs so that cannot happen quietly
+again.
+
+That pin is also why CODEX_ARGV now carries `-c sandbox_mode=workspace-write`
+and the other two carry nothing of the kind: ADR-0008 decided uhpd grants each
+agent write access to the directory it gave the session, and codex is the one
+base of the five that needs an argument to get there. The flag is here because
+the adapter sends it, not because the probe wanted it — which is the same rule
+as before, applied to an invocation that changed.
 
 Not covered, and both deliberate:
 
@@ -57,7 +64,7 @@ CLAUDE_ARGV = [
     "--include-partial-messages", "--strict-mcp-config",
 ]
 OPENCODE_ARGV = ["opencode", "run", "--format", "json"]
-CODEX_ARGV = ["codex", "exec", "--json", "--skip-git-repo-check"]
+CODEX_ARGV = ["codex", "exec", "--json", "--skip-git-repo-check", "-c", "sandbox_mode=workspace-write"]
 
 HARNESS_ARGV = {
     "claude": CLAUDE_ARGV,

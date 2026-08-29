@@ -45,6 +45,41 @@ const (
 	PromptArgs PromptMode = "args"
 )
 
+// RunWatch is per-run state an adapter keeps across lines, and the only reader
+// of the child's stderr.
+//
+// It exists because one question cannot be answered by ParseLine: ParseLine is
+// stateless, sees one line, and sees only stdout — and a CLI can end a run
+// cleanly on stdout and by its exit code while having been refused every tool
+// it asked for, saying so nowhere but stderr. Issue #89 is that run on codex:
+// `turn.completed`, exit 0, and a client told `completed` with the agent's
+// apology as its answer.
+//
+// The contract is deliberately narrow, and each half of it is load-bearing:
+//
+//   - Failure is asked once, after the child has exited, and only when nothing
+//     else has already failed the run. So a watch cannot invent a terminal
+//     state part-way through a run that was going to succeed — which is the
+//     objection parseCodexLine already raises against reading the top-level
+//     `error` event, and the one a stderr reader has to survive rather than
+//     sidestep.
+//   - Stdout and Stderr are called from *different goroutines*, concurrently.
+//     An implementation must guard its own state.
+//   - Stdout is offered as well as Stderr because the two channels only mean
+//     something together: "a tool was refused" is not "the run could not do the
+//     work" until you also know the tool never went on to succeed.
+type RunWatch interface {
+	// Stdout is one line of the child's stdout, the same line ParseLine sees.
+	Stdout(line string)
+
+	// Stderr is one line of the child's stderr.
+	Stderr(line string)
+
+	// Failure returns the runtime's own words for why this run must not be
+	// reported as completed, or "" if it may be. Called once, after exit.
+	Failure() string
+}
+
 // CLIHarness is a harness backend declared as data. Everything that differs
 // between two CLI-driven harnesses is a field; everything that does not —
 // process-group isolation, prompt delivery, model validation, scanner limits,
@@ -105,6 +140,11 @@ type CLIHarness struct {
 
 	// ParseLine turns one line of stdout into zero or more updates.
 	ParseLine func(line string) []RunUpdate
+
+	// NewWatch, if non-nil, is called once per run to create that run's
+	// [RunWatch]. Nil means this runtime says everything it has to say on
+	// stdout, and its stderr is kept only for the exit-code failure message.
+	NewWatch func() RunWatch
 
 	// MCPArgs returns argv pointing the CLI at a generated MCP configuration
 	// file. Nil means this runtime has no per-run MCP mechanism, and a harness
@@ -178,7 +218,7 @@ func NewID(base string) string {
 // this package knows nothing about one. A harness that listed them would go on
 // listing them on a deployment that refuses every attachment.
 func (h *CLIHarness) Build() *CLIHarness {
-	h.proc = newProcess(h.Binary, h.Prompt, h.argsFor, h.ParseLine)
+	h.proc = newProcess(h.Binary, h.Prompt, h.argsFor, h.ParseLine, h.NewWatch)
 	h.declared = h.Capabilities
 	if !uhpgo.HasCapability(h.Capabilities, uhpgo.CapCancellation) {
 		// A fresh slice: h.declared must keep pointing at the declaration, and

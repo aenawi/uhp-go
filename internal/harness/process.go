@@ -27,17 +27,19 @@ type process struct {
 	prompt    PromptMode
 	buildArgs func(RunRequest) ([]string, error)
 	parseLine func(string) []RunUpdate
+	newWatch  func() RunWatch
 
 	mu     sync.Mutex
 	cancel map[string]context.CancelFunc
 }
 
-func newProcess(binary string, prompt PromptMode, buildArgs func(RunRequest) ([]string, error), parseLine func(string) []RunUpdate) *process {
+func newProcess(binary string, prompt PromptMode, buildArgs func(RunRequest) ([]string, error), parseLine func(string) []RunUpdate, newWatch func() RunWatch) *process {
 	return &process{
 		binary:    binary,
 		prompt:    prompt,
 		buildArgs: buildArgs,
 		parseLine: parseLine,
+		newWatch:  newWatch,
 		cancel:    make(map[string]context.CancelFunc),
 	}
 }
@@ -169,6 +171,14 @@ func (p *process) run(ctx context.Context, req RunRequest) (<-chan RunUpdate, er
 		}()
 		defer close(out)
 
+		// This run's observer, if the harness declared one. Created here rather
+		// than shared on the process, because it holds one run's state and two
+		// runs of the same harness overlap.
+		var watch RunWatch
+		if p.newWatch != nil {
+			watch = p.newWatch()
+		}
+
 		var stderrBuf []byte
 		stderrDone := make(chan struct{})
 		go func() {
@@ -181,6 +191,9 @@ func (p *process) run(ctx context.Context, req RunRequest) (<-chan RunUpdate, er
 			for sc.Scan() {
 				stderrBuf = append(stderrBuf, sc.Bytes()...)
 				stderrBuf = append(stderrBuf, '\n')
+				if watch != nil {
+					watch.Stderr(sc.Text())
+				}
 			}
 			// A scan error here cannot fail the run — stderr is not the answer,
 			// and a diagnostic too long to read is no reason to discard a
@@ -201,6 +214,12 @@ func (p *process) run(ctx context.Context, req RunRequest) (<-chan RunUpdate, er
 				// timeout to break the deadlock and the process leaked until
 				// the caller's own context expires. Draining costs nothing and
 				// is the only thing that guarantees the child can finish.
+				//
+				// The drained bytes reach no watch. A refusal in that tail is
+				// therefore missed and the run reports whatever it otherwise
+				// would — the direction to miss in, and the same one a watch's
+				// own narrowness errs towards: back to the report this server
+				// gave before, never onto a finished run relabelled as failed.
 				_, _ = io.Copy(io.Discard, stderr)
 			}
 		}()
@@ -226,6 +245,9 @@ func (p *process) run(ctx context.Context, req RunRequest) (<-chan RunUpdate, er
 			line := sc.Text()
 			if line == "" {
 				continue
+			}
+			if watch != nil {
+				watch.Stdout(line)
 			}
 			for _, upd := range p.parseLine(line) {
 				if !send(upd) {
@@ -263,6 +285,22 @@ func (p *process) run(ctx context.Context, req RunRequest) (<-chan RunUpdate, er
 		case waitErr != nil:
 			send(RunUpdate{Type: UpdateFailed, Err: fmt.Errorf("harness: %s exited: %w: %s", p.binary, waitErr, string(stderrBuf))})
 		default:
+			// The watch is asked last, and only here. Everything above already
+			// knows the run did not finish cleanly and says so in words the
+			// watch could not improve on, so consulting it earlier could only
+			// replace a specific reason with a vaguer one. Asking it in the
+			// `default` arm — the arm that would otherwise report success — is
+			// also what keeps this from being a second failure path: it is the
+			// one place a run has nothing else to say, which is exactly the
+			// hole #89 found. Reached only after cmd.Wait and `<-stderrDone`,
+			// so both streams are finished and the answer is about the whole
+			// run rather than a line of it.
+			if watch != nil {
+				if reason := watch.Failure(); reason != "" {
+					send(harnessFailure(p.binary, reason))
+					return
+				}
+			}
 			send(RunUpdate{Type: UpdateCompleted})
 		}
 	}()
