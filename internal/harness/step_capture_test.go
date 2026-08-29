@@ -146,6 +146,85 @@ func TestCountingBothEdgesDoublesTheCount(t *testing.T) {
 	}
 }
 
+// grokMaxTurnsSubtype is what grok 1.0.13 put on the terminal `result` event of
+// a run its own `--max-turns` ceiling stopped. It is quoted here, in the
+// README, and nowhere else: the fixture is the evidence and this is the reading
+// of it.
+const grokMaxTurnsSubtype = "error_max_turns"
+
+// TestGrokReportsItsOwnMaxTurnsStop is the fact #72's grok exemption rests on.
+//
+// grok is the one base this server does not count, because it bounds its own
+// steps with `--max-turns`. A flag that stops a run is half of a budget; the
+// other half is that the stopped run *says* it stopped. Without that half a
+// truncated run reaches a client as `completed`, and — unlike every
+// counting risk in #72 — the router cannot repair it, having neither done the
+// stopping nor anything to relabel.
+//
+// So the discriminator is pinned against the success line rather than merely
+// spelled out. A future grok that collapses the two subtypes fails here instead
+// of silently reintroducing the truncated-run-reported-as-completed risk.
+func TestGrokReportsItsOwnMaxTurnsStop(t *testing.T) {
+	// The success subtype is read out of cli_test.go's own fixture rather than
+	// written down twice, so "distinct from a success" cannot quietly become a
+	// comparison against a value grok stopped using.
+	var success grokStreamEvent
+	if err := json.Unmarshal([]byte(grokResultEvent), &success); err != nil {
+		t.Fatalf("the grok success fixture stopped being JSON: %v", err)
+	}
+
+	events := readCapture(t, "grok-max-turns")
+	var terminal map[string]any
+	for _, ev := range events {
+		if ev["type"] == "result" {
+			terminal = ev
+		}
+	}
+	if terminal == nil {
+		t.Fatalf("the grok capture has no `result` event, so the run said nothing about " +
+			"why it ended")
+	}
+
+	if got := terminal["subtype"]; got != grokMaxTurnsSubtype {
+		t.Errorf("subtype = %v, want %q — the README quotes this value as the observed one",
+			got, grokMaxTurnsSubtype)
+	}
+	if terminal["subtype"] == success.Subtype {
+		t.Fatalf("a --max-turns stop and a finished run both report subtype %q, so a "+
+			"truncated run is indistinguishable from a completed one. grok can no longer "+
+			"be exempted from counting on the strength of enforcing natively",
+			success.Subtype)
+	}
+
+	// Recorded, not merely tolerated. grok reports its own budget stop *as an
+	// error*, and parseGrokLine reads `is_error` and nothing else off this
+	// line — so the mapping #72 lands must read `subtype` first. Lifecycle §3
+	// requires `incomplete` for a budget and forbids it for an error, and a
+	// budget stop surfaced as `failed` is the wrong one of the two.
+	if terminal["is_error"] != true {
+		t.Errorf("is_error = %v, want true — if grok has stopped labelling its budget "+
+			"stop an error then the ordering parseGrokLine needs is no longer the "+
+			"subject it was", terminal["is_error"])
+	}
+
+	// The run was genuinely truncated, and the capture says so on its own: one
+	// tool call narrated against a task that could not be done in fewer than
+	// five, because each file's contents depend on reading the one before it.
+	// The ground truth this pairs with is on disk at probe time — one file of
+	// five — and is recorded in the README.
+	calls := 0
+	for _, ev := range events {
+		if ev["type"] == "assistant" {
+			calls += blockCount(ev, "tool_use")
+		}
+	}
+	if calls == 0 || calls >= capturedCalls {
+		t.Errorf("the capture narrates %d tool calls for a chained task needing %d — a "+
+			"run that took none, or took them all, is not a measurement of a stop",
+			calls, capturedCalls)
+	}
+}
+
 // TestStepProbeRunsTheShippedInvocation is the same guard
 // TestCodexAndGrokProbesRunTheShippedInvocation puts on the other probes, and it
 // exists because the step probe already failed it once: its first pass added
@@ -154,29 +233,42 @@ func TestCountingBothEdgesDoublesTheCount(t *testing.T) {
 // captures it produced described a server that does not exist, and nothing but
 // a second reading caught it.
 //
-// The prompt is absent from every list here on purpose: four of the five
+// The prompt is absent from every stdin list on purpose: four of the five
 // adapters declare PromptStdin, so a prompt appearing in argv would itself be
-// the defect.
+// the defect. grok is the fifth and the exception — its prompt is the value of
+// `-p`, so `<prompt>` has to be in its pinned list for the pin to cover it.
+//
+// `--max-turns` is deliberately absent from GROK_ARGV. uhpd does not send it,
+// and the probe appends it from a list of its own; pinning it here would make
+// this test assert the opposite of what is true.
 func TestStepProbeRunsTheShippedInvocation(t *testing.T) {
-	src, err := os.ReadFile("../../scripts/probe-steps.py")
-	if err != nil {
-		t.Fatalf("the step probe is missing: %v", err)
-	}
-
 	models := []string{"<model>"}
 	for _, tc := range []struct {
+		probe   string
 		list    string
 		binary  string
 		harness *CLIHarness
+		// prompt is where this adapter's Input is expected to travel. Pinned
+		// per case rather than assumed, because a base that quietly moved its
+		// prompt from stdin into argv would otherwise pass this test while the
+		// pinned list had stopped carrying the whole invocation.
+		prompt PromptMode
 	}{
-		{"CLAUDE_ARGV", "claude", NewClaude(models)},
-		{"OPENCODE_ARGV", "opencode", NewOpenCode(models)},
-		{"CODEX_ARGV", "codex", NewCodex(models)},
+		{"probe-steps.py", "CLAUDE_ARGV", "claude", NewClaude(models), PromptStdin},
+		{"probe-steps.py", "OPENCODE_ARGV", "opencode", NewOpenCode(models), PromptStdin},
+		{"probe-steps.py", "CODEX_ARGV", "codex", NewCodex(models), PromptStdin},
+		{"probe-grok-max-turns.py", "GROK_ARGV", "grok", NewGrok(models), PromptArgs},
 	} {
 		t.Run(tc.binary, func(t *testing.T) {
-			if tc.harness.Prompt != PromptStdin {
-				t.Fatalf("%s no longer takes its prompt on stdin, so the probe's argv is "+
-					"missing whatever carries it now", tc.binary)
+			src, err := os.ReadFile(filepath.Join("..", "..", "scripts", tc.probe))
+			if err != nil {
+				t.Fatalf("the %s probe is missing: %v", tc.binary, err)
+			}
+
+			if tc.harness.Prompt != tc.prompt {
+				t.Fatalf("%s takes its prompt as %q, not %q — the probe's argv is either "+
+					"missing whatever carries it now or carrying one it should not",
+					tc.binary, tc.harness.Prompt, tc.prompt)
 			}
 
 			args, err := tc.harness.BuildArgs(RunRequest{Input: "<prompt>"})
