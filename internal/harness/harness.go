@@ -155,6 +155,21 @@ const ReasonMaxStep = "max_step"
 // agent and MUST NOT be dropped, and §4.1 that a server MUST NOT advertise MCP
 // support it cannot deliver — both of which need an answer to "can this
 // runtime actually do it", not an assumption.
+//
+// # Enforcement, not placement
+//
+// Every bit below names something with a real *no*, where prose is a weaker
+// substitute for a mechanism and the router would otherwise be over-claiming.
+// Where a runtime merely files the same text somewhere else, there is nothing
+// to over-claim and no bit belongs here.
+//
+// This is why there is no fourth bit for "does this runtime take a system
+// prompt", though three of the five bases have a flag for one. The standing
+// block reaches the agent as prompt text on every base, deliberately: the
+// composed prompt is the Task.Input a session's turns report, so it is also
+// the only record of what a run actually ran under. See
+// [ADR-0010](../../docs/adr/0010-instructions-reach-the-agent-as-prompt-text.md),
+// which is a decision and not a gap — issue #79 is closed against it.
 type Delivery struct {
 	// MCPServers is true when the runtime accepts a per-run MCP configuration.
 	// False means a harness carrying MCP servers is refused at configuration
