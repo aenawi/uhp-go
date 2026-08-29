@@ -1,4 +1,4 @@
-.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probes
+.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps probes
 
 # Both binaries, because a server nobody can call is half a delivery: uhpc is
 # how the surface gets exercised over a socket rather than against a handler.
@@ -204,6 +204,23 @@ probe-codex:
 probe-grok:
 	@python3 scripts/probe-grok-session.py
 
+# The step probe (#72), and the one that answers a question rather than renewing
+# an answer. `max_step` is a budget on agent steps, and ADR-0007's rule is that a
+# bound holds on every base or is not claimed at all — so what this establishes,
+# per base, is whether every tool call a run takes is one the CLI narrates. A
+# counter fed by a partial narration is a ceiling that never fires.
+#
+# Ground truth is on disk, never in the stream: each base is asked for five
+# files, one tool call each, and its narration has to match what it produced.
+# Under-counting fails the run; over-counting warns, because stopping early is
+# survivable and stopping never is not.
+#
+# Re-run it whenever a base is upgraded, and whenever one is added — a base
+# nobody has probed cannot be counted, and a base that cannot be counted takes
+# `max_step` down with it.
+probe-steps:
+	@python3 scripts/probe-steps.py
+
 # Every probe that needs a logged-in CLI, in one command. Not part of `test`:
 # `go test` has no logged-in CLI, which is the whole gap these fill.
-probes: capture-claude probe-claude-delivery probe-pi probe-codex probe-grok
+probes: capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps
