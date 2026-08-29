@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -42,34 +41,19 @@ const capturedCalls = 5
 // Deliberately not the adapters' own event structs: those parse the handful of
 // fields each adapter acts on today, and a `tool_use` block is not among them.
 // Decoding into maps is what lets this test see the whole line the CLI actually
-// wrote, which is the point of keeping a capture at all.
+// wrote, which is the point of keeping a capture at all. The reading of the file
+// itself is readCaptureLines', which serves the tests that need the raw line.
 func readCapture(t *testing.T, base string) []map[string]any {
 	t.Helper()
-	f, err := os.Open(filepath.Join("testdata", "steps", base+".jsonl"))
-	if err != nil {
-		t.Fatalf("opening the %s capture: %v", base, err)
-	}
-	defer f.Close()
+	lines := readCaptureLines(t, base+".jsonl")
 
-	var events []map[string]any
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
-		}
+	events := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
 		var ev map[string]any
-		if err := json.Unmarshal(line, &ev); err != nil {
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("the %s capture stopped being JSON: %v", base, err)
 		}
 		events = append(events, ev)
-	}
-	if err := sc.Err(); err != nil {
-		t.Fatalf("reading the %s capture: %v", base, err)
-	}
-	if len(events) == 0 {
-		t.Fatalf("the %s capture is empty", base)
 	}
 	return events
 }
@@ -107,6 +91,34 @@ func TestCapturedToolCallsMatchGroundTruth(t *testing.T) {
 			base: "opencode",
 			calls: func(ev map[string]any) int {
 				if ev["type"] == "tool_use" {
+					return 1
+				}
+				return 0
+			},
+		},
+		{
+			// codex announces `item.started` when the model asks for a tool and
+			// `item.completed` when it finishes, so only the first is counted —
+			// the same start edge as the other two.
+			//
+			// This row is new, and #89 is why it could not exist before: under
+			// the invocation uhpd used to send, codex was refused every write
+			// and took no countable tool call at all. ADR-0008 changed the
+			// invocation and the capture is of the new one.
+			base: "codex",
+			calls: func(ev map[string]any) int {
+				if ev["type"] != "item.started" {
+					return 0
+				}
+				item, ok := ev["item"].(map[string]any)
+				if !ok {
+					return 0
+				}
+				switch item["type"] {
+				// A tool doing something, as against the model talking:
+				// `agent_message` and `reasoning` are the answer being written.
+				// The same set the probe counts.
+				case codexFileChangeItem, "command_execution", "mcp_tool_call", "web_search":
 					return 1
 				}
 				return 0

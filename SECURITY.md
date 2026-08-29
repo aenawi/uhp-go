@@ -21,8 +21,10 @@ clients. That is its purpose, not a vulnerability. The security boundary is:
 
 - Bypassing bearer-token authentication on an authenticated endpoint.
 - Injecting arguments or options into a harness CLI invocation through request fields.
-- Escaping a task's working directory, or reading or writing files outside it.
-- Path traversal through artifact or file identifiers.
+- Making `uhpd` itself read or write outside a task's working directory — path traversal
+  through an artifact or file identifier, an attachment name, or any other request field.
+  Read the matching entry under "Out of scope": this covers what the server does, not what
+  the agent it started chooses to do.
 - Causing `uhpd` to make outbound network connections of its own (it is designed to make
   none — see "Runs entirely offline" in the README).
 - Leaking task, session, or artifact data to a caller presenting no credential, or serving
@@ -34,6 +36,15 @@ clients. That is its purpose, not a vulnerability. The security boundary is:
 
 - Anything an authenticated client can do that the agent CLI itself permits. A harness
   agent runs commands; a client authorised to start a task is authorised to do that.
+- An agent writing outside the working directory it was given. `uhpd` grants every harness
+  write access to that directory and confines only one of the five to it: `codex`, with
+  `-c sandbox_mode=workspace-write`. `claude`, `opencode`, `grok` and `pi` take no argument
+  that would make a wall, so the directory is where they start and not a boundary this
+  server maintains. That is stated rather than implied because it cannot be discovered by
+  asking the server, and the decision behind it — including why withholding write access
+  was not an option — is
+  [ADR-0008](docs/adr/0008-an-agent-may-write-in-the-directory-it-was-given.md). An escape
+  `uhpd` causes is still in scope; an agent going where its own runtime allows is not.
 - One holder of a configured key reading another's tasks, sessions, or artifacts. A `uhpd`
   process serves one principal, and every value in `UHP_API_KEYS` is an equivalent
   credential for it rather than a tenant of its own — so two people holding two keys are

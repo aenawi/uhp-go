@@ -82,8 +82,14 @@ _Avoid_: Link, Public URL, Share token, Session token
 
 **Harness**:
 One configured runtime backend — the thing that turns a model into a working agent by
-planning, calling tools, and iterating. Named by an opaque `chrn_` id and a `base`.
-_Avoid_: Backend, Adapter, Agent, Provider
+planning, calling tools, and iterating. Named by an opaque `chrn_` id and a `base`. Every
+Harness is granted write access to the working directory its Session was given, uniformly
+across the five bases, because an agent that cannot write cannot use the Container it was
+handed — see [ADR-0008](docs/adr/0008-an-agent-may-write-in-the-directory-it-was-given.md).
+Confinement to that directory is a separate claim and a weaker one: `codex` is confined by
+an argument this server passes, and the other four are bounded by nothing it passes.
+_Avoid_: Backend, Adapter, Agent, Provider. "Sandbox" names one base's argument, not the
+grant — the grant is the same on all five and only one of them enforces a wall.
 
 **Base**:
 Which runtime a Harness runs, as a string the protocol deliberately does not enumerate.

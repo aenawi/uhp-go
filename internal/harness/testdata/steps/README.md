@@ -9,6 +9,19 @@ step can be counted from.
 Captured 2026-08-28. `claude` 2.1.250, `opencode` 1.18.23. Reproduce with
 `make probe-steps`.
 
+`codex.jsonl` is dated separately: captured 2026-08-29 on `codex` **0.150.1**, because
+until that day `codex` could not take a tool call under the shipped invocation
+at all. `codex-read-only.jsonl` and its `.stderr` are the run that could not, kept
+as the fixture for [#89](https://github.com/aenawi/uhp-go/issues/89) and read
+below under [The run that could not act](#the-run-that-could-not-act).
+
+`make probe-steps` runs every base. One at a time is the script directly, which
+is how the `codex` pair was taken:
+
+```bash
+python3 scripts/probe-steps.py --base codex --keep
+```
+
 `grok-max-turns.jsonl` is the odd one out and is dated separately: captured
 2026-08-29 on `grok` **1.0.13**, a version ahead of the 1.0.5 every other `grok`
 capture in this repository was taken on. It answers a different question, from a
@@ -16,13 +29,20 @@ different probe — `make probe-grok-max-turns` — and is read below under
 [What grok's own stop looks like](#what-groks-own-stop-looks-like).
 
 Every capture here is the **shipped invocation** — exactly `CLIHarness.BuildArgs`,
-with the prompt wherever that adapter puts it, and no permission, sandbox or
-approval flag, because `uhpd` sends none. An earlier pass added
+with the prompt wherever that adapter puts it. An earlier pass added
 `--permission-mode bypassPermissions`, `--auto` and `--sandbox workspace-write`
-and passed the prompt as argv; it was discarded. A probe that measures an
-invocation this server does not send measures nothing, which is the standard
-`TestCodexAndGrokProbesRunTheShippedInvocation` already holds the other probes to
-and `TestStepProbeRunsTheShippedInvocation` holds these.
+and passed the prompt as argv, none of which `uhpd` sent; it was discarded. A
+probe that measures an invocation this server does not send measures nothing,
+which is the standard `TestCodexAndGrokProbesRunTheShippedInvocation` already
+holds the other probes to and `TestStepProbeRunsTheShippedInvocation` holds
+these.
+
+One sandbox argument is now shipped, and only on one base: `codex` carries
+`-c sandbox_mode=workspace-write`, decided in
+[ADR-0008](../../../../docs/adr/0008-an-agent-may-write-in-the-directory-it-was-given.md).
+That is the reverse of the discarded pass rather than a return to it — the flag
+is here because the adapter sends it, and the pin is what makes the difference
+checkable rather than a matter of trust.
 
 The prompt is on stdin for `claude`, `opencode` and `codex`, and in argv for
 `grok` alone — `-p=<prompt>`, the only shape that carries an arbitrary prompt
@@ -33,8 +53,9 @@ cannot come to assert that this server does.
 
 ## The measurement
 
-Ground truth is on disk, not in the stream. Each **counted** base — `claude` and
-`opencode` — was given one task with a known number of verifiable side effects:
+Ground truth is on disk, not in the stream. Each **counted** base — `claude`,
+`opencode` and `codex` — was given one task with a known number of verifiable
+side effects:
 
 > Create exactly five files in the current directory, named step1.txt …
 > step5.txt. Each file must contain only its own number. Create them one at a
@@ -62,6 +83,7 @@ call is requested, not after it has run.
 | --- | --- | --- | --- |
 | `claude` | `tool_use` blocks in an `assistant` message | 5 | 5 |
 | `opencode` | `tool_use` event | 5 | 5 |
+| `codex` | `item.started` whose item is a tool | 5 | 5 |
 
 ## A step is a tool call, not a round
 
@@ -151,21 +173,70 @@ Two smaller facts, both from lines the parser ignores today:
 in `cli_test.go`, so a future `grok` release that collapses the two fails the
 build rather than silently reintroducing the risk.
 
-## Not here
+## The run that could not act
 
-**`codex`** cannot take a tool-call round under the shipped invocation at all.
-`uhpd` passes no `--sandbox` flag, so `codex` defaults to read-only and every
-write is refused:
+`codex-read-only.jsonl` is the same prompt on the same `codex` 0.150.1, minutes
+earlier, under the invocation `uhpd` sent before
+[ADR-0008](../../../../docs/adr/0008-an-agent-may-write-in-the-directory-it-was-given.md).
+No `--sandbox` argument, so `codex` defaulted to a read-only workspace and
+refused every write. **Zero files created**, against the five the counted capture
+produced from the identical prompt.
+
+It is kept because a detector proven only against a refused run is a detector
+nobody has shown to be safe. The pair is the fixture for
+[#89](https://github.com/aenawi/uhp-go/issues/89): one run that must be reported
+`failed` and one that must not, differing in the argument this server now sends.
+
+The whole of what the refusal said is in `codex-read-only.stderr`:
 
 ```text
 ERROR codex_core::tools::router: error=patch rejected:
 writing is blocked by read-only sandbox; rejected by user approval settings
 ```
 
-Zero files created — and the run ended on `turn.completed`, not `turn.failed`,
-so a task whose every tool call was denied is reported to the client as
-`completed`. That is a defect in its own right, well outside #72, and it is why
-there is no `codex` capture here.
+**And that is the whole of it.** The capture's stdout carries no item for the
+rejected patch — not an `item.started`, not a failed `item.completed`, nothing —
+ends on `turn.completed` rather than `turn.failed`, and the process exits `0`.
+So a task in which nothing could be written was indistinguishable on stdout from
+one that succeeded, and reached the client as `completed` with the agent's
+apology as its answer. `codexWatch` in `codex.go` is what reads the stderr line;
+`codex_refusal_test.go` replays both captures through it.
+
+The two captures also disagree about tool narration, which is why this section is
+not simply the old "Not here" note with a newer date. The refused run narrates
+**one** tool call — a shell command that listed the missing files and succeeded —
+so the run was not one in which nothing worked, only one in which nothing was
+written. Any rule reading "some tool succeeded" as recovery would clear it.
+
+### Two more measurements, and the limits they set
+
+Both taken 2026-08-29 on the same 0.150.1, because the detector's shape depends on
+them and neither is guessable.
+
+**A refused *call* does not read like a refused *run*.** A `workspace-write` run
+asked to write one file outside its directory and one inside was refused the first
+and wrote the second, and finished:
+
+```text
+ERROR codex_core::tools::router: error=patch rejected:
+writing outside of the project; rejected by user approval settings
+```
+
+Same target, same level, same six opening words as the read-only refusal, and the
+opposite meaning. That pair is why the match is on the span where they diverge and
+not on the target or on the word "rejected" — and it is pinned by
+`TestCodexPerCallRefusalIsNotARunFailure`.
+
+**A read-only run that only tries the shell leaves no trace at all.** Asked to
+create a file with `printf` rather than an editing tool, `codex` had both attempts
+blocked and created nothing — while emitting **no `ERROR` line and no
+`command_execution` item**. The refusal survives only in the agent's own prose
+("Both shell commands were blocked because the folder is read-only"), which is not
+a signal this server will match. So the reporting fix covers the write route that
+logs and not this one; what removes the cause for both is
+[ADR-0008](../../../../docs/adr/0008-an-agent-may-write-in-the-directory-it-was-given.md).
+
+## Not here
 
 **`pi`** could not be captured. The only provider with credentials on the capture
 machine was `groq`, whose on-demand tier caps at 8,000 tokens per minute against
@@ -188,7 +259,12 @@ with the same placeholder. Its `cwd` and every absolute path in a `thinking` or
 `tool_result` body are rewritten to `/workspace`, and its `partial_json` is
 replaced for the reason above.
 
-Nothing either reading depends on was touched: a call is marked by the assistant
+`codex`'s two captures carry the probe's own temporary directory in every
+`file_change` path, which is a fact about the capture machine and not about
+`codex`. That prefix is rewritten to `/workspace`; nothing else in either file
+was changed, and the `.stderr` is byte for byte what `codex` wrote.
+
+Nothing any reading depends on was touched: a call is marked by the assistant
 message carrying the `tool_use` block, never by the deltas that fill it in, and
 the terminal `result` event is verbatim. The `system` line is the only one
 re-serialised, because it is the only one with a key removed; every other line is

@@ -1,0 +1,15 @@
+{"type":"thread.started","thread_id":"01a04c1b-f132-7530-89ec-6b59d93db1a6"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll create each file with its own write call."}}
+{"type":"item.started","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/step1.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/step1.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"file_change","changes":[{"path":"/workspace/step2.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"/workspace/step2.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.started","item":{"id":"item_3","type":"file_change","changes":[{"path":"/workspace/step3.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"file_change","changes":[{"path":"/workspace/step3.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.started","item":{"id":"item_4","type":"file_change","changes":[{"path":"/workspace/step4.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_4","type":"file_change","changes":[{"path":"/workspace/step4.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.started","item":{"id":"item_5","type":"file_change","changes":[{"path":"/workspace/step5.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_5","type":"file_change","changes":[{"path":"/workspace/step5.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_6","type":"agent_message","text":"DONE"}}
+{"type":"turn.completed","usage":{"input_tokens":112791,"cached_input_tokens":94720,"cache_write_input_tokens":0,"output_tokens":248,"reasoning_output_tokens":0}}
