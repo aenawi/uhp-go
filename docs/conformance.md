@@ -837,3 +837,85 @@ uhp-conformance --base-url http://localhost:8080 --api-key devkey \
 X-06 and X-07 only test something if the harness actually writes a file, which the suite
 arranges by asking it to. A harness that answers in prose without touching the filesystem
 produces an empty artifact listing and a skipped download check, and a skip is not a pass.
+
+## How the score is measured and defended
+
+UHP conformance is defined by a runnable suite, not by self-assessment. The suite lives
+in the protocol repository and anyone can run it against this server:
+
+```bash
+pip install -e protocol/conformance
+uhp-conformance --base-url http://localhost:8080 --api-key "$UHP_API_KEY" --class full
+```
+
+**Last measured score: `full` 52/52 — CONFORMANT (UHP 2026-08-11, class full), 0 skipped.**
+Details, reproduction steps and what a green suite still cannot see:
+[docs/conformance.md](conformance.md).
+Re-measured 2026-08-26 by `make conformance-gate` at `UHP_CLASS=full` on a server with a
+workspace and `UHP_SESSION_SHARING=1`, with no `--model` pinned. Zero skips, which the runs
+before 2026-08-25 could not say — and the first run scored against a server that answered
+`conformance_class: full` while being graded, so `D-05` reported `class=full` rather than
+the `class=core` every earlier run recorded (#65).
+
+File support (issue #2) and harness management with skills, MCP and tool restrictions
+(issues #3 and #4) had all landed after the previous run and were carried as "implemented,
+unmeasured" until issue #42. The ten checks they target — `X-05`…`X-08` and
+`F-01`…`F-07` — now pass against the suite rather than against this repository's own tests
+alone.
+
+The `extended` run's 44/45 is a *skip*, not a failure: `X-07` downloads an artifact, so it
+only tests anything if the agent chose to write a file, and the `full` run passed the same
+check ninety seconds later on the same server. Read `skipped_not_verified` in the JSON
+report rather than the summary line.
+
+**All three of those runs pinned a model, and that was doing work.** `make conformance-gate`
+runs the same suite against the same server *without* `--model`, and on 2026-08-23 it scored
+**36/37 core**: a task that named no model came back naming none either, so a client that did
+not pin one could not tell what served it (issue #43). That is fixed, and the gate was
+re-run on 2026-08-24 — **37/37 core, 0 skipped**, `T-03` reading `claude-opus-5[1m]` off a
+task that named no model. The two configurations now agree. The gate stays the one place the
+suite runs unpinned, because that is the configuration that found the defect.
+
+**`conformance_class` is no longer a constant, and what it reads depends on how `uhpd` was
+started** (issue #65). Three capabilities here are computed from configuration —
+`files_input`, `files_output` and `harness_management` — so a hardcoded class would be a
+claim the same document contradicts two fields later, which is what the suite's D-05 check
+("conformance_class agrees with capabilities") exists to catch. `conformanceClass` in
+`internal/transport/http/discovery.go` therefore reads the class off the very capability
+struct the document publishes:
+
+| `uhpd` started with | Answers |
+| --- | --- |
+| nothing | `core` |
+| `UHP_WORKSPACE` | `extended` |
+| `UHP_WORKSPACE` + `UHP_SESSION_SHARING=1` | `full` |
+
+Only two variables appear because `uhpd` always hands the service a harness store — a
+durable one where a path is configured, an in-memory one otherwise — so
+`harness_management` is `true` on every deployment of this binary and never the reason a
+class is held down. The capability is still read rather than assumed, because the service
+is usable without one.
+
+**Session sharing gates `full` here even though D-05 does not require it.** The suite's
+list stops at `harness_management`; Sessions §5 is what makes sharing a `full` feature, and
+the stricter reading is the one that cannot be wrong. So a server with a workspace and
+sharing switched off answers `extended`, not `full`.
+
+The default `uhpd` — no workspace, sharing off — still answers `core`, and that is now a
+property of the configuration rather than a line someone remembered not to edit.
+Capabilities a deployment does not offer stay reported as `false` rather than omitted — see
+[UHP surface implemented](api.md).
+
+A skip is counted as a failure here, not as a pass.
+
+That score is defended by a maintainer running `make conformance-gate` before a merge, not
+by CI. The gate points the suite at a running `uhpd` and refuses a failure, *any* skip, or a
+pass count below the recorded one — but it runs on a person's machine, because the suite
+starts real agent tasks against a real CLI and costs real tokens. GitHub withholds secrets
+from a fork's pull request anyway, so a remote job could never have measured a contribution.
+CI keeps the free checks: compilation, tests, and an image build.
+
+That is weaker than a machine-enforced gate and is stated as such: what holds the score up
+is a procedure, and a maintainer who skips it leaves nothing red behind. Why `claude-code`
+is the harness measured, when to run the gate, and what `S-09` can and cannot see are all in
+[docs/conformance.md](conformance.md).
