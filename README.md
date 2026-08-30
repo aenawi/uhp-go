@@ -11,8 +11,10 @@ harnesses without touching client code. It implements the
 [Unified Harness Protocol](https://unifiedharnessprotocol.org), an open specification modelled
 on the OpenAI Responses API.
 
-**Conformance: `full` 52/52, zero skipped** (UHP 2026-08-11). Anyone can re-run the suite —
-see [docs/conformance.md](docs/conformance.md).
+**Conformance: `full` 52/52, zero skipped** — every check in the published suite, at the
+revision named in [docs/conformance.md](docs/conformance.md). The suite is the authority and
+anyone can run it against this server; that page has the command, the reproduction steps, and
+an honest list of what a green run still cannot see.
 
 ## Try it
 

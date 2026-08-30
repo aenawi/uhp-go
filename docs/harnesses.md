@@ -4,10 +4,9 @@ Configuring a harness over HTTP, what actually reaches the agent, and what to ch
 
 ## Harness management
 
-A harness is configuration: a name, a base runtime, a default model, a standing prompt,
-and — once issue #4 lands — the skills, MCP servers and tool restrictions its agent runs
-with. UHP class `full` expects that configuration to be created over HTTP rather than
-compiled in.
+A harness is configuration: a name, a base runtime, a default model, a standing prompt, and
+the skills, MCP servers and tool restrictions its agent runs with. UHP class `full` expects
+that configuration to be created over HTTP rather than compiled in.
 
 **Set `UHP_HARNESS_STORE`,** or a `UHP_WORKSPACE` that implies it. Harness management is
 always offered, but only durable when one of those is set; with neither, `uhpd` keeps

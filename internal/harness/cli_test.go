@@ -1068,13 +1068,15 @@ const (
 	// Code 2.1.240 on 2026-08-23, abridged the same way as the rest of this
 	// block — the init line's 2.6 KB of tool and slash-command inventory and
 	// the assistant line's usage and telemetry are dropped, and the answer text
-	// is cut to its first character. Every field below is verbatim.
+	// is cut to its first character. Every field below is verbatim except `cwd`,
+	// shortened to `/w` as everywhere else here: the parser never reads it, and
+	// the capture's real value was one machine's home directory.
 	//
 	// The init line says `claude-opus-5[1m]`, the CLI's own resolved selection
 	// including the 1M-context variant. Every message underneath it says
 	// `claude-opus-5`, the underlying API model. parseClaudeLine reports the
 	// first — see there for why, and for what it costs.
-	claudeCapturedInitEvent = `{"type":"system","subtype":"init","cwd":"/Users/aenawi/Workspaces/Development/side-projects/uhp-go","session_id":"e116749a-bd87-483d-acd9-6058cbdf7a6d","model":"claude-opus-5[1m]","permissionMode":"default","apiKeySource":"none","claude_code_version":"2.1.240"}`
+	claudeCapturedInitEvent = `{"type":"system","subtype":"init","cwd":"/w","session_id":"e116749a-bd87-483d-acd9-6058cbdf7a6d","model":"claude-opus-5[1m]","permissionMode":"default","apiKeySource":"none","claude_code_version":"2.1.240"}`
 
 	claudeCapturedAssistantEvent = `{"type":"assistant","message":{"model":"claude-opus-5","id":"msg_011CeJxf3Es88ctHnmiKkyQw","type":"message","role":"assistant","content":[{"type":"text","text":"1"}],"stop_reason":null},"session_id":"e116749a-bd87-483d-acd9-6058cbdf7a6d"}`
 )
