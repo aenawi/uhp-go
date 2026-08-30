@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" width="1280" height="320">
+  <defs>
+    <linearGradient id="fade" x1="0" x2="1">
+      <stop offset="0"    stop-color="#007D9C" stop-opacity="0"/>
+      <stop offset="0.18" stop-color="#007D9C" stop-opacity="1"/>
+      <stop offset="0.82" stop-color="#007D9C" stop-opacity="1"/>
+      <stop offset="1"    stop-color="#007D9C" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#00ADD8" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#00ADD8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="320" fill="#0d1117"/>
+  <ellipse cx="200" cy="150" rx="330" ry="170" fill="url(#glow)"/>
+
+  <!-- The bus: it runs the whole width and fades out, because there is no last harness. -->
+  <rect x="0" y="228" width="1280" height="7" rx="3.5" fill="url(#fade)"/>
+  <g stroke="#00ADD8" stroke-width="5" stroke-linecap="round">
+    <g opacity=".18"><path d="M64 235 V258"/><path d="M1216 235 V258"/></g>
+    <g opacity=".45"><path d="M160 235 V262"/><path d="M1120 235 V262"/></g>
+    <g opacity=".8"><path d="M352 235 V266"/><path d="M928 235 V266"/></g>
+    <g opacity="1"><path d="M544 235 V266"/><path d="M736 235 V266"/></g>
+  </g>
+  <g fill="#00ADD8">
+    <circle cx="64" cy="266" r="7" opacity=".18"/><circle cx="1216" cy="266" r="7" opacity=".18"/>
+    <circle cx="160" cy="270" r="8" opacity=".45"/><circle cx="1120" cy="270" r="8" opacity=".45"/>
+    <circle cx="352" cy="274" r="9" opacity=".8"/><circle cx="928" cy="274" r="9" opacity=".8"/>
+    <circle cx="544" cy="274" r="9"/><circle cx="736" cy="274" r="9"/>
+  </g>
+
+  <!-- The mark, sitting on the bus. -->
+  <g transform="translate(104,34) scale(0.78)">
+    <path d="M128 150 V250" stroke="#007D9C" stroke-width="10" stroke-linecap="round" fill="none"/>
+    <circle cx="88" cy="56" r="22" fill="#007D9C"/>
+    <circle cx="168" cy="56" r="22" fill="#007D9C"/>
+    <circle cx="88" cy="56" r="11" fill="#00ADD8"/>
+    <circle cx="168" cy="56" r="11" fill="#00ADD8"/>
+    <rect x="62" y="48" width="132" height="106" rx="53" fill="#00ADD8"/>
+    <circle cx="103" cy="92" r="23" fill="#FFFFFF"/>
+    <circle cx="153" cy="92" r="23" fill="#FFFFFF"/>
+    <circle cx="103" cy="94" r="10" fill="#16232A"/>
+    <circle cx="153" cy="94" r="10" fill="#16232A"/>
+    <ellipse cx="128" cy="120" rx="10" ry="7.5" fill="#16232A"/>
+    <rect x="118.5" y="129" width="8.5" height="17" rx="3" fill="#FFFFFF"/>
+    <rect x="129" y="129" width="8.5" height="17" rx="3" fill="#FFFFFF"/>
+  </g>
+
+  <text x="310" y="158" font-size="82" font-weight="700" fill="#00ADD8"
+        font-family="Menlo, ui-monospace, SFMono-Regular, Consolas, monospace">uhp-go</text>
+  <text x="314" y="200" font-size="25" fill="#8B9BA5"
+        font-family="Helvetica Neue, Helvetica, ui-sans-serif, system-ui, sans-serif">One HTTP API for every coding agent you run.</text>
+</svg>

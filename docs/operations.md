@@ -114,8 +114,8 @@ which changes the `UHP_WORKSPACE`, `UHP_HARNESS_STORE` and `UHP_DB` rows above, 
 
 ### Where the model list comes from
 
-The five `*_MODELS` variables are **fallbacks, not the catalogue**. Four of the five CLIs
-can be asked what they serve, and are:
+The `*_MODELS` variables are **fallbacks, not the catalogue** — one per base, and a base
+added later brings its own. Most agent CLIs can be asked what they serve, and are:
 
 | Harness | Asked with | Fallback used when |
 |---|---|---|
@@ -262,7 +262,7 @@ Three rules, and each is the wall clock's:
 - **`0` is a real request** — run, but call no tools — and is accepted on `claude-code`,
   `codex` and `pi`, which announce a call before making it. On `opencode` and `grok-cli` it
   is refused `422`: neither says anything about a call until it has happened, so a single
-  overshoot is the whole of that budget. Every *positive* ceiling works on all five. A
+  overshoot is the whole of that budget. Every *positive* ceiling works on every base. A
   negative value is a `400`, and omitting the field leaves the agent unbounded.
 
 **There is no default, and that is the one place this differs from the wall clock.** Every
@@ -323,8 +323,8 @@ cap a client's spend.
 
 **A harness that cannot hold the bound refuses the task**, `422` with
 `code: "uhpgo_step_budget_unsupported"`, rather than accepting a ceiling nobody enforces. No
-base shipped today fails this outright — all five either narrate a countable call or bound
-themselves — and the refusal exists so that adding a sixth cannot quietly un-honour the
+base shipped today fails this outright — each either narrates a countable call or bounds
+itself — and the refusal exists so that a base added later cannot quietly un-honour the
 field. The cases it reaches today are the two `max_step: 0` rows above. The
 reasoning is [ADR-0009](adr/0009-a-step-is-one-tool-call.md), and the rule it applies is
 ADR-0007's: a grant may be per-base, a bound may not.

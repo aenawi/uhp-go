@@ -187,7 +187,7 @@ Three things to know before reading a result:
 - **Pick a harness that advertises what the checks exercise.** The `capabilities` list on a
   harness object is now enforced rather than reported: a `previous_response_id` sent to a
   harness without `sessions` is refused `422`, as is a cancel sent to one without
-  `cancellation`. All five bases here now advertise `sessions` — `pi` since issue #33 and
+  `cancellation`. Every base here now advertises `sessions` — `pi` since issue #33 and
   `grok-cli` since issue #34 — so the session and continuation checks are exercisable
   against any of them. Before #34 a run pointed at `grok-cli` failed them by design.
 
