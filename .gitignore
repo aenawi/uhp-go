@@ -31,3 +31,6 @@ scripts/__pycache__/
 
 # Local handoff artifact, not part of the project.
 START-HERE.md
+
+# Screenshots from the browser inspector, taken while checking a design.
+.mcp-web-inspector/

@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"
+     role="img" aria-label="uhp-go">
+  <title>uhp-go</title>
+  <desc>A gopher above one bus, fanning out to the five harnesses it drives.</desc>
+
+  <g stroke="#007D9C" stroke-linecap="round" fill="none">
+    <!-- The one contract everything hangs off. -->
+    <path d="M128 150 V172" stroke-width="10"/>
+    <path d="M40 178 H216" stroke-width="12"/>
+    <!-- Five drops, one per harness. -->
+    <g stroke-width="9">
+      <path d="M46 182 V202"/>
+      <path d="M87 182 V202"/>
+      <path d="M128 182 V202"/>
+      <path d="M169 182 V202"/>
+      <path d="M210 182 V202"/>
+    </g>
+  </g>
+  <g fill="#00ADD8">
+    <circle cx="46" cy="214" r="13"/>
+    <circle cx="87" cy="214" r="13"/>
+    <circle cx="128" cy="214" r="13"/>
+    <circle cx="169" cy="214" r="13"/>
+    <circle cx="210" cy="214" r="13"/>
+  </g>
+
+  <!-- Ears, behind the head so only the tops show. -->
+  <g>
+    <circle cx="88" cy="56" r="22" fill="#007D9C"/>
+    <circle cx="168" cy="56" r="22" fill="#007D9C"/>
+    <circle cx="88" cy="56" r="11" fill="#00ADD8"/>
+    <circle cx="168" cy="56" r="11" fill="#00ADD8"/>
+  </g>
+
+  <!-- Head -->
+  <rect x="62" y="48" width="132" height="106" rx="53" fill="#00ADD8"/>
+
+  <!-- Eyes, pupils centred so it looks straight out. -->
+  <circle cx="103" cy="92" r="23" fill="#FFFFFF"/>
+  <circle cx="153" cy="92" r="23" fill="#FFFFFF"/>
+  <circle cx="103" cy="94" r="10" fill="#16232A"/>
+  <circle cx="153" cy="94" r="10" fill="#16232A"/>
+
+  <!-- Snout and the teeth that make it a gopher -->
+  <ellipse cx="128" cy="120" rx="10" ry="7.5" fill="#16232A"/>
+  <rect x="118.5" y="129" width="8.5" height="17" rx="3" fill="#FFFFFF"/>
+  <rect x="129" y="129" width="8.5" height="17" rx="3" fill="#FFFFFF"/>
+</svg>
