@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo-wordmark.svg" alt="uhp-go" width="380">
+</p>
+
 # uhp-go
 
 One HTTP API for Claude Code, Codex CLI, Grok CLI, OpenCode and Pi.
