@@ -1,6 +1,6 @@
 # Harnesses
 
-Configuring a harness over HTTP, what actually reaches the agent, and what to check before you add a sixth one.
+Configuring a harness over HTTP, what actually reaches the agent, and what to check before you add one of your own.
 
 ## Harness management
 
@@ -145,7 +145,7 @@ because "it defaults to something sensible" is not a default any two CLIs share.
 defaults to a read-only workspace and refused every write for as long as nobody looked, and
 it did so while reporting the run `completed` — issue #89, and
 [ADR-0008](adr/0008-an-agent-may-write-in-the-directory-it-was-given.md) is the policy
-a sixth harness inherits: write access to the session's working directory, granted by
+any harness added later inherits: write access to the session's working directory, granted by
 whatever argument that runtime needs, or none if it needs none.
 
 **The `Capabilities` list is enforced, so declare only what the harness delivers.** Listing

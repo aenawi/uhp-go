@@ -204,7 +204,7 @@ list it already holds. Cancelling an already-terminal task or an idle session st
 succeeds whatever the harness advertises (Sessions §4): there is no work to stop, so
 nothing is being promised that cannot be delivered.
 
-All five bases shipped here advertise `sessions`. `grok-cli` was the last holdout and
+Every base shipped here advertises `sessions`. `grok-cli` was the last holdout and
 stopped being one in issue #34: grok 1.0.5 puts a `session_id` on every line of
 `--output-format streaming-messages-json` and resumes it with `--resume`, so both halves
 of the capability now exist where before neither did.
@@ -212,10 +212,10 @@ That is the only entry in the list a declaration decides. Three of the six capab
 not the CLI's to claim and no declaration names them:
 
 - `cancellation` belongs to the shared runner — every harness runs in its own process group
-  and is stopped by killing it — so all five advertise it.
+  and is stopped by killing it — so every base advertises it, including any you add.
 - `files_in` and `files_out` belong to the router. It writes a task's attachments into the
   session working directory before the run and diffs that directory afterwards for
-  artifacts, and neither step asks the adapter anything. So all five advertise both,
+  artifacts, and neither step asks the adapter anything. So every base advertises both,
   wherever both are true. The declarations used to say otherwise — `pi` claimed neither and
   `grok-cli` claimed no output, while both did both.
 

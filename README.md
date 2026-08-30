@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="docs/assets/logo-wordmark.svg" alt="uhp-go" width="380">
+  <img src="docs/assets/banner.png" alt="uhp-go — one HTTP API for every coding agent you run" width="100%">
 </p>
 
 # uhp-go
 
-One HTTP API for Claude Code, Codex CLI, Grok CLI, OpenCode and Pi.
+One HTTP API for every coding agent you run.
 
 Every product that embeds a coding agent ends up writing the same things: start a task,
 follow its progress, continue the conversation, cancel it, collect the files it wrote, work
@@ -50,8 +50,10 @@ uhpc run --stream "summarise the README"   # a task, rendered as it arrives
 
 `uhpc` works against any conformant UHP server, not just this one.
 
-Each harness shells out to its CLI (`claude`, `codex`, `grok`, `opencode`, `pi`), so those
-need to be installed and logged in on whatever machine runs `uhpd`.
+Each harness shells out to an agent CLI, so whichever ones you configure need to be
+installed and logged in on the machine running `uhpd`. The bases shipped today are
+`claude-code`, `codex`, `grok-cli`, `opencode` and `pi`; adding another is a file and a
+line, not a fork — see [Harnesses](docs/harnesses.md).
 
 ## It runs entirely offline
 
@@ -82,7 +84,7 @@ See [Authentication](docs/authentication.md).
 | [The HTTP surface](docs/api.md) | Every endpoint, which request fields are read, reconnecting, idempotency |
 | [Running it](docs/operations.md) | Configuration, storage, concurrency, task and step budgets, the Docker image |
 | [Authentication](docs/authentication.md) | Bearer keys, the loopback default, and why several keys are still one tenant |
-| [Harnesses](docs/harnesses.md) | Configuring one over HTTP, what reaches the agent, adding a sixth |
+| [Harnesses](docs/harnesses.md) | Configuring one over HTTP, what reaches the agent, adding another |
 | [Files](docs/files.md) | Files as task input, artifacts as output, download safety |
 | [Session sharing](docs/session-sharing.md) | Read-only public links, and the consent switch in front of them |
 | [Conformance](docs/conformance.md) | The score, how to reproduce it, and what a green suite still can't see |
@@ -90,9 +92,11 @@ See [Authentication](docs/authentication.md).
 | [Testing](docs/testing.md) | What's free on every push, and what costs tokens |
 | [Decisions](docs/adr/) | Architecture decision records — why things are the way they are |
 
-## Which harnesses
+## The harnesses shipped today
 
-All five advertise `sessions`, `cancellation`, and files in and out. What differs is how
+Nothing here is limited to this list — a harness is a data declaration and the router doesn't
+care how many there are. These are the bases that ship configured, and every one of them
+advertises `sessions`, `cancellation`, and files in and out. What differs between them is how
 much each CLI can enforce natively rather than by being asked nicely in its prompt:
 
 | Base | Tool block | Skills | Per-run MCP |
@@ -108,8 +112,8 @@ installed. "Executed" means it was actually run and watched from the far end. Wh
 runtime can't hard-block a tool, the restriction still reaches the agent as an instruction
 and is described to it as unenforced — never quietly dropped.
 
-The full table, and what each of those words is worth, is in
-[Harnesses](docs/harnesses.md).
+The full table, what each of those words is worth, and what to check before you add one of
+your own, are all in [Harnesses](docs/harnesses.md).
 
 ## Relationship to UHP
 
