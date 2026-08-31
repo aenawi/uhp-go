@@ -168,7 +168,7 @@ func TestGetSessionNotFound(t *testing.T) {
 // "nothing has run yet" case its crash.
 func TestSessionTurnsEmptyIsAnArrayNotNull(t *testing.T) {
 	srv := newFakeServer(&fakeService{
-		sessionTurns: func(context.Context, string) ([]uhp.Turn, error) { return nil, nil },
+		sessionTurns: func(context.Context, string) ([]uhp.TurnItem, error) { return nil, nil },
 	})
 
 	status, body := callJSON(t, srv, "GET", "/v1/sessions/sess_1/turns", "")
@@ -182,11 +182,15 @@ func TestSessionTurnsEmptyIsAnArrayNotNull(t *testing.T) {
 
 func TestSessionTurns(t *testing.T) {
 	srv := newFakeServer(&fakeService{
-		sessionTurns: func(context.Context, string) ([]uhp.Turn, error) {
-			return []uhp.Turn{{
+		sessionTurns: func(context.Context, string) ([]uhp.TurnItem, error) {
+			return []uhp.TurnItem{{
+				ID:        "resp_1",
+				Status:    uhp.StatusCompleted,
+				Model:     "m",
+				User:      "hi",
+				Assistant: "ok",
+
 				ResponseID: "resp_1",
-				Status:     uhp.StatusCompleted,
-				Model:      "m",
 				Input:      "hi",
 				Output:     "ok",
 			}}, nil
@@ -202,14 +206,52 @@ func TestSessionTurns(t *testing.T) {
 		t.Fatalf("expected one turn, got %d", len(turns))
 	}
 	first, _ := turns[0].(map[string]any)
-	if first["response_id"] != "resp_1" || first["output"] != "ok" {
-		t.Fatalf("unexpected turn: %#v", turns[0])
+
+	// The two Sessions §3 requires, by their wire names. X-04 reads exactly
+	// these, so a renamed tag here is a conformance failure and not a cosmetic
+	// one — see #101, which is the last time it was.
+	if first["id"] != "resp_1" || first["status"] != "completed" {
+		t.Fatalf("turn is missing the id/status pair Sessions §3 requires: %#v", turns[0])
+	}
+	if first["user"] != "hi" || first["assistant"] != "ok" {
+		t.Fatalf("turn does not carry §3's user/assistant: %#v", turns[0])
+	}
+
+	// The pre-#53 spellings, answered for one release beside the specified
+	// ones. Delete this block with the three fields.
+	if first["response_id"] != "resp_1" || first["input"] != "hi" || first["output"] != "ok" {
+		t.Fatalf("turn dropped a deprecated field while it is still supported: %#v", turns[0])
+	}
+}
+
+// A turn that produced nothing answers files as an empty array, not null, for
+// the reason TestSessionTurnsEmptyIsAnArrayNotNull gives one level up: a client
+// iterating the field would crash on the ordinary case, and null cannot be told
+// apart from a server that does not report a turn's files at all.
+func TestSessionTurnFilesEmptyIsAnArrayNotNull(t *testing.T) {
+	srv := newFakeServer(&fakeService{
+		sessionTurns: func(context.Context, string) ([]uhp.TurnItem, error) {
+			return []uhp.TurnItem{{ID: "resp_1", Status: uhp.StatusCompleted}}, nil
+		},
+	})
+
+	status, body := callJSON(t, srv, "GET", "/v1/sessions/sess_1/turns", "")
+	if status != 200 {
+		t.Fatalf("expected 200, got %d: %v", status, body)
+	}
+	first, _ := jsonArray(t, body, "turns")[0].(map[string]any)
+	files, ok := first["files"].([]any)
+	if !ok {
+		t.Fatalf("files is %#v, want an array", first["files"])
+	}
+	if len(files) != 0 {
+		t.Fatalf("expected no files, got %v", files)
 	}
 }
 
 func TestSessionTurnsNotFound(t *testing.T) {
 	srv := newFakeServer(&fakeService{
-		sessionTurns: func(context.Context, string) ([]uhp.Turn, error) {
+		sessionTurns: func(context.Context, string) ([]uhp.TurnItem, error) {
 			return nil, service.ErrSessionNotFound
 		},
 	})

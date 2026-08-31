@@ -208,7 +208,7 @@ type Upload struct {
 // SharedSession is what a share id resolves to: the session, and the harness
 // that ran it, with nothing a viewer is not entitled to.
 //
-// It is here rather than beside [uhp.Share] because it has no counterpart in
+// It is here rather than beside [uhp.SessionShare] because it has no counterpart in
 // the specification at all. Sessions §5 requires that a shared view exist and
 // be read-only; it does not say what one contains, or where it is served. This
 // is one server's answer, at GET /v1/shares/{share_id}.

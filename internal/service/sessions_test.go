@@ -100,14 +100,74 @@ func TestSessionTurnsAreOrdered(t *testing.T) {
 	wantIDs := []string{first.ID, second.ID, third.ID}
 	wantIn := []string{"one", "two", "three"}
 	for i := range turns {
-		if turns[i].ResponseID != wantIDs[i] {
-			t.Errorf("turn %d response_id = %s, want %s", i, turns[i].ResponseID, wantIDs[i])
+		if turns[i].ID != wantIDs[i] {
+			t.Errorf("turn %d id = %s, want %s", i, turns[i].ID, wantIDs[i])
 		}
-		if turns[i].Input != wantIn[i] {
-			t.Errorf("turn %d input = %q, want %q", i, turns[i].Input, wantIn[i])
+		if turns[i].User != wantIn[i] {
+			t.Errorf("turn %d user = %q, want %q", i, turns[i].User, wantIn[i])
 		}
-		if turns[i].Output == "" {
-			t.Errorf("turn %d has no output, so a transcript cannot be rebuilt", i)
+		if turns[i].Assistant == "" {
+			t.Errorf("turn %d has no assistant text, so a transcript cannot be rebuilt", i)
+		}
+	}
+}
+
+// TestSessionTurnsCarryWhatSessionsSection3Requires pins the two fields the
+// specification makes mandatory.
+//
+// They were not mandatory when this endpoint was written: §3's items were
+// `object` with additionalProperties: true, so this server named the response id
+// `response_id` and nothing said otherwise. harnessrouter#53 named it `id` and
+// X-04 stopped checking for a 200 and started asserting the pair — which this
+// server then failed (#101). A conformance run is the wrong place to learn that
+// again, so it is asserted here, where it costs nothing and fails in seconds.
+func TestSessionTurnsCarryWhatSessionsSection3Requires(t *testing.T) {
+	svc := newSvc(t, "echo", echoAdapter{})
+
+	task := runOnce(t, svc, CreateTaskRequest{Input: "one", HarnessID: "echo"})
+	turns, err := svc.SessionTurns(context.Background(), task.SessionID)
+	if err != nil {
+		t.Fatalf("SessionTurns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("got %d turns, want 1", len(turns))
+	}
+
+	if turns[0].ID == "" {
+		t.Error("turn carries no id, which Sessions §3 requires and X-04 asserts")
+	}
+	if turns[0].Status == "" {
+		t.Error("turn carries no status, which Sessions §3 requires and X-04 asserts")
+	}
+}
+
+// TestSessionTurnsDeprecatedNamesAgreeWithTheSpecifiedOnes is the check the
+// one-release overlap needs.
+//
+// Answering both spellings is only safe while they hold the same value. Two
+// fields fed from one source can be fed from two the moment somebody edits one
+// of the six assignments, and the failure would be invisible: each endpoint
+// answers, each field is populated, and a client reading the old name gets a
+// different transcript from one reading the new. The overlap ends when the
+// deprecated trio is removed, and so does this test.
+func TestSessionTurnsDeprecatedNamesAgreeWithTheSpecifiedOnes(t *testing.T) {
+	svc := newSvc(t, "echo", echoAdapter{})
+
+	task := runOnce(t, svc, CreateTaskRequest{Input: "one", HarnessID: "echo"})
+	turns, err := svc.SessionTurns(context.Background(), task.SessionID)
+	if err != nil {
+		t.Fatalf("SessionTurns: %v", err)
+	}
+
+	for i, turn := range turns {
+		if turn.ResponseID != turn.ID {
+			t.Errorf("turn %d: response_id = %q but id = %q", i, turn.ResponseID, turn.ID)
+		}
+		if turn.Input != turn.User {
+			t.Errorf("turn %d: input = %q but user = %q", i, turn.Input, turn.User)
+		}
+		if turn.Output != turn.Assistant {
+			t.Errorf("turn %d: output = %q but assistant = %q", i, turn.Output, turn.Assistant)
 		}
 	}
 }

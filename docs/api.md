@@ -186,6 +186,38 @@ because `store` is about response retention and not about erasing files. An `Ide
 retry is the one read that still answers, because Tasks §6 requires a retry to be given the
 first request's answer.
 
+### What a turn item carries
+
+`GET /v1/sessions/{id}/turns` — and `GET /v1/shares/{share_id}/turns`, which renders the
+same objects to whoever holds the link — answers items shaped by Sessions §3:
+
+| Field | |
+| --- | --- |
+| `id` | the turn's response id. **Required by §3.** `GET /v1/responses/{id}` returns the turn in full; everything else here is a summary |
+| `status` | the response's status. **Required by §3** |
+| `user` | the input that opened the turn |
+| `assistant` | the text the agent answered with |
+| `files` | what the turn wrote, as the schema's six-property file object. Always an array, empty when the turn wrote nothing |
+| `model` | what served the turn. An extension, kept because a session may span models |
+| `created_at` | Unix seconds |
+
+`tools` is not answered. §3 asks for it as a SHOULD, and this server counts a turn's tool
+calls so `max_step` can stop a run (ADR-0009) and then discards them — no name, no
+arguments, no result reaches a stored task. Answering an empty array would say the turn
+called no tools, which is a different and usually false claim.
+
+`files` carries `id`, `container_id`, `filename`, `bytes` and `created_at` but not the
+`download_url` and `mime_type` that `GET /v1/sessions/{id}/files` adds. The ids are enough
+to ask that endpoint, and rendering one file two ways would leave a client deciding which
+is authoritative.
+
+**Three fields are deprecated and still answered.** `response_id`, `input` and `output` are
+the names this server used before Sessions §3 described the shape — its items were
+`object` with `additionalProperties: true`, so there was nothing to mirror. They hold
+exactly what `id`, `user` and `assistant` hold, and they go in a later release: `uhpc` is
+installed separately from `uhpd`, so a client is routinely a version behind a server, and
+the rename that added the specified names is not the release to remove the old ones in.
+
 ### Capabilities are enforced, not decorative
 
 Every harness object carries a `capabilities` list, and discovery hands that list to a

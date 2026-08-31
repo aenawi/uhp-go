@@ -55,7 +55,7 @@ func TestStorageFailureIsAlways500(t *testing.T) {
 			getSession: func(context.Context, string) (*domain.Session, error) {
 				return nil, errStorage()
 			},
-			sessionTurns: func(context.Context, string) ([]uhp.Turn, error) {
+			sessionTurns: func(context.Context, string) ([]uhp.TurnItem, error) {
 				return nil, errStorage()
 			},
 			getTask: func(context.Context, string) (*domain.Task, error) {

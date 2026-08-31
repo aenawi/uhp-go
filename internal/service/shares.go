@@ -98,12 +98,12 @@ func (s *TaskService) SessionSharingEnabled() bool { return s.sessionSharing }
 // is told about one id and revokes one id, so a second live id would be a
 // capability nobody knows to withdraw. A caller that wants a fresh id revokes
 // first, which is the only way to say "invalidate what I sent people".
-func (s *TaskService) ShareSession(ctx context.Context, sessionID string) (uhp.Share, error) {
+func (s *TaskService) ShareSession(ctx context.Context, sessionID string) (uhp.SessionShare, error) {
 	if !s.sessionSharing {
-		return uhp.Share{}, ErrSessionSharingUnsupported
+		return uhp.SessionShare{}, ErrSessionSharingUnsupported
 	}
 	if _, err := s.GetSession(ctx, sessionID); err != nil {
-		return uhp.Share{}, err
+		return uhp.SessionShare{}, err
 	}
 
 	// Minted before the store is asked, and thrown away if the session already
@@ -119,12 +119,12 @@ func (s *TaskService) ShareSession(ctx context.Context, sessionID string) (uhp.S
 		// only thing this id has to be is unguessable — a server that cannot be
 		// sure of that must mint nothing at all.
 		s.log.Error("mint share id", "error", err, "session_id", sessionID)
-		return uhp.Share{}, fmt.Errorf("%w: mint share id: %w", ErrStorage, err)
+		return uhp.SessionShare{}, fmt.Errorf("%w: mint share id: %w", ErrStorage, err)
 	}
 	current, found, err := s.store.CreateShare(ctx,
 		&domain.Share{ID: id, SessionID: sessionID, CreatedAt: time.Now().UTC().Unix()})
 	if err != nil {
-		return uhp.Share{}, fmt.Errorf("%w: create share for session %q: %w", ErrStorage, sessionID, err)
+		return uhp.SessionShare{}, fmt.Errorf("%w: create share for session %q: %w", ErrStorage, sessionID, err)
 	}
 	if !found {
 		// The session went between the read above and this write — a delete of
@@ -133,7 +133,7 @@ func (s *TaskService) ShareSession(ctx context.Context, sessionID string) (uhp.S
 		// than the alternative the store rules out: a share row naming a
 		// conversation nobody can read, and a 200 carrying an id that resolves
 		// to nothing.
-		return uhp.Share{}, fmt.Errorf("%w: %q", ErrSessionNotFound, sessionID)
+		return uhp.SessionShare{}, fmt.Errorf("%w: %q", ErrSessionNotFound, sessionID)
 	}
 	return current.Wire(s.publicBaseURL), nil
 }
@@ -146,19 +146,19 @@ func (s *TaskService) ShareSession(ctx context.Context, sessionID string) (uhp.S
 // the caller already knows which of its own sessions exist and telling it
 // nothing new — and being told "no such session" when the id was mistyped is
 // the difference between fixing the id and believing the share was revoked.
-func (s *TaskService) SessionShare(ctx context.Context, sessionID string) (uhp.Share, error) {
+func (s *TaskService) SessionShare(ctx context.Context, sessionID string) (uhp.SessionShare, error) {
 	if !s.sessionSharing {
-		return uhp.Share{}, ErrSessionSharingUnsupported
+		return uhp.SessionShare{}, ErrSessionSharingUnsupported
 	}
 	if _, err := s.GetSession(ctx, sessionID); err != nil {
-		return uhp.Share{}, err
+		return uhp.SessionShare{}, err
 	}
 	sh, found, err := s.store.GetSessionShare(ctx, sessionID)
 	if err != nil {
-		return uhp.Share{}, fmt.Errorf("%w: read share for session %q: %w", ErrStorage, sessionID, err)
+		return uhp.SessionShare{}, fmt.Errorf("%w: read share for session %q: %w", ErrStorage, sessionID, err)
 	}
 	if !found {
-		return uhp.Share{}, fmt.Errorf("%w: session %q is not shared", ErrShareNotFound, sessionID)
+		return uhp.SessionShare{}, fmt.Errorf("%w: session %q is not shared", ErrShareNotFound, sessionID)
 	}
 	return sh.Wire(s.publicBaseURL), nil
 }
@@ -254,7 +254,7 @@ func sharedHarness(h uhpgo.Harness) uhpgo.SharedHarness {
 }
 
 // SharedTurns answers GET /v1/shares/{share_id}/turns.
-func (s *TaskService) SharedTurns(ctx context.Context, shareID string) ([]uhp.Turn, error) {
+func (s *TaskService) SharedTurns(ctx context.Context, shareID string) ([]uhp.TurnItem, error) {
 	sess, err := s.sharedSessionRecord(ctx, shareID)
 	if err != nil {
 		return nil, err

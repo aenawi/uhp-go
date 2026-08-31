@@ -578,17 +578,42 @@ func (c *cli) turns(ctx context.Context, args []string) error {
 	}
 	return c.emit(turns, func() {
 		for _, raw := range turns {
-			// Decoded leniently and printed from whatever landed. The OpenAPI
-			// types a turn as an untyped object, so a field that is absent is
-			// a conformant server rather than a broken one.
-			var t uhp.Turn
+			// Decoded leniently and printed from whatever landed. Sessions
+			// §3 requires `id` and `status` and only asks for the rest, so a
+			// field that is absent is a conformant server rather than a
+			// broken one.
+			var t uhp.TurnItem
 			if err := json.Unmarshal(raw, &t); err != nil {
 				c.printf("%s\n", raw)
 				continue
 			}
-			c.printf("%-28s %-12s %s\n", t.ResponseID, t.Status, firstLine(t.Input))
+			c.printf("%-28s %-12s %s\n", turnID(t), t.Status, firstLine(turnUser(t)))
 		}
 	})
+}
+
+// turnID reads a turn's response id, falling back to the name servers used
+// before Sessions §3 named it.
+//
+// `uhpc` talks to any conformant server, not only this one, and a server that
+// has not adopted harnessrouter#53 answers `response_id` and no `id`. Printing
+// a blank column against such a server would report the client's age as the
+// server's defect. The fallback goes when enough of them have moved, which is a
+// judgement about the ecosystem rather than about this repository — so it is
+// not tied to the release that drops the fields from `uhpd`.
+func turnID(t uhp.TurnItem) string {
+	if t.ID != "" {
+		return t.ID
+	}
+	return t.ResponseID
+}
+
+// turnUser reads a turn's input, falling back for the reason [turnID] does.
+func turnUser(t uhp.TurnItem) string {
+	if t.User != "" {
+		return t.User
+	}
+	return t.Input
 }
 
 func (c *cli) cancelSession(ctx context.Context, args []string) error {
@@ -694,12 +719,12 @@ func (c *cli) shared(ctx context.Context, args []string) error {
 		c.printf("id:      %s\nharness: %s\nstatus:  %s\ntitle:   %s\n\n",
 			sess.ID, sess.HarnessID, sess.Status, sess.Title)
 		for _, raw := range turns {
-			var t uhp.Turn
+			var t uhp.TurnItem
 			if err := json.Unmarshal(raw, &t); err != nil {
 				c.printf("%s\n", raw)
 				continue
 			}
-			c.printf("%-28s %-12s %s\n", t.ResponseID, t.Status, firstLine(t.Input))
+			c.printf("%-28s %-12s %s\n", turnID(t), t.Status, firstLine(turnUser(t)))
 		}
 	})
 }
