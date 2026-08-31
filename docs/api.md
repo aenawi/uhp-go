@@ -217,6 +217,8 @@ the names this server used before Sessions §3 described the shape — its items
 exactly what `id`, `user` and `assistant` hold, and they go in a later release: `uhpc` is
 installed separately from `uhpd`, so a client is routinely a version behind a server, and
 the rename that added the specified names is not the release to remove the old ones in.
+Which release, and what removing them touches, is
+[#105](https://github.com/aenawi/uhp-go/issues/105).
 
 ### Capabilities are enforced, not decorative
 
