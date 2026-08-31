@@ -478,13 +478,15 @@
           "items": {
             "type": "object",
             "additionalProperties": true
-          }
+          },
+          "description": "Reserved and ignored. Accepted for wire compatibility, never acted on, and reported in\n`metadata.ignored_fields` on the response. A UHP harness invokes and executes tools\nitself and reports them in `output`; there is no input path for a tool result, so the\nclient-executed tool loop this field implies cannot be completed by a conformant server.\nConfigure tools on the harness instead — see Harnesses §4.1. Tasks §1.4.\n"
         },
         "include": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "Reserved and ignored. Accepted for wire compatibility, never acted on, and reported in\n`metadata.ignored_fields` on the response. No values are enumerated, so any string a\nserver recognised would be one it named itself. Tasks §1.4.\n"
         },
         "background": {
           "type": "boolean",
@@ -582,6 +584,13 @@
             },
             "model_fallback_reason": {
               "type": "string"
+            },
+            "ignored_fields": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Request fields the server did not act on, by name, in any order. Required when the\nrequest carried `tools` or `include`, which are reserved and ignored. A silently\nignored field is indistinguishable from an honoured one. Tasks §1.1 and §1.4.\n"
             }
           },
           "additionalProperties": true
@@ -993,6 +1002,68 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "SessionShare": {
+      "type": "object",
+      "description": "A published read-only view of a session (Sessions §5). `url` may be relative, resolving against the base URL the caller is already using — a server behind a proxy cannot know its public origin, and a base-relative path survives every fronting. The share's id MUST NOT function as a credential for the rest of the API.",
+      "required": [
+        "id",
+        "url"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "object": {
+          "type": "string",
+          "description": "SHOULD be \"session.share\""
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "TurnItem": {
+      "type": "object",
+      "description": "One turn of a session's history (Sessions §3). Previously an object with no stated shape, which kept every conformance check at 'the endpoint answered 200'.",
+      "required": [
+        "id",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The response id, usable with GET /v1/responses/{id}"
+        },
+        "status": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        },
+        "assistant": {
+          "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
         }
       },
       "additionalProperties": true

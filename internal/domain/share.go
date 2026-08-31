@@ -71,7 +71,7 @@ func ValidShareID(id string) bool {
 
 // Share is a read-only view of a session, published under an unguessable id.
 //
-// It does not embed [uhp.Share] the way [Session] embeds [uhp.Session], because
+// It does not embed [uhp.SessionShare] the way [Session] embeds [uhp.Session], because
 // the two are genuinely different objects rather than one object seen twice.
 // The wire share carries a URL, and a URL is not a property of the share: it is
 // a property of the origin this server happens to be reached on, which the
@@ -111,8 +111,8 @@ func SharePath(shareID string) string {
 // the server's externally reachable origin; empty means a relative URL, which
 // is correct whenever the client and the API share an origin and is the only
 // honest answer when the operator has not told this server its own address.
-func (s Share) Wire(baseURL string) uhp.Share {
-	return uhp.Share{
+func (s Share) Wire(baseURL string) uhp.SessionShare {
+	return uhp.SessionShare{
 		ID:        s.ID,
 		Object:    "session.share",
 		SessionID: s.SessionID,

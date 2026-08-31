@@ -61,23 +61,52 @@ func (s *TaskService) GetSession(ctx context.Context, id string) (*domain.Sessio
 
 // SessionTurns answers GET /v1/sessions/{id}/turns: the ordered task history of
 // a session, so a client can rebuild a transcript it did not store.
-func (s *TaskService) SessionTurns(ctx context.Context, id string) ([]uhp.Turn, error) {
+func (s *TaskService) SessionTurns(ctx context.Context, id string) ([]uhp.TurnItem, error) {
 	tasks, err := s.sessionTasks(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	turns := make([]uhp.Turn, 0, len(tasks))
+	turns := make([]uhp.TurnItem, 0, len(tasks))
 	for _, t := range tasks {
-		turns = append(turns, uhp.Turn{
+		answer := t.Text()
+		turns = append(turns, uhp.TurnItem{
+			ID:        t.ID,
+			Status:    t.Status,
+			Model:     t.Model,
+			User:      t.Input,
+			Assistant: answer,
+			Files:     turnFiles(t.Artifacts),
+			CreatedAt: t.CreatedAt,
+
+			// The pre-#53 spellings, answered alongside the specified ones
+			// for one release. See [uhp.TurnItem].
 			ResponseID: t.ID,
-			Status:     t.Status,
-			Model:      t.Model,
 			Input:      t.Input,
-			Output:     t.Text(),
-			CreatedAt:  t.CreatedAt,
+			Output:     answer,
 		})
 	}
 	return turns, nil
+}
+
+// turnFiles renders a task's artifacts as the schema's file object, for the
+// `files` Sessions §3 asks a turn item to carry.
+//
+// It answers [uhp.File] rather than [domain.Artifact] deliberately — see
+// [uhp.TurnItem].Files — which means the `object` constant that
+// [domain.Artifact.MarshalJSON] defaults has to be set here instead: uhp.File
+// carries no marshaller of its own, so an unset Object would be omitted rather
+// than defaulted, and a file object in a turn would be the one place in this
+// API that does not say it is a file.
+func turnFiles(artifacts []domain.Artifact) []uhp.File {
+	out := make([]uhp.File, 0, len(artifacts))
+	for _, a := range artifacts {
+		f := a.File
+		if f.Object == "" {
+			f.Object = "file"
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // sessionTasks reads a session's tasks, having first established that the

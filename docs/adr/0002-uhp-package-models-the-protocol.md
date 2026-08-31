@@ -158,3 +158,36 @@ conformant end-to-end, costs real tokens, and runs on a maintainer's machine rat
 CI. It never touches the published Go types, so nothing in it would catch `uhp.Response`
 drifting from what the server emits. The schema test is free, runs on every push, and
 catches exactly that.
+
+## Amendment, 2026-08-31: "frozen on the day it was published" was too strong
+
+The Context above argues that the freezing question was answered by the protocol rather than
+by us, because `protocol/VERSIONING.md` makes a published version immutable in structure.
+That is still true and the decision it supports still holds. The sentence that followed it —
+"the wire shapes were frozen by the specification on the day it was published" — was an
+over-reading, and `uhp/schema.go` had built a second one on top of it: that the vendored copy
+cannot go stale within a version.
+
+Immutable in structure forbids renaming a field, changing its type or meaning, and removing
+an event type. It permits addition, and `2026-08-11` has since added two whole objects —
+`SessionShare` and `TurnItem` — plus `metadata.ignored_fields` on `Response`. Twenty-three
+became twenty-five inside one version.
+
+Two consequences, both of which have now landed:
+
+- **The vendored schema is re-read, not merely replaced.** `uhp/schema.go` names the commit
+  it was taken from and says so. A copy believed evergreen is worse than one known to need
+  re-reading, because the tests in `uhp/` validate against whatever that file says: a stale
+  copy makes them agree with the past rather than with the protocol.
+- **A shape this package invented can stop being invented.** `Turn` and `Share` were the
+  whole of the `notNormative` list; they are `TurnItem` and `SessionShare` now, they validate
+  against `$defs` like the rest, and the old names survive as deprecated aliases. This is
+  what "the schema's names win inside `uhp/`" costs when the schema names something late,
+  and it is worth paying: the alternative is a package whose types are the protocol except
+  where nobody went back to check.
+
+Both additions closed gaps this repository reported ([#66](https://github.com/aenawi/uhp-go/issues/66),
+[#86](https://github.com/aenawi/uhp-go/issues/86), upstream harnessrouter#42 and #44), which
+is the part worth not mistaking for bad luck. The version grew because the copy was being
+read carefully. A package that had modelled this server instead would have had nothing to
+report.

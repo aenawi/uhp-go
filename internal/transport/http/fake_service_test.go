@@ -38,7 +38,7 @@ type fakeService struct {
 
 	listSessions  func(context.Context, domain.SessionFilter) (domain.SessionPage, error)
 	getSession    func(context.Context, string) (*domain.Session, error)
-	sessionTurns  func(context.Context, string) ([]uhp.Turn, error)
+	sessionTurns  func(context.Context, string) ([]uhp.TurnItem, error)
 	cancelSession func(context.Context, string) error
 	deleteSession func(context.Context, string) error
 }
@@ -79,7 +79,7 @@ func (f *fakeService) GetSession(ctx context.Context, id string) (*domain.Sessio
 	return f.getSession(ctx, id)
 }
 
-func (f *fakeService) SessionTurns(ctx context.Context, id string) ([]uhp.Turn, error) {
+func (f *fakeService) SessionTurns(ctx context.Context, id string) ([]uhp.TurnItem, error) {
 	return f.sessionTurns(ctx, id)
 }
 

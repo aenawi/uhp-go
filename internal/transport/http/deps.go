@@ -66,7 +66,7 @@ type TaskService interface {
 	// Sessions (Sessions §1-4).
 	ListSessions(ctx context.Context, f domain.SessionFilter) (domain.SessionPage, error)
 	GetSession(ctx context.Context, id string) (*domain.Session, error)
-	SessionTurns(ctx context.Context, id string) ([]uhp.Turn, error)
+	SessionTurns(ctx context.Context, id string) ([]uhp.TurnItem, error)
 	CancelSession(ctx context.Context, id string) error
 	DeleteSession(ctx context.Context, id string) error
 
@@ -75,12 +75,12 @@ type TaskService interface {
 	// the only methods on this interface reached by a request that presented
 	// nothing. See internal/service/shares.go, and the routing table, where the
 	// whole of /v1/shares/ is registered without withAuth in one block.
-	ShareSession(ctx context.Context, sessionID string) (uhp.Share, error)
-	SessionShare(ctx context.Context, sessionID string) (uhp.Share, error)
+	ShareSession(ctx context.Context, sessionID string) (uhp.SessionShare, error)
+	SessionShare(ctx context.Context, sessionID string) (uhp.SessionShare, error)
 	RevokeShare(ctx context.Context, sessionID string) (shareID string, err error)
 
 	SharedSession(ctx context.Context, shareID string) (uhpgo.SharedSession, error)
-	SharedTurns(ctx context.Context, shareID string) ([]uhp.Turn, error)
+	SharedTurns(ctx context.Context, shareID string) ([]uhp.TurnItem, error)
 	SharedFiles(ctx context.Context, shareID string) ([]domain.Artifact, error)
 	OpenSharedArtifact(ctx context.Context, shareID, fileID string) (domain.Artifact, *os.File, error)
 

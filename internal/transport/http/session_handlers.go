@@ -61,7 +61,7 @@ func (s *Server) handleSessionTurns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if turns == nil {
-		turns = []uhp.Turn{}
+		turns = []uhp.TurnItem{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"turns": turns})
 }

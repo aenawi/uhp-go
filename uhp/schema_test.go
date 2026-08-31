@@ -313,6 +313,30 @@ func populated() map[string]any {
 			Param: ptr("input"),
 		},
 
+		// TurnItem and SessionShare are the two objects `2026-08-11` gained
+		// after it was published, both closing gaps this repository reported
+		// (harnessrouter#44). Until then these were the whole of notNormative;
+		// they are here now for the same reason the other twenty-three are.
+		"TurnItem": uhp.TurnItem{
+			ID: "resp_a1b2c3", Status: uhp.StatusCompleted, Model: "claude-sonnet-5",
+			User: "summarise README.md", Assistant: "Three bullets follow.",
+			Files: []uhp.File{{
+				ID: "file_c0ffee", Object: "file", ContainerID: "cntr_a1b2c3",
+				Filename: "notes.md", Bytes: 128, CreatedAt: 1786400240,
+			}},
+			CreatedAt: 1786400240,
+			// The deprecated trio is populated too: they are still on the wire
+			// for one release, and `additionalProperties: true` means a wrong
+			// tag on one of them would otherwise be invisible here.
+			ResponseID: "resp_a1b2c3", Input: "summarise README.md",
+			Output: "Three bullets follow.",
+		},
+
+		"SessionShare": uhp.SessionShare{
+			ID: "shr_e5467da8", Object: "session.share", SessionID: "sess_a1b2c3",
+			URL: "/v1/shares/shr_e5467da8", CreatedAt: 1786400240,
+		},
+
 		// ResponseStatus is a bare string in the schema, not an object. Every
 		// constant is checked rather than one of them: the enum is the whole
 		// content of this definition, so a typo in any single constant is the
@@ -474,7 +498,7 @@ func TestEveryDefinitionIsCovered(t *testing.T) {
 
 	// The count is asserted outright, so that a schema swapped for one with a
 	// different object set is a failure rather than a quiet change of scope.
-	const wantDefs = 23
+	const wantDefs = 25
 	if len(doc.Defs) != wantDefs {
 		t.Errorf("vendored schema defines %d objects, want %d", len(doc.Defs), wantDefs)
 	}
@@ -484,15 +508,17 @@ func TestEveryDefinitionIsCovered(t *testing.T) {
 //
 // That test asks whether every schema object has a Go type. It cannot ask
 // whether every Go type is a schema object, and the difference is not
-// theoretical: [uhp.Turn] shipped as a twenty-fourth type in a package whose
-// premise is that it invented nothing, and no test went red. A client author
-// reading godoc had no way to tell it apart from the twenty-three, which is the
-// defect — not the type's existence, which is defensible, but its silence.
+// theoretical: what is now [uhp.TurnItem] shipped as a twenty-fourth type in a
+// package whose premise is that it invented nothing, and no test went red. A
+// client author reading godoc had no way to tell it apart from the
+// twenty-three, which was the defect — not the type's existence, which was
+// defensible and has since been vindicated by the schema adopting the shape,
+// but its silence.
 //
-// So every exported type in the package is sorted into exactly one of four
-// buckets below, and a type in none of them fails. Adding the twenty-fifth
-// shape is then a line a contributor writes on purpose, in a list a reviewer
-// reads, rather than a struct that slips in beside the protocol.
+// So every exported type in the package is sorted into exactly one of five
+// buckets below, and a type in none of them fails. Adding a twenty-sixth shape
+// is then a line a contributor writes on purpose, in a list a reviewer reads,
+// rather than a struct that slips in beside the protocol.
 
 // inlineObject is one shape the schema describes without naming.
 type inlineObject struct {
@@ -550,13 +576,36 @@ var inlineSchemaObjects = map[string]inlineObject{
 // every entry is a way for a client author to mistake one implementation's
 // reading for the protocol. The mitigation is the godoc heading
 // TestNotNormativeTypesSaySo requires; the list is what makes it unmissable
-// that there are two of these and what they cost.
-var notNormative = map[string]string{
-	"Turn": "GET /v1/sessions/{session_id}/turns is required by Sessions §3 and its " +
-		"response item is typed `object` with additionalProperties: true.",
-	"Share": "POST and GET /v1/sessions/{session_id}/share are required of a `full` " +
-		"implementation by Sessions §5, which names neither a share object nor the " +
-		"path the view is served at.",
+// how many of these there are and what they cost.
+//
+// # It is empty, and how it emptied is the point
+//
+// It held two: `Turn` and `Share`. Both are now schema objects — `TurnItem` and
+// `SessionShare` — and both got there because the caveats in this list were
+// written out as harnessrouter#42 and #44 rather than kept as local notes. The
+// list is not a backlog and emptying it was never the goal; that it emptied by
+// the specification growing, rather than by this package quietly dropping the
+// warning, is the outcome worth keeping the machinery for.
+//
+// It stays because the next endpoint specified ahead of its response shape puts
+// an entry here, and an empty list a contributor has to add the first line back
+// to is a worse prompt than an empty one they can simply extend.
+var notNormative = map[string]string{}
+
+// deprecatedAliases are names this package used before the schema had one to
+// borrow, kept as aliases to the type that now carries the schema's name.
+//
+// An alias is a declared type as far as declaredTypes is concerned, so without
+// this list every deprecation would fail TestEveryPublicTypeIsAccountedFor for
+// having no home — and the fix a contributor would reach for is deleting the
+// alias, which is exactly the breaking change the alias exists to defer.
+//
+// An entry is a commitment to remove it, not to keep it. The release it goes in
+// belongs in the type's godoc, where the client author reading the deprecation
+// notice will see it.
+var deprecatedAliases = map[string]string{
+	"Turn":  "renamed TurnItem when harnessrouter#53 gave Sessions §3's item a schema object.",
+	"Share": "renamed SessionShare when harnessrouter#53 gave Sessions §5's share a schema object.",
 }
 
 // clientMachinery is the part of this package that is not wire vocabulary at
@@ -645,8 +694,8 @@ func keysOf[T any](m map[string]T) []string {
 //
 // The failure message is written for the contributor who hits it, because the
 // answer is a judgement rather than a lookup: the type is either a schema shape
-// spelled wrong, a server extension that belongs in uhpgo, or a genuine
-// twenty-fourth shape that must be documented as one.
+// spelled wrong, a server extension that belongs in uhpgo, an alias left behind
+// by a rename, or a genuine twenty-sixth shape that must be documented as one.
 func TestEveryPublicTypeIsAccountedFor(t *testing.T) {
 	var doc struct {
 		Defs map[string]json.RawMessage `json:"$defs"`
@@ -667,6 +716,9 @@ func TestEveryPublicTypeIsAccountedFor(t *testing.T) {
 		if _, ok := notNormative[name]; ok {
 			homes = append(homes, "notNormative")
 		}
+		if _, ok := deprecatedAliases[name]; ok {
+			homes = append(homes, "deprecatedAliases")
+		}
 		if _, ok := clientMachinery[name]; ok {
 			homes = append(homes, "clientMachinery")
 		}
@@ -676,8 +728,10 @@ func TestEveryPublicTypeIsAccountedFor(t *testing.T) {
 		case 0:
 			t.Errorf("uhp.%s is published beside the schema's objects without being one of them.\n"+
 				"Either it mirrors a $defs entry and is misnamed, or it is this server's own "+
-				"addition and belongs in uhp/uhpgo, or it is a shape the schema leaves untyped — "+
-				"in which case add it to notNormative and say so in its godoc.", name)
+				"addition and belongs in uhp/uhpgo, or it is the old name of a type the schema "+
+				"has since renamed — in which case add it to deprecatedAliases — or it is a "+
+				"shape the schema leaves untyped, in which case add it to notNormative and say "+
+				"so in its godoc.", name)
 		default:
 			t.Errorf("uhp.%s is claimed by more than one list: %v", name, homes)
 		}
@@ -693,6 +747,7 @@ func TestEveryPublicTypeIsAccountedFor(t *testing.T) {
 	}{
 		{"inlineSchemaObjects", keysOf(inlineSchemaObjects)},
 		{"notNormative", keysOf(notNormative)},
+		{"deprecatedAliases", keysOf(deprecatedAliases)},
 		{"clientMachinery", keysOf(clientMachinery)},
 	} {
 		for _, typ := range list.types {

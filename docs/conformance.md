@@ -6,9 +6,69 @@ what this server scores, how to reproduce it, and what the remaining gap is.
 ## Current result
 
 ```
-52/52 full · 0 failed · 0 skipped · 0 errored
+62/62 full · 0 failed · 0 skipped · 0 errored
 CONFORMANT — UHP 2026-08-11 (full)
 ```
+
+Measured 2026-08-31 (issue #102) against suite `2026.8.11.post1`, pinned at harnessrouter
+`1176d9a5175fa0938d4c2e43ccbbdaab621d8030`, at class `full` with `--harness-id` naming a
+`claude-code` harness and **no `--model`**. Per class: **40/40 core**, **8/8 extended**,
+**14/14 full**.
+
+**The pin is a commit rather than a tag on purpose.** Every entry below names a revision, and
+a reader will otherwise ask why this one is not a release. `v0.12.1` was cut nine minutes
+before harnessrouter#53 merged, so the newest tag does not contain the specification and
+schema this run measures against. It becomes a tag when upstream cuts one.
+
+### Why the denominator moved, which is the part worth reading
+
+The suite went from 52 checks to 62, and seven of the ten are here because this repository
+filed the gap:
+
+| Upstream | | Class |
+| --- | --- | --- |
+| harnessrouter#45 | `R-01`…`R-07`, session sharing — from issue #66, filed upstream as #44 | Full |
+| harnessrouter#46 | `T-08`…`T-10`, reserved fields — from issue #86, filed upstream as #42 | Core |
+| harnessrouter#53 | `R-01`/`R-02`/`R-06` and `X-04` stop probing and start asserting | — |
+
+Until this run the headline above said `52/52`, which had become the failure mode this
+document exists to prevent: the denominator moved and the numerator was copied. A complete
+score against a suite that no longer existed read as a complete score against the one that
+did — and the copied number flattered us, because seven of the ten checks it was missing
+were checks this repository had argued should exist.
+
+### The run before the fix, which is the half that proves the checks work
+
+`X-04` used to stop at "the endpoint answered 200". harnessrouter#53 gave Sessions §3's turn
+items a shape, and this server was answering `response_id` where §3 requires `id`. Measured
+on this repository's `main` at `cd7ac83`, same suite, same harness, same machine:
+
+```
+61/62 passed · 1 failed · 0 skipped · 0 errored
+NOT CONFORMANT at class 'full' · highest class fully passed: core
+
+X-04  FAIL  A session's turn history is available, in the specified shape
+            does not match schema TurnItem: at (root): 'id' is a required property
+```
+
+Then on the branch that fixed it (#101), 62/62 with the same command. Both runs are real:
+one server, one CLI, ninety seconds apart, and the only difference between them is the
+field name.
+
+That is worth stating plainly because a green run is weak evidence on its own — D-05 passed
+vacuously on this server for months, which is what started #66. A check that has been
+watched failing on the defect it names, and then passing once the defect was fixed, is a
+check that has demonstrated it can tell the two apart.
+
+### One prediction, recorded before either run
+
+Issue #102 predicted `61/62` with `X-04` as the sole failure, reading the merged suite
+against this server's source rather than running anything. It was right to the check. That
+is not a boast about the prediction — it is the reason the prediction was written down: a
+repository that can say in advance what a suite will find has understood the suite, and one
+that cannot has only ever read its own score.
+
+## Earlier results
 
 Measured 2026-08-23 (issue #42) against suite `2026.8.11.post1`, pinned at
 harnessrouter revision `95b96d7ce473ab59d510e1690c73cc6660d0a73e`, with
@@ -84,8 +144,8 @@ CLI was put on `PATH`: on a machine where `claude` is a shell alias rather than 
 as unavailable. Start the server with the real binary's directory on `PATH`, or the gate
 measures a harness that cannot run.
 
-That is the strongest number this server has recorded, and it is worth being exact about
-what it does not cover. **None of the 52 checks touches session sharing.** `/share` appears
+That was the strongest number this server had recorded until 2026-08-31, and it is worth
+being exact about what it did not cover. **None of the 52 checks touches session sharing.** `/share` appears
 nowhere in the suite at the pinned revision, so the feature #57 added was carried through
 this run without a single check looking at it. What the run proves is that adding it broke
 nothing else — a real question, since it changed the `Store` interface, the discovery
@@ -465,18 +525,24 @@ the third and has now landed too — the suite asks for none of the three, so al
 found by reading. `POST`/`GET /v1/sessions/{id}/share` (#57) was the fourth and has now
 landed as well, which closes this list: every endpoint of the published surface has a route.
 
-Session sharing deserves its own note, because it is the one where a green suite would say
-the least. Nothing in the 52 checks opens a share, and nothing could usefully check the
-part that matters even if it did: the requirement is that the view be **read-only** and
-**revocable**, and both are properties of what the server *refuses*. A check that opened a
-link and read the conversation would pass against an implementation that also let the link
-start a task. What holds those up is this repository's tests and nothing else —
-`internal/transport/http/share_handlers_test.go` for the refusals (a share id presented as
-a credential is a 401 on every endpoint, every write method under `/v1/shares/` is a 405,
-another session's file id does not resolve through a link, and a revoked link stops
-resolving), and `internal/store/share_contract_test.go` for the two storage rules both
-engines have to obey (one share per session, and a deleted session takes its share with
-it).
+**Session sharing was the largest entry on this list, and it is no longer on it.** What this
+paragraph used to say was that nothing in the 52 checks opened a share, that nothing could
+usefully check the part that mattered even if it did — the requirement is that the view be
+**read-only** and **revocable**, and both are properties of what the server *refuses* — and
+that the refusals were held up by this repository's tests and nothing else.
+
+The middle claim was wrong, and being wrong about it was the useful part. Those refusals are
+checkable; nobody had written the checks. They are `R-01`…`R-07`, filed as issue #66, taken
+upstream as harnessrouter#44, and merged as harnessrouter#45, and this server passes all
+seven. `R-04` alone sends seven write probes at a published link. Sessions §5 is now the
+best-measured chapter of this server rather than the least, and the local tests that carried
+it alone — `internal/transport/http/share_handlers_test.go` and
+`internal/store/share_contract_test.go` — are corroboration rather than the whole case.
+
+Worth keeping from the old paragraph: a suite is not a fact of nature. A green run says
+nothing about a property nobody has written a check for, and the distance between "the suite
+cannot see this" and "nobody has written it yet" is one issue. Every remaining entry on this
+list should be read as a claim of the first kind that might turn out to be the second.
 
 The capability is off by default (`UHP_SESSION_SHARING`), which has a consequence for how
 this file's numbers should be read: **a suite run that does not set it is measuring a server
@@ -484,8 +550,12 @@ that reports `session_sharing: false`**, and the class question is then open aga
 same reason it was before #57 landed. A `full` claim has to be measured with sharing on.
 This is the shape of #43 and #53 a third time — the configuration that exercises the
 feature is the one nothing runs by default — and it is written down here rather than
-discovered later. The 2026-08-25 run above was taken with it on, so the recorded 52/52 is a
-number from a server that was serving shares; it is simply not a number *about* them.
+discovered later. The 2026-08-25 run was taken with it on, so the 52/52 it recorded was a
+number from a server that was serving shares and simply not a number *about* them. The
+2026-08-31 run is a number about them: seven of its sixty-two checks are `R-01`…`R-07`, and
+a run made without `UHP_SESSION_SHARING=1` skips every one of them —
+which `scripts/check-conformance.py` refuses outright, so the misconfiguration now fails
+loudly instead of scoring quietly.
 
 One further thing that run settled, by reading the check rather than by scoring it. D-05
 ("conformance_class agrees with capabilities") tests the class against a fixed list, and
@@ -589,11 +659,17 @@ was that nothing said so, which left a client author writing a `switch` over `uh
 with seven arms that never fire and no way to learn it from either the package or these
 docs. Issue #61.
 
-**Nothing in the suite sends three of the thirteen request fields.**
+**Nothing in the suite sends three of the thirteen request fields** — a count that has since
+come down to one, from the other direction.
 `CreateResponseRequest` has 13 properties in the schema; `createTaskBody` reads ten. The 52
-checks contain no reference to `max_step`, `timeout_seconds`, `max_output_tokens`,
-`instructions` or `include`, so the 52/52 `full` result is silent about every one of them —
-and about `tools`, `store` and `background` besides. Dropping the ones this server does not
+checks contained no reference to `max_step`, `timeout_seconds`, `max_output_tokens`,
+`instructions` or `include`, so the 52/52 `full` result was silent about every one of them —
+and about `tools`, `store` and `background` besides. Two of those have since been filled in
+by the suite rather than by this server: `T-08`…`T-10` (harnessrouter#46, from issue #86)
+send both `tools` and `include` and assert that they are accepted, ignored, and *named* in
+`metadata.ignored_fields`. A declined field is now measured as declined, which is the one
+outcome this paragraph assumed no check could ever produce. `max_output_tokens` is the last
+one nothing sends. Dropping the ones this server does not
 read is the specified behaviour rather than a defect: Tasks §1.1 marks all of them optional
 and requires a server to ignore request fields it does not understand rather than reject
 them. So this is not a check that fails, and not a check that passes; it is a column of the
@@ -617,6 +693,14 @@ undecided. All three are **declined**, which is a decision rather than a gap: no
 sampling parameter and token accounting arrives only once a run is over, the schema describes
 the `tools` objects no further than "object" so any meaning would be invented, and `include`
 has neither an agreed vocabulary nor any extra content to name.
+
+Two of the three have since stopped being this repository's reading of a silence. Tasks §1.4
+marks `tools` and `include` **reserved and ignored** in the specification itself
+(harnessrouter#46, from issue #86), for a reason stronger than the one argued here: a UHP
+harness executes tools itself and reports them in `output`, so there is no input path for a
+tool result and the client-executed loop the field implies cannot be completed by any
+conformant server. ADR-0007 reached the right answer from the weaker premise of what five
+CLIs happen to support.
 [ADR-0007](adr/0007-a-declined-field-is-not-a-pending-one.md)
 records all three and the rule they were measured against; the `tools` question went upstream
 to the protocol rather than being answered here, as
