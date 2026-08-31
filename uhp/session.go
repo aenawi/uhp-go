@@ -91,6 +91,10 @@ func (l SessionList) MarshalJSON() ([]byte, error) {
 // separately from `uhpd` and the two are routinely different ages; removing the
 // old keys in the release that adds the new ones would break every client not
 // reinstalled that day. Read ID, User and Assistant.
+//
+// "One release" is a claim nothing here enforces, which is how a deprecation
+// becomes a second spelling nobody ever removes. Issue #105 carries the
+// condition — the next release that is not a patch — and what removal touches.
 type TurnItem struct {
 	// ID is the turn's response id: `GET /v1/responses/{id}` returns this turn
 	// in full, where everything else here is a summary. Required by §3.
@@ -191,7 +195,7 @@ type SessionShare struct {
 // this package, and an alias is how that rule is applied to a type that shipped
 // before there was a name to lose to. It is kept for one release because `uhpc`
 // is installed separately from `uhpd` and clients are routinely a version
-// behind.
+// behind. Removal is tracked in issue #105.
 type Turn = TurnItem
 
 // Share is the name this package gave [SessionShare] before Sessions §5

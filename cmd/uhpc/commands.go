@@ -600,7 +600,8 @@ func (c *cli) turns(ctx context.Context, args []string) error {
 // a blank column against such a server would report the client's age as the
 // server's defect. The fallback goes when enough of them have moved, which is a
 // judgement about the ecosystem rather than about this repository — so it is
-// not tied to the release that drops the fields from `uhpd`.
+// not tied to the release that drops the fields from `uhpd`. Issue #105 keeps
+// the two clocks apart deliberately; this is the longer one.
 func turnID(t uhp.TurnItem) string {
 	if t.ID != "" {
 		return t.ID
