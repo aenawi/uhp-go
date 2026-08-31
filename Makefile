@@ -67,13 +67,19 @@ conformance:
 # defends, so leaving it behind lets the score fall back to it unnoticed.
 #
 # The floor and UHP_CLASS move together, and this is the one place that says so.
-# The gate below defaults to `core`, where 2026-08-23 re-measured 37/37 — so 37
-# is still the right number and #42 did not change it. What #42 did change is
-# the classes above: 44/45 extended (one skip, see below) and 52/52 full. Point
-# UHP_CLASS at either without raising this and the gate keeps defending 37 while
-# reporting on 52, which is a gate that cannot fail.
+# The gate below defaults to `core`, which is 40 checks since harnessrouter#46
+# added T-08/T-09/T-10. Full is 62: 40 core, 8 extended, 14 full, the last of
+# those grown by the seven R checks of harnessrouter#45. Point UHP_CLASS at a
+# higher class without raising this and the gate keeps defending 40 while
+# reporting on 62, which is a gate that cannot fail.
 #
-#   UHP_CLASS=full  →  CONFORMANCE_FLOOR=52
+#   UHP_CLASS=full  →  CONFORMANCE_FLOOR=62
+#
+# Both denominators moved under a floor that did not, which is the failure this
+# comment now exists to prevent. The suite grew by ten checks upstream and the
+# floors here kept the old counts, so `37` went on defending a class of 37 that
+# no longer existed. A floor is a number about the suite, not only about this
+# server: re-read it when the suite moves, not only when the score does.
 #
 # Do not set a floor of 45 for `extended`. X-06 and X-07 only test something if
 # the agent writes a file, and whether it does is the model's choice on the day:
@@ -91,7 +97,7 @@ conformance:
 # configuration that found #43 while three pinned runs walked straight past it,
 # and it stops being worth anything the moment someone adds `--model` here to
 # make a run reproducible.
-CONFORMANCE_FLOOR ?= 37
+CONFORMANCE_FLOOR ?= 40
 CONFORMANCE_REPORT ?= conformance-report.json
 
 # Gate for CI: the same suite, but its result is asserted rather than read.
