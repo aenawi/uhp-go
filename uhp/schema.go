@@ -11,8 +11,11 @@ import _ "embed"
 // than asserted, by this repository's own tests and by anyone else's.
 //
 // The file is byte-identical to protocol/schema/uhp-2026-08-11.schema.json at
-// harnessrouter `1176d9a5175fa0938d4c2e43ccbbdaab621d8030`, which is the commit
-// this copy must be re-read against when it is refreshed.
+// harnessrouter `08d61ea145d6b78c433f6910547c1e7ee293c948`, which is the commit
+// this copy must be re-read against when it is refreshed. The pin moved from
+// `1176d9a5` on 2026-09-01 by re-reading rather than by assumption: the two
+// revisions differ only in the conformance suite, and the schema files compared
+// equal byte for byte (#107).
 //
 // # It does go stale within a version
 //

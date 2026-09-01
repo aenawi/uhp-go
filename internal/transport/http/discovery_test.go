@@ -167,8 +167,9 @@ func TestListHarnessesEmptyIsAnArrayNotNull(t *testing.T) {
 
 // d05Required is the list check D-05 of the conformance suite ("conformance_class
 // agrees with capabilities") holds a class to, copied from the suite at the
-// pinned revision 95b96d7ce473ab59d510e1690c73cc6660d0a73e rather than
-// paraphrased. `session_sharing` is deliberately absent from `full` there; see
+// pinned revision 08d61ea145d6b78c433f6910547c1e7ee293c948 rather than
+// paraphrased — re-read against that revision on 2026-09-01 and unchanged since
+// 95b96d7, which is the check this copy is worth having (#107). `session_sharing` is deliberately absent from `full` there; see
 // TestConformanceClassIsComputedFromTheCapabilitiesItClaims for why this
 // server is stricter than the list it must satisfy.
 var d05Required = map[string][]string{
