@@ -6,23 +6,24 @@ what this server scores, how to reproduce it, and what the remaining gap is.
 ## Current result
 
 ```
-62/62 full · 0 failed · 0 skipped · 0 errored
+63/63 full · 0 failed · 0 skipped · 0 errored
 CONFORMANT — UHP 2026-08-11 (full)
 ```
 
-Measured 2026-08-31 (issue #102) against suite `2026.8.11.post1`, pinned at harnessrouter
-`1176d9a5175fa0938d4c2e43ccbbdaab621d8030`, at class `full` with `--harness-id` naming a
+Measured 2026-09-01 (issue #107) against suite `2026.8.11.post1`, pinned at harnessrouter
+`08d61ea145d6b78c433f6910547c1e7ee293c948`, at class `full` with `--harness-id` naming a
 `claude-code` harness and **no `--model`**. Per class: **40/40 core**, **8/8 extended**,
-**14/14 full**.
+**15/15 full**.
 
 **The pin is a commit rather than a tag on purpose.** Every entry below names a revision, and
 a reader will otherwise ask why this one is not a release. `v0.12.1` was cut nine minutes
-before harnessrouter#53 merged, so the newest tag does not contain the specification and
-schema this run measures against. It becomes a tag when upstream cuts one.
+before harnessrouter#53 merged and a day before harnessrouter#55, so the newest tag contains
+neither the specification and schema this run measures against nor the check that moved its
+denominator. It becomes a tag when upstream cuts one.
 
 ### Why the denominator moved, which is the part worth reading
 
-The suite went from 52 checks to 62, and seven of the ten are here because this repository
+The suite went from 52 checks to 63, and eight of the eleven are here because this repository
 filed the gap:
 
 | Upstream | | Class |
@@ -30,12 +31,21 @@ filed the gap:
 | harnessrouter#45 | `R-01`…`R-07`, session sharing — from issue #66, filed upstream as #44 | Full |
 | harnessrouter#46 | `T-08`…`T-10`, reserved fields — from issue #86, filed upstream as #42 | Core |
 | harnessrouter#53 | `R-01`/`R-02`/`R-06` and `X-04` stop probing and start asserting | — |
+| harnessrouter#55 | `R-08`, a bodyless `POST` publishes — the sentence #53 named as unenforced, from issue #103 | Full |
 
-Until this run the headline above said `52/52`, which had become the failure mode this
-document exists to prevent: the denominator moved and the numerator was copied. A complete
-score against a suite that no longer existed read as a complete score against the one that
-did — and the copied number flattered us, because seven of the ten checks it was missing
+Until the 2026-08-31 run the headline above said `52/52`, which had become the failure mode
+this document exists to prevent: the denominator moved and the numerator was copied. A
+complete score against a suite that no longer existed read as a complete score against the one
+that did — and the copied number flattered us, because seven of the ten checks it was missing
 were checks this repository had argued should exist.
+
+**It then happened again in twelve hours, which is the part worth acting on.** `R-08` merged
+upstream at 2026-08-31T21:36Z, the same day the `62/62` above it was recorded, and for a day
+this file reported a complete score against a suite one check larger — the check being the one
+written here, in the pull request this repository opened. Neither miss was a lapse of
+attention; both are the same missing mechanism. Nothing in this tree reads the suite's
+revision, so the interval between the denominator moving and anyone noticing is however long
+it takes a person to look. Issue #107.
 
 ### The run before the fix, which is the half that proves the checks work
 
@@ -221,6 +231,24 @@ machine with one CLI installed is thinner evidence than a guarantee wants, parti
 the F-series, which measures the API surface on a box where `claude` happens to be logged
 in.
 
+**The run this page led with until 2026-09-01, kept because it is what a stale denominator
+looks like from the inside (#107).**
+
+```
+62/62 full · 0 failed · 0 skipped · 0 errored
+CONFORMANT — UHP 2026-08-11 (full)
+```
+
+Measured 2026-08-31 (issue #102) against suite `2026.8.11.post1`, pinned at harnessrouter
+`1176d9a5175fa0938d4c2e43ccbbdaab621d8030`, on the same `claude-code` harness with the same
+configuration and no `--model`. Per class: **40/40 core**, **8/8 extended**, **14/14 full**.
+
+It was a complete score against the suite as it stood that afternoon, and it was complete for
+about twelve hours: `R-08` merged upstream at 21:36Z the same day. **Nothing about this server
+changed between that run and the current one** — it passed `R-08` on the first run that
+contained it, without a line being edited. What changed was the denominator, which is the
+whole reason this file records a suite revision beside every number.
+
 ## Reproducing it
 
 The suite lives in the protocol repository and runs against any server over HTTP.
@@ -309,7 +337,7 @@ reproduce.
 
 ```bash
 git clone --filter=blob:none https://github.com/HarnessRouter/harnessrouter suite
-git -C suite checkout --quiet 95b96d7ce473ab59d510e1690c73cc6660d0a73e
+git -C suite checkout --quiet 08d61ea145d6b78c433f6910547c1e7ee293c948
 pip install -e suite/protocol/conformance
 ```
 
@@ -435,6 +463,8 @@ cannot reach.
 | Audit of the published surface against `routes()` | no change expected | four endpoints found missing, two of them core — #51, #52, #57, #58; no check sends any of them |
 | A default harness for a task that names none (#53) | no change expected | no check omits `harness_id` — see below |
 | A client, and the first tests to use a socket (#62) | no change expected | the suite never touches the Go types; these never touch the suite |
+| Turn items carry `id` (#101), and the score re-measured against a suite grown to 62 (#102) | **62/62, full 62/62** | X-04 stopped probing and started asserting |
+| `R-08` lands upstream (harnessrouter#55), from this repository (#107) | **63/63, full 63/63** | the one sentence of §5 the R-series' retry was hiding |
 
 The #42 re-measure is the largest single jump in this table, and none of it was new work. Ten
 checks moved because the code that satisfies them had been sitting there unmeasured since
@@ -534,7 +564,9 @@ that the refusals were held up by this repository's tests and nothing else.
 The middle claim was wrong, and being wrong about it was the useful part. Those refusals are
 checkable; nobody had written the checks. They are `R-01`…`R-07`, filed as issue #66, taken
 upstream as harnessrouter#44, and merged as harnessrouter#45, and this server passes all
-seven. `R-04` alone sends seven write probes at a published link. Sessions §5 is now the
+seven. `R-08` makes it eight: the one sentence of §5 that the R-series' own retry was
+hiding, named as a known gap by harnessrouter#53, taken up here as issue #103 and merged as
+harnessrouter#55. `R-04` alone sends seven write probes at a published link. Sessions §5 is now the
 best-measured chapter of this server rather than the least, and the local tests that carried
 it alone — `internal/transport/http/share_handlers_test.go` and
 `internal/store/share_contract_test.go` — are corroboration rather than the whole case.
@@ -552,7 +584,7 @@ This is the shape of #43 and #53 a third time — the configuration that exercis
 feature is the one nothing runs by default — and it is written down here rather than
 discovered later. The 2026-08-25 run was taken with it on, so the 52/52 it recorded was a
 number from a server that was serving shares and simply not a number *about* them. The
-2026-08-31 run is a number about them: seven of its sixty-two checks are `R-01`…`R-07`, and
+2026-09-01 run is a number about them: eight of its sixty-three checks are `R-01`…`R-08`, and
 a run made without `UHP_SESSION_SHARING=1` skips every one of them —
 which `scripts/check-conformance.py` refuses outright, so the misconfiguration now fails
 loudly instead of scoring quietly.

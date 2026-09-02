@@ -36,7 +36,8 @@ var supportedVersions = []string{UHPVersion}
 // the one real decision in this function, so it is written down rather than
 // left to be inferred: the specification's Sessions §5 is what makes sharing a
 // `full` feature, while the suite's list at revision
-// 95b96d7ce473ab59d510e1690c73cc6660d0a73e stops at harness_management. The
+// 08d61ea145d6b78c433f6910547c1e7ee293c948 stops at harness_management — still,
+// three suite revisions after that sentence was first written (#107). The
 // stricter reading cannot be wrong — a server that satisfies it satisfies the
 // suite's too — and the looser one would let a deployment with sharing switched
 // off claim the class the specification reserves for one that has it. The next

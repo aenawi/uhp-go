@@ -68,12 +68,13 @@ conformance:
 #
 # The floor and UHP_CLASS move together, and this is the one place that says so.
 # The gate below defaults to `core`, which is 40 checks since harnessrouter#46
-# added T-08/T-09/T-10. Full is 62: 40 core, 8 extended, 14 full, the last of
-# those grown by the seven R checks of harnessrouter#45. Point UHP_CLASS at a
-# higher class without raising this and the gate keeps defending 40 while
-# reporting on 62, which is a gate that cannot fail.
+# added T-08/T-09/T-10. Full is 63: 40 core, 8 extended, 15 full, the last of
+# those grown by the seven R checks of harnessrouter#45 and by R-08 of
+# harnessrouter#55. Point UHP_CLASS at a higher class without raising this and
+# the gate keeps defending 40 while reporting on 63, which is a gate that cannot
+# fail.
 #
-#   UHP_CLASS=full  →  CONFORMANCE_FLOOR=62
+#   UHP_CLASS=full  →  CONFORMANCE_FLOOR=63
 #
 # Both denominators moved under a floor that did not, which is the failure this
 # comment now exists to prevent. The suite grew by ten checks upstream and the
