@@ -15,11 +15,12 @@
 # Bypass once with: git push --no-verify
 set -e
 
-echo "pre-push: build, vet, format, test"
+echo "pre-push: build, vet, format, test, scripts"
 
 go build ./...
 go vet ./...
 make fmt-check
 go test ./... -race
+make test-scripts
 
 echo "pre-push: ok"

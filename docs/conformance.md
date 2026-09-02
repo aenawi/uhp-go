@@ -43,9 +43,15 @@ were checks this repository had argued should exist.
 upstream at 2026-08-31T21:36Z, the same day the `62/62` above it was recorded, and for a day
 this file reported a complete score against a suite one check larger — the check being the one
 written here, in the pull request this repository opened. Neither miss was a lapse of
-attention; both are the same missing mechanism. Nothing in this tree reads the suite's
-revision, so the interval between the denominator moving and anyone noticing is however long
-it takes a person to look. Issue #107.
+attention; both are the same missing mechanism. Nothing in this tree read the suite's
+revision, so the interval between the denominator moving and anyone noticing was however long
+it took a person to look. Issues #107 and #109.
+
+**That mechanism now exists**, and the paragraph above is kept in the past tense rather than
+deleted, because it is the evidence for why. See
+[Noticing when the suite moves](#noticing-when-the-suite-moves): a weekly job compares the
+recorded pin with upstream, and the gate refuses to spend six agent tasks measuring a checkout
+that is not the one this file claims.
 
 ### The run before the fix, which is the half that proves the checks work
 
@@ -341,6 +347,13 @@ git -C suite checkout --quiet 08d61ea145d6b78c433f6910547c1e7ee293c948
 pip install -e suite/protocol/conformance
 ```
 
+That revision is `CONFORMANCE_SUITE_REVISION` in the Makefile, and since #109 the gate checks
+it rather than trusting you to: `make conformance-gate` resolves the checkout `uhp_conformance`
+was installed from and stops before the first agent task if it is not this one. The editable
+install is what makes that possible — it leaves the package inside the clone, so there is a
+`HEAD` to read. If yours lives somewhere else, point `UHP_SUITE_DIR` at the checkout. Whether
+the pin itself is still current is a different question, answered by `make conformance-drift`.
+
 Then start a server with a workspace — without one, `files_input`, `files_output` and
 `harness_management` are honestly reported `false` and the checks behind them are refused
 rather than measured — and point the gate at the `claude-code` harness:
@@ -379,14 +392,85 @@ here and in the README. Nothing links them mechanically, so a run that raises th
 to raise the floor too — otherwise the number this file claims and the number the gate
 defends drift apart, with the lower one silently winning.
 
+### Noticing when the suite moves
+
+`CONFORMANCE_FLOOR` is a number about the suite as much as about this server, and a floor is
+worthless without knowing which suite it counts against. `CONFORMANCE_SUITE_REVISION` in the
+Makefile is that second half: the harnessrouter revision the recorded score was measured at.
+Two things read it, and they are deliberately not the same check.
+
+**`make conformance-drift` — has upstream moved past the pin.** One GitHub API call comparing
+`CONFORMANCE_SUITE_REVISION` with `HarnessRouter/harnessrouter@main`, printing the commits in
+between. It starts no server, runs no agent task and spends no token, so it is safe to run
+whenever you wonder. It is **advisory and exits zero even when it finds drift**: a revision
+moving upstream is not a defect here, it is a reason to re-run the gate and re-record — and a
+target that went red on somebody else's push is one a maintainer learns to ignore.
+
+Two things it does treat as defects, because neither is drift. A pin this file does not name
+means the mechanism and the prose describing it have come apart, and it needs no network to
+know that. A pin upstream reports as `behind` or `diverged` is zero commits of drift and is
+not a pin at all: it names a revision `main` does not contain, so nobody can reproduce the
+score by checking that branch out.
+
+**`.github/workflows/conformance-drift.yml` — the same script, weekly, with
+`--fail-on-drift`.** This is the part that closes #109 rather than restating it. A `make`
+target only fires when a person runs it, which is the same shape as the failure that lost
+eight days and then twelve hours; a Monday cron is what notices without anyone opening GitHub.
+It never runs on push or pull request — a contribution did not cause upstream to move, and
+must not go red for it — so its red belongs to the repository and is the maintainer's to
+answer, by re-measuring and moving the pin.
+
+**`make conformance-gate` — is the suite about to run the pinned revision.** This one fails,
+and it fails *first*: `scripts/suite-revision.py` reads `HEAD` of the checkout `uhp_conformance`
+was installed from (`UHP_SUITE_DIR` overrides it) and refuses a mismatch before the six agent
+tasks are spent rather than after. `scripts/check-conformance.py` then writes that revision
+into the report as `suite_revision` and refuses the result if it is not the pin — so the report
+is checkable by someone who did not run it, which is what a result pasted into a pull request
+needs to be. **That field is stamped by this repository's gate, not by the suite**; the suite
+records `suite_version` and `generated_at` and no revision, which is the gap this closes.
+
+A checkout with modified tracked files is refused too — its `HEAD` names a revision it is no
+longer at. Untracked files are ignored, because `pip install -e` writes an egg-info directory
+into the checkout and refusing that would refuse every editable install.
+
+`scripts/test_conformance_scripts.py` covers all three, in stdlib `unittest` with nothing to
+install; `make test-scripts` runs it, and CI and the pre-push hook run it too because it is
+free. One of its tests is not about a script at all: it asserts that the pin in the Makefile
+is a string this file also contains, so the mechanism and the prose describing it cannot drift
+apart the way the floor and the prose score still can.
+
+#### What this does not cover
+
+- **It does not know whether a move touched the suite.** The comparison is over the whole
+  upstream repository, so a commit to its console or its docs reads as drift exactly like a
+  new check does. The commit subjects are printed for that reason: the count tells you
+  something moved, and the list is what tells you whether to care.
+- **It cannot see a suite that grows without a commit on `main`.** Checks on a branch, or a
+  release published from somewhere else, are invisible to it. A version comparison would have
+  been worse — `suite_version` read `2026.8.11.post1` before and after both moves — but
+  "the pin is current" is a claim about one branch of one repository, not about the suite.
+- **A green gate at the right revision is still not a claim that the score is right.** It says
+  the numbers came from the suite this file names. Whether they are the numbers that suite
+  produces today is what running it answers, and nothing here runs it.
+- **The pin is moved by hand.** Everything above defends the pin's *agreement* with upstream
+  and with the report; none of it can tell that a pin was moved without re-measuring, which
+  would make the floor a number about a suite nobody ran. The order is: run the gate at the
+  new revision, record the result here, then move `CONFORMANCE_SUITE_REVISION` and
+  `CONFORMANCE_FLOOR` together.
+- **The gate is still local and still bypassable**, exactly as the section above says. Making
+  the gate refuse the wrong suite does not make it run.
+
 ### The free checks that did stay in CI
 
 `.github/workflows/ci.yml` still runs `go build`, `go vet`, `make fmt-check`,
-`go test ./... -race -cover` and `make docker-check` on every push and pull request, because
-those cost nothing and catch what a developer's machine does not: a Linux build, and the
-race detector on a different scheduler.
+`go test ./... -race -cover`, `make test-scripts` and `make docker-check` on every push and
+pull request, because those cost nothing and catch what a developer's machine does not: a
+Linux build, and the race detector on a different scheduler.
 
-The same four commands run locally as a `pre-push` hook, so the round trip to a red build is
+`conformance-drift.yml` is free in the same way and is deliberately *not* in that list: it
+runs weekly rather than per push, because upstream moving is not something a push caused.
+
+The same commands run locally as a `pre-push` hook, so the round trip to a red build is
 usually avoided rather than waited on:
 
 ```bash

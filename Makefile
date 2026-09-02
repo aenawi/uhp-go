@@ -1,4 +1,4 @@
-.PHONY: build run test vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps probe-pi-steps probe-grok-max-turns probes
+.PHONY: build run test test-scripts vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate conformance-drift capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps probe-pi-steps probe-grok-max-turns probes
 
 # Both binaries, because a server nobody can call is half a delivery: uhpc is
 # how the surface gets exercised over a socket rather than against a handler.
@@ -101,6 +101,34 @@ conformance:
 CONFORMANCE_FLOOR ?= 40
 CONFORMANCE_REPORT ?= conformance-report.json
 
+# Which suite those numbers are about. The floor says how many checks passed;
+# this says how many there were to pass, by naming the revision the count came
+# from — and the two are useless apart. A floor of 63 against a suite that has
+# grown to 70 is the failure #102 and #107 both were, and it is invisible to
+# every check that reads only the report: a run at an old pin is perfectly
+# green, because the floor and the report agree with each other and both
+# disagree with upstream.
+#
+# The suite's own `suite_version` cannot stand in for this. It read
+# `2026.8.11.post1` before and after both moves, so a version comparison would
+# have caught neither.
+#
+# Two things use it, and they answer different questions:
+#
+#   make conformance-drift   has upstream moved past this pin? Advisory: a
+#                            revision moving is a reason to re-measure, not a
+#                            defect. One GitHub API call, no server, no tokens.
+#   make conformance-gate    is the suite about to run *this* revision? Fails,
+#                            before the six agent tasks rather than after them.
+#
+# Moving it is the last step of re-measuring, not the first: run the gate at
+# the new revision, record the result in docs/conformance.md, then move this
+# and CONFORMANCE_FLOOR together. `make test-scripts` refuses a pin that
+# docs/conformance.md does not name, so the two cannot drift apart quietly the
+# way the floor and the prose score still can.
+CONFORMANCE_SUITE_REVISION ?= 08d61ea145d6b78c433f6910547c1e7ee293c948
+CONFORMANCE_UPSTREAM ?= HarnessRouter/harnessrouter
+
 # Gate for CI: the same suite, but its result is asserted rather than read.
 #
 # UHP_HARNESS_ID is required and not defaulted. The suite runs real agent tasks
@@ -127,6 +155,13 @@ CONFORMANCE_REPORT ?= conformance-report.json
 # defend. Read the class off discovery before trusting a UHP_CLASS=full score.
 conformance-gate:
 	@test -n "$$UHP_HARNESS_ID" || { echo "UHP_HARNESS_ID is required: the gate must name the harness it measures"; exit 1; }
+	# Before the run, not after it. The suite spends about six real agent tasks
+	# and a few minutes, and a checkout at the wrong revision produces a green
+	# report about a suite this repository is not measured at — so the cheapest
+	# moment to refuse it is the one where nothing has been spent yet. The same
+	# comparison happens again below against the report, which is what makes the
+	# report readable by somebody who did not run it.
+	@python3 scripts/suite-revision.py --expect $(CONFORMANCE_SUITE_REVISION) >/dev/null
 	# Removed before the run, not after it. The suite writes this file only if
 	# it got far enough to have a result, so a run that fails to launch would
 	# otherwise leave the previous run's report in place for the check below to
@@ -138,7 +173,30 @@ conformance-gate:
 		--api-key "$$UHP_API_KEY" --class $${UHP_CLASS:-core} \
 		--harness-id "$$UHP_HARNESS_ID" \
 		--json $(CONFORMANCE_REPORT) --plain
-	@python3 scripts/check-conformance.py $(CONFORMANCE_REPORT) $(CONFORMANCE_FLOOR)
+	@python3 scripts/check-conformance.py $(CONFORMANCE_REPORT) $(CONFORMANCE_FLOOR) \
+		--suite-revision "$$(python3 scripts/suite-revision.py)" \
+		--expect-revision $(CONFORMANCE_SUITE_REVISION)
+
+# Has the suite moved on without us? Advisory, and deliberately so: a revision
+# moving upstream is not a defect here, only a reason to re-run the gate and
+# re-record the result. It costs one unauthenticated GitHub API call — no
+# server, no harness, no tokens — so it is safe to run whenever you wonder.
+#
+# The same script runs weekly in .github/workflows/conformance-drift.yml with
+# --fail-on-drift, because a target nobody runs is the mechanism this repository
+# was already missing. That is the job that goes red; this one tells you.
+conformance-drift:
+	@python3 scripts/check-suite-drift.py \
+		--pin $(CONFORMANCE_SUITE_REVISION) \
+		--repo $(CONFORMANCE_UPSTREAM) \
+		--doc docs/conformance.md $(DRIFT_FLAGS)
+
+# The scripts that defend the score, checked the way the server is. Stdlib
+# unittest and no dependency to install, for the same reason `make hooks` is one
+# line of `git config`: a test suite that needs a package manager first is one
+# that does not run in a Go repository.
+test-scripts:
+	@python3 -m unittest discover -s scripts -p "test_*.py"
 
 # Probe for a maintainer's machine: run the Claude Code invocation uhpd ships
 # against a logged-in CLI and check the stream against what parseClaudeLine
