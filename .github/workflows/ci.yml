@@ -46,6 +46,14 @@ jobs:
       - name: Test
         run: go test ./... -race -cover
 
+      # The scripts that defend the conformance score are checked here too, for
+      # the same reason the Go tests are: they are free, and stdlib unittest
+      # needs nothing installed. This also catches a pin moved in the Makefile
+      # and not in docs/conformance.md, which is the two-places-one-number
+      # failure #109 exists to stop.
+      - name: Test the conformance scripts
+        run: make test-scripts
+
   image:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,46 @@
+name: Conformance drift
+
+# The mechanism issue #109 was filed about. Twice the conformance suite grew
+# upstream while the score recorded here stayed still — #102 found it eight days
+# late, #107 twelve hours late — and both times the thing that noticed was a
+# person reading another repository. `make conformance-drift` moves that check
+# into this tree, but a target only fires when somebody runs it, which is the
+# same shape as the failure it is meant to close. This is what runs it.
+#
+# It is free, and stays free. One unauthenticated-shaped GitHub API call
+# comparing the pin in the Makefile with HarnessRouter/harnessrouter@main. No
+# server, no harness CLI, no agent task, no token spent — which is why it can
+# live in CI when `make conformance-gate` deliberately cannot (see
+# docs/conformance.md, "The gate").
+#
+# Weekly and never on push or pull request. A revision moving upstream is not
+# something a contribution caused, so it must never redden a contributor's
+# build; a scheduled run belongs to the repository, and its red is the
+# maintainer's to answer. `--fail-on-drift` is what makes it red — the same
+# script exits 0 for a maintainer running it locally, because drift is a reason
+# to re-measure rather than a defect.
+
+on:
+  schedule:
+    # Mondays, 08:00 UTC. Weekly rather than daily because the action it asks
+    # for — re-run the gate, six real agent tasks — is not a daily action, and
+    # a notification that arrives faster than anyone can act on it is one people
+    # filter. Both misses this closes were eight days and twelve hours.
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The token buys the authenticated rate limit and nothing else; the
+      # upstream repository is public and the call works without one.
+      - name: Compare the recorded pin with upstream
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: make conformance-drift DRIFT_FLAGS=--fail-on-drift
