@@ -6,7 +6,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/aenawi/uhp-go/ci.yml?branch=main&label=ci&logo=githubactions&logoColor=white)](https://github.com/aenawi/uhp-go/actions/workflows/ci.yml)
 [![Security](https://img.shields.io/github/actions/workflow/status/aenawi/uhp-go/security.yml?branch=main&label=security&logo=github&logoColor=white)](https://github.com/aenawi/uhp-go/actions/workflows/security.yml)
-[![Go Version](https://img.shields.io/badge/go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev/doc/devel/release)
+[![Go Version](https://img.shields.io/badge/go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev/doc/devel/release)
 [![License](https://img.shields.io/github/license/aenawi/uhp-go?color=2C3E50)](LICENSE)
 
 One HTTP API for every coding agent you run.

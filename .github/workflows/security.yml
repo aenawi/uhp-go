@@ -36,9 +36,10 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          # Not the 1.22 floor in go.mod: 1.22 stopped getting security
-          # patches, and scanning with a toolchain that is itself unpatched
-          # reports advisories nobody can act on from here.
+          # Not the 1.25 floor in go.mod. Scanning with a toolchain older
+          # than the tools themselves reports advisories nobody can act on
+          # from here, and golangci-lint and govulncheck pin the floor to
+          # 1.26 anyway — see the note in ci.yml.
           go-version: '1.26'
           check-latest: true
 
