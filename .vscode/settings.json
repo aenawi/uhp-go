@@ -1,29 +1,62 @@
 {
-	"workbench.colorCustomizations": {
-        "activityBar.activeBackground": "#65c89b",
-        "activityBar.background": "#65c89b",
-        "activityBar.foreground": "#15202b",
-        "activityBar.inactiveForeground": "#15202b99",
-        "activityBarBadge.background": "#945bc4",
-        "activityBarBadge.foreground": "#e7e7e7",
-        "activityBarTop.activeBackground": "#65c89b",
-        "activityBarTop.background": "#65c89b",
-        "activityBarTop.foreground": "#15202b",
-        "activityBarTop.inactiveForeground": "#15202b99",
-        "commandCenter.border": "#15202b99",
-        "commandCenter.foreground": "#15202b",
-        "sash.hoverBorder": "#65c89b",
-        "statusBar.background": "#42b883",
-        "statusBar.debuggingBackground": "#42b883",
-        "statusBar.debuggingForeground": "#15202b",
-        "statusBar.foreground": "#15202b",
-        "statusBarItem.hoverBackground": "#359268",
-        "statusBarItem.remoteBackground": "#f0e8f7",
-        "statusBarItem.remoteForeground": "#15202b",
-        "titleBar.activeBackground": "#42b883",
-        "titleBar.activeForeground": "#15202b",
-        "titleBar.inactiveBackground": "#42b88399",
-        "titleBar.inactiveForeground": "#15202b99"
-    },
-	"peacock.color": "#42b883"
+	// Project settings — things that follow the code, not the person editing it.
+	//
+	// A window colour is NOT one of those. It belongs in a .code-workspace kept
+	// outside this checkout, so a clone never repaints a contributor's editor.
+	// See the .vscode block in .gitignore.
+
+	// gopls does the formatting; `formatting.local` groups this module's
+	// imports last, the way goimports -local does, so a diff here matches a
+	// diff produced by `make fmt`.
+	"gopls": {
+		"formatting.local": "github.com/aenawi/uhp-go",
+		"ui.diagnostic.staticcheck": true,
+		"ui.semanticTokens": true
+	},
+
+	"[go]": {
+		"editor.defaultFormatter": "golang.go",
+		"editor.formatOnSave": true,
+		"editor.codeActionsOnSave": {
+			"source.organizeImports": "explicit"
+		}
+	},
+	"[go.mod]": {
+		"editor.defaultFormatter": "golang.go",
+		"editor.formatOnSave": true
+	},
+
+	// `make fmt-check` is a CI gate, and an editor that saves unformatted Go is
+	// a red build waiting to happen. Same reasoning for the whitespace rules
+	// below, which apply to the YAML, Markdown and shell in here too.
+	"files.insertFinalNewline": true,
+	"files.trimTrailingWhitespace": true,
+
+	// Matches CI: `go test ./... -race -cover`. -count=1 because a cached PASS
+	// from a previous run is not evidence about the code in front of you. The
+	// raised timeout is for internal/harness, whose tests start real
+	// subprocesses and outlast the 30s default.
+	"go.testFlags": ["-race", "-count=1"],
+	"go.testTimeout": "120s",
+	"go.vetOnSave": "package",
+	"go.buildOnSave": "package",
+
+	// Build output and agent scratch space are ignored by git for good reasons;
+	// they should not show up in Quick Open or search results either.
+	"files.watcherExclude": {
+		"**/bin/**": true,
+		"**/.scratch/**": true,
+		"**/scripts/__pycache__/**": true
+	},
+	"search.exclude": {
+		"bin": true,
+		".scratch": true,
+		"scripts/__pycache__": true
+	},
+
+	// `make test-scripts` runs these with stdlib unittest, so the editor should
+	// discover them the same way rather than asking for pytest.
+	"python.testing.unittestEnabled": true,
+	"python.testing.pytestEnabled": false,
+	"python.testing.unittestArgs": ["-v", "-s", "./scripts", "-p", "test_*.py"]
 }
