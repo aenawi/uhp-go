@@ -1,0 +1,15 @@
+{
+	// Suggested once, on first open, and dismissible. Each of these maps to
+	// something actually in this repository.
+	"recommendations": [
+		// Go itself: gopls, the test runner, the debugger.
+		"golang.go",
+		// scripts/ is stdlib Python, gated in CI by `make test-scripts`.
+		"ms-python.python",
+		// .github/workflows/ and the compose-shaped YAML around them.
+		"redhat.vscode-yaml",
+		// Dockerfile, built and checked by `make docker-check`.
+		"ms-azuretools.vscode-docker"
+	],
+	"unwantedRecommendations": []
+}
