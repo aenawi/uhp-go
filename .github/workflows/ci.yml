@@ -31,7 +31,12 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          # 1.24, not the 1.22 in go.mod. go.mod states the floor this module
+          # supports; this states what CI builds with, and 1.22 stopped getting
+          # security patches — govulncheck reports 32 stdlib advisories against
+          # it. Raising the build toolchain fixes those without raising the
+          # floor for anyone consuming the module.
+          go-version: '1.24'
           check-latest: true
 
       - name: Build
@@ -53,6 +58,28 @@ jobs:
       # failure #109 exists to stop.
       - name: Test the conformance scripts
         run: make test-scripts
+
+  # Lint is its own job so a failing linter does not hide a failing test, and
+  # vice versa. The security scanners live in security.yml, on their own badge
+  # and their own schedule.
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+
+      # The golangci-lint version is pinned in the Makefile and read from it,
+      # never repeated here: a number written twice is a number that eventually
+      # disagrees with itself. Same rule as #109.
+      - name: Install pinned linter
+        run: make tools-lint
+
+      - name: Lint
+        run: make lint
 
   image:
     runs-on: ubuntu-latest

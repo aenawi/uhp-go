@@ -36,6 +36,13 @@
 	// from a previous run is not evidence about the code in front of you. The
 	// raised timeout is for internal/harness, whose tests start real
 	// subprocesses and outlast the 30s default.
+	// Same linter and same config the Makefile and CI use, so the editor's
+	// squiggles and the build's verdict agree. --fast keeps typing responsive;
+	// `make lint` runs the full set.
+	"go.lintTool": "golangci-lint",
+	"go.lintFlags": ["--fast"],
+	"go.lintOnSave": "package",
+
 	"go.testFlags": ["-race", "-count=1"],
 	"go.testTimeout": "120s",
 	"go.vetOnSave": "package",

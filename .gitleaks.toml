@@ -1,0 +1,21 @@
+# gitleaks configuration for uhp-go.
+#
+# Default rules plus an allowlist for the synthetic credentials this repository
+# needs in order to test credential handling at all. uhp-go brokers API keys for
+# agent harnesses, so the tests must construct keys that look real; the point of
+# the allowlist is that they are the *only* place that is true.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic fixtures: tests, captured probe output, docs samples"
+paths = [
+  # Go tests build fake bearer tokens and API keys by design.
+  '''_test\.go$''',
+  # Probe/capture output committed as fixtures under scripts/.
+  '''^scripts/.*\.py$''',
+  # Env examples carry placeholders only.
+  '''\.env\.example$''',
+  '''\.env\.test$''',
+]

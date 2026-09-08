@@ -4,6 +4,12 @@
 
 # uhp-go
 
+[![CI](https://img.shields.io/github/actions/workflow/status/aenawi/uhp-go/ci.yml?branch=main&label=ci&logo=githubactions&logoColor=white)](https://github.com/aenawi/uhp-go/actions/workflows/ci.yml)
+[![Security](https://img.shields.io/github/actions/workflow/status/aenawi/uhp-go/security.yml?branch=main&label=security&logo=github&logoColor=white)](https://github.com/aenawi/uhp-go/actions/workflows/security.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/aenawi/uhp-go)](https://goreportcard.com/report/github.com/aenawi/uhp-go)
+[![Go Version](https://img.shields.io/badge/go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev/doc/devel/release)
+[![License](https://img.shields.io/github/license/aenawi/uhp-go?color=2C3E50)](LICENSE)
+
 One HTTP API for every coding agent you run.
 
 Every product that embeds a coding agent ends up writing the same things: start a task,
@@ -132,6 +138,47 @@ place to start — we'll raise it upstream, and we have:
 [#42](https://github.com/HarnessRouter/harnessrouter/issues/42) and
 [#44](https://github.com/HarnessRouter/harnessrouter/issues/44) are both ours.
 
+## Security
+
+`uhpd` accepts bearer tokens, brokers credentials to agent CLIs and starts subprocesses,
+so the tooling is set up to assume that any of those is where a mistake would land.
+
+| | | |
+|---|---|---|
+| SAST | [`gosec`](https://github.com/securego/gosec) | no excluded rules |
+| Secrets | [`gitleaks`](https://github.com/gitleaks/gitleaks) | the whole history, not the working tree |
+| Dependencies | [`govulncheck`](https://pkg.go.dev/golang.org/x/vuln) | plus weekly Dependabot on modules and actions |
+| Lint | [`golangci-lint`](https://golangci-lint.run) | thirteen linters, `gosec` among them |
+
+Everything above runs in the [Security workflow](.github/workflows/security.yml) on every
+pull request and again every Monday — on a schedule because `govulncheck`'s answer changes
+when the Go team publishes an advisory, not when somebody pushes. The same checks run
+locally, at the same pinned versions:
+
+```bash
+make tools            # gosec, govulncheck and golangci-lint, pinned in the Makefile
+make security         # report everything, fail on nothing
+make security-push    # what the pre-push hook and the workflow gate on
+make security-strict  # gate on govulncheck too, before cutting a release
+```
+
+**What the badge claims, precisely.** Green means `gosec` found nothing and `gitleaks`
+found no secret anywhere in this repository's history. It does not mean the standard
+library this binary links against is free of known advisories: `govulncheck` reports those
+and does not fail the build, because a stdlib advisory is fixed by upgrading the Go
+toolchain rather than by changing anything here, and a gate no contributor can pass is a
+gate that gets switched off. `GOVULNCHECK_STRICT=1` makes it gate anyway, and
+`make security-strict` is the release-time version that always does.
+
+`gosec` runs with no excluded rules, which is a deliberate difference from a config that
+silences a noisy rule globally. Each finding this repository accepts carries an
+`#nosec <rule> -- reason` at the line that accepts it, so a new subprocess or file read
+that nobody has reasoned about still fails the build rather than inheriting somebody's
+old exemption.
+
+Found something? Please use private reporting rather than an issue — see
+[SECURITY.md](SECURITY.md).
+
 ## Contributing
 
 Work is tracked as [GitHub issues](https://github.com/aenawi/uhp-go/issues). They carry
@@ -142,9 +189,13 @@ triage labels described in [docs/agents/triage-labels.md](docs/agents/triage-lab
 Before pushing:
 
 ```bash
-make hooks   # once per clone: build, vet, fmt and tests run on every push
-make test
+make hooks    # once per clone: build, vet, fmt and tests run on every push
+make tools    # optional: adds lint and the security scanners to that hook
+make verify   # everything CI checks, in one command
 ```
+
+The hook runs the linter and the security scanners only if they are installed, so
+`make hooks` stays a single command rather than a shopping list. CI runs them either way.
 
 Security issues go through private reporting instead — see [SECURITY.md](SECURITY.md).
 

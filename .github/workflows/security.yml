@@ -1,0 +1,60 @@
+# Security scanning, separate from CI on purpose.
+#
+# Two reasons it is not a step inside ci.yml. It earns its own badge, so the
+# README can say something specific rather than folding "no secrets committed"
+# into a green tick that mostly means the tests passed. And it runs on a
+# schedule: govulncheck's answer changes when the Go team publishes an advisory,
+# not when someone pushes, so a scanner that only runs on push is one that tells
+# you about a CVE whenever the repository next happens to be busy.
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays, 06:00 UTC. Weekly rather than daily for the same reason
+    # dependabot is weekly: an alert nobody reads is not a control.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans history, and a shallow clone has none.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          # Not the 1.22 floor in go.mod: 1.22 stopped getting security
+          # patches, and scanning with a toolchain that is itself unpatched
+          # reports advisories nobody can act on from here.
+          go-version: '1.24'
+          check-latest: true
+
+      - name: Install pinned Go tools
+        run: make tools
+
+      - name: Install gitleaks
+        run: |
+          v="$(make -s gitleaks-version)"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      # gosec and gitleaks gate; govulncheck reports. A stdlib advisory is
+      # fixed by a toolchain bump rather than by anything in this repository,
+      # and a gate no contributor can pass is a gate that gets switched off.
+      # GOVULNCHECK_STRICT=1 makes it gate too.
+      - name: Scan
+        run: make security-push

@@ -46,6 +46,11 @@ func newProcess(binary string, prompt PromptMode, buildArgs func(RunRequest) ([]
 
 // healthCheck verifies the CLI binary is on PATH and responds to --version.
 func (p *process) healthCheck(ctx context.Context) error {
+	// #nosec G204 -- launching a harness CLI is what this package is for. The
+	// binary is not request-derived: it comes from h.Binary on a harness
+	// constructor compiled into uhpd. The arguments are request-derived by
+	// design, and they are passed as an argv slice rather than through a
+	// shell, so an argument cannot become a command.
 	cmd := exec.CommandContext(ctx, p.binary, "--version")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("harness: %s health check failed: %w", p.binary, err)
@@ -69,6 +74,7 @@ const maxCaptureBytes = 16 * 1024 * 1024
 // run: these CLIs are wrappers that spawn node or bun, and a grandchild
 // holding the stdout pipe open would otherwise outlive the timeout.
 func (p *process) capture(ctx context.Context, args []string) (string, error) {
+	// #nosec G204 -- see the note on healthCheck: fixed binary, argv slice, no shell.
 	cmd := exec.CommandContext(ctx, p.binary, args...)
 	isolateProcessGroup(cmd)
 	cmd.WaitDelay = 5 * time.Second
@@ -113,6 +119,7 @@ func (p *process) run(ctx context.Context, req RunRequest) (<-chan RunUpdate, er
 	p.cancel[req.TaskID] = cancel
 	p.mu.Unlock()
 
+	// #nosec G204 -- see the note on healthCheck: fixed binary, argv slice, no shell.
 	cmd := exec.CommandContext(runCtx, p.binary, args...)
 	if req.WorkDir != "" {
 		cmd.Dir = req.WorkDir

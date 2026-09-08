@@ -194,6 +194,8 @@ func (s *SQLiteStore) Close() error { return s.db.Close() }
 // to be right before the first connection rather than after it. A file that
 // already exists is left as the operator has it.
 func createPrivate(path string) error {
+	// #nosec G304 -- the database path is operator configuration (UHP_DB), not
+	// anything a request can reach.
 	f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		return nil

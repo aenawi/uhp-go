@@ -1,4 +1,11 @@
-.PHONY: build run test test-scripts vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate conformance-drift capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps probe-pi-steps probe-grok-max-turns probes
+.PHONY: build run test test-scripts vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate conformance-drift capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps probe-pi-steps probe-grok-max-turns probes tools tools-lint lint security security-push security-strict verify gitleaks-version
+
+# Pinned so a laptop and a CI runner see the same rule set. A linter that
+# changes its mind between two machines turns a green build into an argument,
+# and @latest is how that happens. Bump here; CI reads these.
+GOLANGCI_VERSION ?= v1.64.8
+GOSEC_VERSION    ?= v2.22.10
+GITLEAKS_VERSION ?= 8.30.1
 
 # Both binaries, because a server nobody can call is half a delivery: uhpc is
 # how the surface gets exercised over a socket rather than against a handler.
@@ -35,6 +42,74 @@ tidy:
 hooks:
 	@git config core.hooksPath .githooks
 	@echo "git hooks enabled: $$(ls .githooks | tr '\n' ' ')"
+
+# --- lint and security ---------------------------------------------------
+#
+# Three security targets rather than one, because they answer three different
+# questions. `security` reports and never fails: it is what you run while
+# working. `security-push` is the gate a push has to clear — gosec and gitleaks
+# hard-fail, govulncheck warns, because a Go CVE is usually fixed by upgrading
+# the toolchain rather than by anything in this repository, and a gate nobody
+# can pass is a gate people bypass. `security-strict` fails on all three, and
+# is what to run before cutting a release.
+
+# CI reads the pin from here rather than repeating it, for the same reason
+# #109 exists: a version written in two places is a version that disagrees.
+gitleaks-version:
+	@echo $(GITLEAKS_VERSION)
+
+# The lint job needs one of the three, and installing the other two to run a
+# linter is thirty seconds a push nobody gets back.
+tools-lint:
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_VERSION)
+
+tools:
+	go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
+	go install golang.org/x/vuln/cmd/govulncheck@latest
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_VERSION)
+	@echo "gitleaks is not a Go module install: brew install gitleaks (or see github.com/gitleaks/gitleaks)"
+	@echo "tools installed; ensure $$(go env GOPATH)/bin is on PATH"
+
+lint:
+	@command -v golangci-lint >/dev/null 2>&1 || { echo "golangci-lint missing. Run: make tools"; exit 1; }
+	golangci-lint run ./...
+
+security:
+	@echo "=== security: gosec (Go SAST) ==="
+	@command -v gosec >/dev/null 2>&1 && gosec -quiet -exclude-generated -fmt=text ./... || echo "  (gosec missing or found issues — see above; make tools)"
+	@echo "=== security: govulncheck (Go CVEs) ==="
+	@command -v govulncheck >/dev/null 2>&1 && govulncheck ./... || echo "  (govulncheck missing or found vulnerabilities — see above)"
+	@echo "=== security: gitleaks (secrets) ==="
+	@command -v gitleaks >/dev/null 2>&1 && gitleaks detect --no-banner --redact --exit-code 0 --config .gitleaks.toml --source . || echo "  (gitleaks missing — brew install gitleaks)"
+
+security-push:
+	@echo "=== security-push: gosec ==="
+	@command -v gosec >/dev/null 2>&1 || { echo "gosec missing. Run: make tools"; exit 1; }
+	gosec -quiet -exclude-generated -fmt=text ./...
+	@echo "=== security-push: gitleaks ==="
+	@command -v gitleaks >/dev/null 2>&1 || { echo "gitleaks missing. Run: brew install gitleaks"; exit 1; }
+	gitleaks detect --no-banner --redact --config .gitleaks.toml --source .
+	@echo "=== security-push: govulncheck (reported, not gating) ==="
+	@command -v govulncheck >/dev/null 2>&1 || { echo "govulncheck missing. Run: make tools"; exit 1; }
+	@if [ "$$GOVULNCHECK_STRICT" = "1" ]; then \
+		govulncheck ./...; \
+	else \
+		govulncheck ./... || echo "  govulncheck reported issues (often fixed by a toolchain upgrade). GOVULNCHECK_STRICT=1 to gate on it."; \
+	fi
+	@echo "security-push: ok"
+
+security-strict: lint
+	@command -v gosec >/dev/null 2>&1 || { echo "gosec missing. Run: make tools"; exit 1; }
+	gosec -quiet -exclude-generated -fmt=text ./...
+	@command -v govulncheck >/dev/null 2>&1 || { echo "govulncheck missing. Run: make tools"; exit 1; }
+	govulncheck ./...
+	@command -v gitleaks >/dev/null 2>&1 || { echo "gitleaks missing. Run: brew install gitleaks"; exit 1; }
+	gitleaks detect --no-banner --redact --config .gitleaks.toml --source .
+	@echo "security-strict: ok"
+
+# Everything CI checks, in one command, for use before opening a PR.
+verify: fmt-check vet lint test test-scripts build
+
 
 docker:
 	docker build -t uhp-go:local .

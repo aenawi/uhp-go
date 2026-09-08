@@ -9,9 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aenawi/uhp-go/uhp"
 	"github.com/aenawi/uhp-go/uhp/uhpgo"
-	"github.com/google/uuid"
 )
 
 var (

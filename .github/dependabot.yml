@@ -1,0 +1,25 @@
+# Supply-chain updates. Neither namux nor tagtastic has this yet; it is here
+# because uhp-go is a server that brokers credentials, and the dependency it
+# cannot see is the one that bites.
+#
+# Weekly, not daily: a pull request nobody reads is not a security control, and
+# five of them a week is how a maintainer learns to close them unread.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+
+  # Actions are pinned by major tag, so this is what notices when v4 becomes
+  # v5 — including when a security fix is the reason.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
