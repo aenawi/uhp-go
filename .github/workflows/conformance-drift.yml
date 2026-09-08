@@ -36,7 +36,7 @@ jobs:
   drift:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The token buys the authenticated rate limit and nothing else; the
       # upstream repository is public and the call works without one.
