@@ -1028,7 +1028,7 @@ func (s *TaskService) TaskInputItems(ctx context.Context, id string) ([]json.Raw
 // is refusing a delete because the work it is not stopping has not finished.
 //
 // The session is untouched. Disposing of a whole conversation is
-// DELETE /v1/traces/{id}, which does cancel first, and keeping the two apart is
+// DELETE /v1/sessions/{id}, which does cancel first, and keeping the two apart is
 // the entire point of this method.
 func (s *TaskService) DeleteTask(ctx context.Context, id string) error {
 	found, err := s.store.DeleteTask(ctx, id)

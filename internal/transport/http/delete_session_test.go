@@ -9,23 +9,51 @@ import (
 	"github.com/aenawi/uhp-go/internal/service"
 )
 
-// deleteSession sends the DELETE the specification puts on /v1/traces.
-//
-// The path spells the resource `traces` and everything that reads it spells the
-// same resource `sessions`; both are UHP's, and neither is this server's to
-// reconcile. The vocabulary here is the glossary's — a Session — because a test
-// name is not the wire.
+// deleteSession sends the DELETE Sessions §6 names: /v1/sessions/{id}, the
+// same path every read of the session uses.
 func deleteSession(t *testing.T, srv *Server, id string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest("DELETE", "/v1/traces/"+id, nil)
+	req := httptest.NewRequest("DELETE", "/v1/sessions/"+id, nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 	return w
 }
 
-// The id a client deletes with is the id it was reading with: one resource, two
-// spellings. So what has to disappear is everything those reads answered — the
-// session, its turns, and the responses that made them up.
+// The older spelling, /v1/traces/{id}, is the path §6 used to name and now
+// keeps as an alias a server MAY serve. This one does, on the same handler, so
+// a client shipped against the old path is not broken by the rename. The test
+// is the only reason the alias cannot be dropped by accident.
+func TestDeletingASessionAtTheOlderTracesPathStillWorks(t *testing.T) {
+	srv := newTestServer()
+	responseID := createTask(t, srv, `{"input":"hi","metadata":{"harness_id":"echo"}}`)
+	_, created := callJSON(t, srv, "GET", "/v1/responses/"+responseID, "")
+	id := sessionID(t, created)
+
+	req := httptest.NewRequest("DELETE", "/v1/traces/"+id, nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %s", w.Body.String())
+	}
+	if body["id"] != id || body["deleted"] != true {
+		t.Errorf("body = %v, want {id: %s, deleted: true}", body, id)
+	}
+
+	req = httptest.NewRequest("GET", "/v1/sessions/"+id, nil)
+	got := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(got, req)
+	if got.Code != 404 {
+		t.Errorf("GET after delete via the alias = %d, want 404: %s", got.Code, got.Body.String())
+	}
+}
+
+// The id a client deletes with is the id it was reading with, at the same path.
+// So what has to disappear is everything those reads answered — the session,
+// its turns, and the responses that made them up.
 func TestDeletingASessionAnswersWithTheDeletionEnvelopeAndEverythingItHeldGoes(t *testing.T) {
 	srv := newTestServer()
 	responseID := createTask(t, srv, `{"input":"hi","metadata":{"harness_id":"echo"}}`)

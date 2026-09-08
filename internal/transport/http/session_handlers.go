@@ -82,7 +82,8 @@ func (s *Server) handleCancelSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess)
 }
 
-// handleDeleteSession answers DELETE /v1/traces/{id} (Sessions §6): the whole
+// handleDeleteSession answers DELETE /v1/sessions/{id} (Sessions §6), and the
+// older DELETE /v1/traces/{id} that §6 keeps as an alias: the whole
 // conversation, its turns and its files.
 //
 // It cancels first, and that is the opposite of DELETE /v1/responses/{id},

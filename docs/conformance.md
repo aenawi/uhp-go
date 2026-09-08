@@ -6,25 +6,54 @@ what this server scores, how to reproduce it, and what the remaining gap is.
 ## Current result
 
 ```
-63/63 full · 0 failed · 0 skipped · 0 errored
+64/64 full · 0 failed · 0 skipped · 0 errored
 CONFORMANT — UHP 2026-08-11 (full)
 ```
 
-Measured 2026-09-01 (issue #107) against suite `2026.8.11.post1`, pinned at harnessrouter
-`08d61ea145d6b78c433f6910547c1e7ee293c948`, at class `full` with `--harness-id` naming a
-`claude-code` harness and **no `--model`**. Per class: **40/40 core**, **8/8 extended**,
-**15/15 full**.
+Measured 2026-09-08 by `make conformance-gate` against suite `2026.8.11.post1`, pinned at
+harnessrouter `ae233fdc851abb9f6a65781108eea88362609d18` — the commit tag `v0.15.5` names —
+at class `full` with `--harness-id` naming a `claude-code` harness and **no `--model`**. Per
+class: **40/40 core**, **8/8 extended**, **16/16 full**.
 
-**The pin is a commit rather than a tag on purpose.** Every entry below names a revision, and
-a reader will otherwise ask why this one is not a release. `v0.12.1` was cut nine minutes
-before harnessrouter#53 merged and a day before harnessrouter#55, so the newest tag contains
-neither the specification and schema this run measures against nor the check that moved its
-denominator. It becomes a tag when upstream cuts one.
+The pin is a tag's commit this time, which the previous entry said it would become when
+upstream cut one. `v0.15.5` contains the check that moved the denominator; `main` at
+`a319f32` on the day of the run differed from it only in files outside `protocol/`.
 
-### Why the denominator moved, which is the part worth reading
+### The check that arrived after the last run, and the run that found it
+
+Sessions §6 was rewritten upstream on 2026-09-04 (harnessrouter `3452f87`). The endpoint it
+names for deleting a session is now `DELETE /v1/sessions/{id}` — the same path every read of
+the session uses — and `DELETE /v1/traces/{id}`, the path §6 used to name, is kept as an alias
+a server MAY serve. `F-08` asserts the named path answers `2xx` and a later `GET` is `404`.
+
+This server routed only the older path. Measured on `main` at `13224af`, same suite, same
+harness, same machine, the day the drift was noticed:
+
+```
+63/64 passed · 1 failed · 0 skipped · 0 errored
+NOT CONFORMANT at class 'full' · highest class fully passed: extended
+
+F-08  FAIL  A session can be deleted at the protocol path
+            DELETE /v1/sessions/{id} returned HTTP 405. §6 names this path for session
+            deletion; a server may keep /v1/traces/{id} besides, but the named one must work.
+```
+
+Then `64/64` with the same command once the handler was registered under both paths. The
+alias stays, on the same handler, because a client written against the old path is not wrong
+— §6 says so — and a test now exists for the alias alone, so it cannot be dropped by accident.
+`uhp.Client.DeleteSession` sends the named path, since the alias is the one a server may
+omit.
+
+What noticed it was the mechanism the previous entry describes: `make conformance-drift`
+reported the pin `diverged` from `main` — the merge commit it named had been rewritten out of
+upstream's history — which is the "not a pin at all" case, and the re-measure it asks for is
+the one above. Eight days from the check landing to the score moving; the weekly job would
+have reported it on the Monday, and a person ran the target first.
+
+### Why the denominator moved before that, which is the part worth reading
 
 The suite went from 52 checks to 63, and eight of the eleven are here because this repository
-filed the gap:
+filed the gap; `v0.15.5` then made it 64:
 
 | Upstream | | Class |
 | --- | --- | --- |
@@ -32,6 +61,7 @@ filed the gap:
 | harnessrouter#46 | `T-08`…`T-10`, reserved fields — from issue #86, filed upstream as #42 | Core |
 | harnessrouter#53 | `R-01`/`R-02`/`R-06` and `X-04` stop probing and start asserting | — |
 | harnessrouter#55 | `R-08`, a bodyless `POST` publishes — the sentence #53 named as unenforced, from issue #103 | Full |
+| harnessrouter `3452f87` (`v0.15.5`) | `F-08`, a session is deleted at `/v1/sessions/{id}`; `/v1/traces/{id}` becomes an alias | Full |
 
 Until the 2026-08-31 run the headline above said `52/52`, which had become the failure mode
 this document exists to prevent: the denominator moved and the numerator was copied. A
@@ -85,6 +115,19 @@ repository that can say in advance what a suite will find has understood the sui
 that cannot has only ever read its own score.
 
 ## Earlier results
+
+```
+63/63 full · 0 failed · 0 skipped · 0 errored
+CONFORMANT — UHP 2026-08-11 (full)
+```
+
+Measured 2026-09-01 (issue #107) against suite `2026.8.11.post1`, pinned at harnessrouter
+`08d61ea145d6b78c433f6910547c1e7ee293c948`, at class `full` with `--harness-id` naming a
+`claude-code` harness and no `--model`. Per class: 40/40 core, 8/8 extended, 15/15 full. The
+pin was a commit rather than a tag because `v0.12.1` predated both harnessrouter#53 and #55;
+upstream has since rewritten that merge out of `main`, which is why the entry above pins a
+tag's commit and why `make conformance-drift` reported the old pin as `diverged` rather than
+behind.
 
 Measured 2026-08-23 (issue #42) against suite `2026.8.11.post1`, pinned at
 harnessrouter revision `95b96d7ce473ab59d510e1690c73cc6660d0a73e`, with
@@ -549,6 +592,7 @@ cannot reach.
 | A client, and the first tests to use a socket (#62) | no change expected | the suite never touches the Go types; these never touch the suite |
 | Turn items carry `id` (#101), and the score re-measured against a suite grown to 62 (#102) | **62/62, full 62/62** | X-04 stopped probing and started asserting |
 | `R-08` lands upstream (harnessrouter#55), from this repository (#107) | **63/63, full 63/63** | the one sentence of §5 the R-series' retry was hiding |
+| Sessions §6 names `DELETE /v1/sessions/{id}` (harnessrouter `v0.15.5`); the drift check reported the pin `diverged` | **64/64, full 64/64** | F-08 seen failing at 405 on `main`, then passing with the handler under both paths |
 
 The #42 re-measure is the largest single jump in this table, and none of it was new work. Ten
 checks moved because the code that satisfies them had been sitting there unmeasured since

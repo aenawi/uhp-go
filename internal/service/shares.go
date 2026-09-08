@@ -277,7 +277,7 @@ func (s *TaskService) SharedFiles(ctx context.Context, shareID string) ([]domain
 // paths.
 //
 // Both of the reads above resolve the share and then ask a session method,
-// which looks the session up a second time — so a DELETE /v1/traces/{id}
+// which looks the session up a second time — so a DELETE /v1/sessions/{id}
 // landing between the two would answer an anonymous caller `session_not_found`
 // where every other miss on this surface is `uhpgo_share_not_found`. That is
 // two problems in one. A client switching on the code sees an error it was told

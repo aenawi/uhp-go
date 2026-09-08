@@ -20,7 +20,7 @@ harnesses without touching client code. It implements the
 [Unified Harness Protocol](https://unifiedharnessprotocol.org), an open specification modelled
 on the OpenAI Responses API.
 
-**Conformance: `full` 63/63, zero skipped** — every check in the published suite, at the
+**Conformance: `full` 64/64, zero skipped** — every check in the published suite, at the
 revision named in [docs/conformance.md](docs/conformance.md). Eight of those checks exist
 because this repository reported the gap: Sessions §5 was a `full` requirement the suite
 never touched, which made a green `full` run silent about the feature that defines the class.

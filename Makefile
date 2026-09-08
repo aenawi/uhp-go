@@ -144,13 +144,13 @@ conformance:
 #
 # The floor and UHP_CLASS move together, and this is the one place that says so.
 # The gate below defaults to `core`, which is 40 checks since harnessrouter#46
-# added T-08/T-09/T-10. Full is 63: 40 core, 8 extended, 15 full, the last of
-# those grown by the seven R checks of harnessrouter#45 and by R-08 of
-# harnessrouter#55. Point UHP_CLASS at a higher class without raising this and
-# the gate keeps defending 40 while reporting on 63, which is a gate that cannot
-# fail.
+# added T-08/T-09/T-10. Full is 64: 40 core, 8 extended, 16 full, the last of
+# those grown by the seven R checks of harnessrouter#45, by R-08 of
+# harnessrouter#55, and by F-08 of harnessrouter v0.15.5. Point UHP_CLASS at a
+# higher class without raising this and the gate keeps defending 40 while
+# reporting on 64, which is a gate that cannot fail.
 #
-#   UHP_CLASS=full  →  CONFORMANCE_FLOOR=63
+#   UHP_CLASS=full  →  CONFORMANCE_FLOOR=64
 #
 # Both denominators moved under a floor that did not, which is the failure this
 # comment now exists to prevent. The suite grew by ten checks upstream and the
@@ -202,7 +202,7 @@ CONFORMANCE_REPORT ?= conformance-report.json
 # and CONFORMANCE_FLOOR together. `make test-scripts` refuses a pin that
 # docs/conformance.md does not name, so the two cannot drift apart quietly the
 # way the floor and the prose score still can.
-CONFORMANCE_SUITE_REVISION ?= 08d61ea145d6b78c433f6910547c1e7ee293c948
+CONFORMANCE_SUITE_REVISION ?= ae233fdc851abb9f6a65781108eea88362609d18
 CONFORMANCE_UPSTREAM ?= HarnessRouter/harnessrouter
 
 # Gate for CI: the same suite, but its result is asserted rather than read.

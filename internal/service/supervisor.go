@@ -657,7 +657,7 @@ func (s *TaskService) supervise(ctx context.Context, run *Run, task *domain.Task
 		if err != nil {
 			// A client may delete this task's record while the run is still
 			// going — DELETE /v1/responses/{id}, which Tasks §4 requires not to
-			// stop the work, or DELETE /v1/traces/{id}, which takes the whole
+			// stop the work, or DELETE /v1/sessions/{id}, which takes the whole
 			// session's rows and cancels rather than orphans — and every write
 			// from here on then fails against a row that is no longer there.
 			// That is the client getting what it asked for, not this server

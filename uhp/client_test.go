@@ -255,12 +255,11 @@ func TestClientPreservesABaseURLPathPrefix(t *testing.T) {
 	}
 }
 
-// The two deletions differ in method target as well as in meaning, and the
-// difference is the thing a client gets wrong. A session is read at
-// /v1/sessions/{id} and deleted at /v1/traces/{id} (Sessions §6), so a client
-// that reused the path it reads with would send a DELETE no conformant server
-// routes — and a client that sent /v1/responses/{id} instead would delete one
-// turn and believe it had disposed of the conversation.
+// The two deletions differ in target as well as in meaning, and the difference
+// is the thing a client gets wrong. A session is deleted at /v1/sessions/{id},
+// the path Sessions §6 names — not at the older /v1/traces/{id} alias a server
+// only MAY keep — and a client that sent /v1/responses/{id} instead would
+// delete one turn and believe it had disposed of the conversation.
 func TestClientDeletionsTargetTheirOwnPaths(t *testing.T) {
 	var method, path string
 	c, _ := stubServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -273,8 +272,8 @@ func TestClientDeletionsTargetTheirOwnPaths(t *testing.T) {
 	if err := c.DeleteSession(ctx, "sess_a"); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
-	if method != http.MethodDelete || path != "/v1/traces/sess_a" {
-		t.Errorf("DeleteSession sent %s %s, want DELETE /v1/traces/sess_a", method, path)
+	if method != http.MethodDelete || path != "/v1/sessions/sess_a" {
+		t.Errorf("DeleteSession sent %s %s, want DELETE /v1/sessions/sess_a", method, path)
 	}
 
 	if err := c.Delete(ctx, "resp_a"); err != nil {
