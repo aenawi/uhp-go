@@ -1,4 +1,4 @@
-.PHONY: build run test test-scripts vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate conformance-drift capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps probe-pi-steps probe-grok-max-turns probes tools lint security security-push security-strict verify gitleaks-version
+.PHONY: build run test test-scripts vet fmt fmt-check tidy hooks docker docker-check conformance conformance-gate conformance-drift capture-claude probe-claude-delivery probe-pi probe-codex probe-grok probe-steps probe-pi-steps probe-grok-max-turns probes tools tools-lint lint security security-push security-strict verify gitleaks-version
 
 # Pinned so a laptop and a CI runner see the same rule set. A linter that
 # changes its mind between two machines turns a green build into an argument,
@@ -57,6 +57,11 @@ hooks:
 # #109 exists: a version written in two places is a version that disagrees.
 gitleaks-version:
 	@echo $(GITLEAKS_VERSION)
+
+# The lint job needs one of the three, and installing the other two to run a
+# linter is thirty seconds a push nobody gets back.
+tools-lint:
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 tools:
 	go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
