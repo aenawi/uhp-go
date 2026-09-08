@@ -80,9 +80,9 @@ func (s *TaskService) SessionTurns(ctx context.Context, id string) ([]uhp.TurnIt
 
 			// The pre-#53 spellings, answered alongside the specified ones
 			// for one release. See [uhp.TurnItem].
-			ResponseID: t.ID,
-			Input:      t.Input,
-			Output:     answer,
+			ResponseID: t.ID,    //nolint:staticcheck // deliberate: see above
+			Input:      t.Input, //nolint:staticcheck // deliberate: see above
+			Output:     answer,  //nolint:staticcheck // deliberate: see above
 		})
 	}
 	return turns, nil

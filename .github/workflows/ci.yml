@@ -31,12 +31,17 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          # 1.24, not the 1.22 in go.mod. go.mod states the floor this module
+          # 1.26, not the 1.22 in go.mod. go.mod states the floor this module
           # supports; this states what CI builds with, and 1.22 stopped getting
-          # security patches — govulncheck reports 32 stdlib advisories against
-          # it. Raising the build toolchain fixes those without raising the
-          # floor for anyone consuming the module.
-          go-version: '1.24'
+          # security patches.
+          #
+          # 1.26 specifically because the pinned tools set it: govulncheck
+          # v1.7.0 needs >= 1.25 and golangci-lint v2.13.2 needs >= 1.26. That
+          # is a hard floor rather than a preference, because setup-go v7 runs
+          # with GOTOOLCHAIN=local, so the version named here is the only one
+          # `go install` can use — it cannot quietly fetch a newer one the way
+          # a laptop does. None of this raises the floor for consumers.
+          go-version: '1.26'
           check-latest: true
 
       - name: Build
@@ -69,7 +74,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26'
           check-latest: true
 
       # The golangci-lint version is pinned in the Makefile and read from it,

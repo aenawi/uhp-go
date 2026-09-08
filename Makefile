@@ -3,8 +3,9 @@
 # Pinned so a laptop and a CI runner see the same rule set. A linter that
 # changes its mind between two machines turns a green build into an argument,
 # and @latest is how that happens. Bump here; CI reads these.
-GOLANGCI_VERSION ?= v1.64.8
+GOLANGCI_VERSION ?= v2.13.2
 GOSEC_VERSION    ?= v2.22.10
+GOVULNCHECK_VERSION ?= v1.7.0
 GITLEAKS_VERSION ?= 8.30.1
 
 # Both binaries, because a server nobody can call is half a delivery: uhpc is
@@ -61,12 +62,12 @@ gitleaks-version:
 # The lint job needs one of the three, and installing the other two to run a
 # linter is thirty seconds a push nobody gets back.
 tools-lint:
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_VERSION)
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 tools:
 	go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
-	go install golang.org/x/vuln/cmd/govulncheck@latest
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_VERSION)
+	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 	@echo "gitleaks is not a Go module install: brew install gitleaks (or see github.com/gitleaks/gitleaks)"
 	@echo "tools installed; ensure $$(go env GOPATH)/bin is on PATH"
 

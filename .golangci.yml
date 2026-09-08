@@ -1,115 +1,138 @@
 # golangci-lint for uhp-go.
 #
-# Calibrated the same way as namux: security stays on, noisy style rules that
-# fight server/IO patterns are dialled back. The version is pinned in the
-# Makefile (GOLANGCI_VERSION) rather than tracking @latest, because this file
-# is v1 schema and a linter that silently changes its rule set turns a green
-# build into an argument.
+# v2 schema. The move off v1 was forced rather than chosen: v1.64.8 is the last
+# v1 release and it is built with go1.24, so it refuses to load a config whose
+# module targets anything newer. Version pinned in the Makefile
+# (GOLANGCI_VERSION) rather than tracking @latest, because a linter that
+# changes its rule set between two machines turns a green build into an
+# argument.
+#
+# v2 folds gosimple and stylecheck into staticcheck, moves formatters into
+# their own section, and enables errcheck, govet, ineffassign, staticcheck and
+# unused by default — so the enable list below is only what is on top of that.
 # https://golangci-lint.run/usage/configuration/
 
+version: "2"
+
 run:
-  timeout: 3m
   modules-download-mode: readonly
   allow-parallel-runners: true
 
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      print-issued-lines: true
+
 linters:
   enable:
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-    - gofmt
-    - goimports
-    - revive
-    - unconvert
     - gocyclo
     - gosec
-    - stylecheck
+    - revive
+    - staticcheck
+    - unconvert
 
-linters-settings:
-  errcheck:
-    # check-blank=false: allow intentional `_ = f.Close()` / best-effort
-    # cleanup. Completely ignored error returns are still flagged.
-    check-blank: false
-    check-type-assertions: true
-    exclude-functions:
-      # Writes to stdout/stderr are best-effort; a failure is a broken pipe,
-      # which is not something this server can act on.
-      - fmt.Fprint
-      - fmt.Fprintf
-      - fmt.Fprintln
-      - fmt.Print
-      - fmt.Printf
-      - fmt.Println
+  settings:
+    errcheck:
+      # check-blank=false: allow intentional `_ = f.Close()` / best-effort
+      # cleanup. Completely ignored error returns are still flagged.
+      check-blank: false
+      check-type-assertions: true
+      exclude-functions:
+        # Writes to stdout/stderr are best-effort; a failure is a broken pipe,
+        # which is not something this server can act on.
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Print
+        - fmt.Printf
+        - fmt.Println
 
-  govet:
-    enable-all: false
+    gocyclo:
+      min-complexity: 30
 
-  gofmt:
-    simplify: true
+    govet:
+      enable-all: false
 
-  goimports:
-    local-prefixes: github.com/aenawi/uhp-go
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: if-return
+        - name: increment-decrement
+        - name: var-naming
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: indent-error-flow
+        - name: errorf
 
-  gocyclo:
-    min-complexity: 30
+    staticcheck:
+      # The ST rules that fight this repository's house style, and QF1001,
+      # which wants De Morgan's law applied to a hex-digit test that reads
+      # perfectly well as it stands. v1 never ran QF checks at all; enabling
+      # them by accident during a toolchain move would be a style sweep
+      # wearing a version bump's clothes.
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1022
+        - -ST1023
+        - -QF1001
 
-  revive:
+  # gosec has no excludes. Every finding this repository accepts carries an
+  # `#nosec <rule> -- reason` at the site, so a new subprocess, file read or
+  # built statement that nobody has reasoned about still fails the build
+  # rather than inheriting somebody's old exemption.
+
+  exclusions:
+    generated: lax
     rules:
-      - name: blank-imports
-      - name: context-as-argument
-      - name: dot-imports
-      - name: error-return
-      - name: error-strings
-      - name: error-naming
-      - name: if-return
-      - name: increment-decrement
-      - name: var-naming
-      - name: range
-      - name: receiver-naming
-      - name: time-naming
-      - name: indent-error-flow
-      - name: errorf
+      # A test that exercises a deprecated field has to mention it, and a
+      # helper kept beside a table nobody reads today is not a defect worth a
+      # build failure.
+      - linters:
+          - errcheck
+          - gocyclo
+          - gosec
+          - staticcheck
+          - unused
+        path: _test\.go
 
-  gosec:
-    # No excludes. Every finding this repository accepts carries an inline
-    # `#nosec <rule> -- reason` at the site, so a new exec or file read that
-    # nobody has thought about still fails the build. That is also what
-    # tagtastic's .gosec.yaml asks for.
-    excludes: []
+      - linters:
+          - govet
+        text: 'shadow: declaration of "err"'
 
-  stylecheck:
-    # ST1022 joins the list for the same reason as the others: it wants
-    # "CodePrefix ..." on a comment that introduces a whole const block, and
-    # the prose here is worth more than the convention.
-    checks: ["all", "-ST1000", "-ST1003", "-ST1023", "-ST1022"]
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 
 issues:
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
 
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gocyclo
-        - errcheck
-        - gosec
-        # A test that exercises a deprecated field has to mention it, and a
-        # helper kept beside a table nobody reads today is not a defect worth
-        # a build failure.
-        - staticcheck
-        - unused
-
-    - linters:
-        - govet
-      text: 'shadow: declaration of "err"'
-
-output:
-  formats:
-    - format: colored-line-number
-  print-issued-lines: true
-  print-linter-name: true
-  sort-results: true
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      # Groups this module's imports last, the way `goimports -local` does, so
+      # an editor save and `make fmt` produce the same diff.
+      local-prefixes:
+        - github.com/aenawi/uhp-go
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
