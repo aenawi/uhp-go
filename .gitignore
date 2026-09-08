@@ -26,6 +26,12 @@ scripts/__pycache__/
 .claude/settings.local.json
 .claude/*.local.json
 
+# VS Code: a window tint is a preference, not a project setting, and a public
+# checkout should not repaint a stranger's editor. A genuinely project-wide
+# setting can still be committed with `git add -f`.
+.vscode/*
+!.vscode/extensions.json
+
 # Agent scratch space — working notes, never published.
 .scratch/
 
