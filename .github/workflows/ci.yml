@@ -31,9 +31,8 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          # 1.26, not the 1.22 in go.mod. go.mod states the floor this module
-          # supports; this states what CI builds with, and 1.22 stopped getting
-          # security patches.
+          # 1.26, not the 1.25 in go.mod. go.mod states the floor this module
+          # supports; this states what CI builds with.
           #
           # 1.26 specifically because the pinned tools set it: govulncheck
           # v1.7.0 needs >= 1.25 and golangci-lint v2.13.2 needs >= 1.26. That
