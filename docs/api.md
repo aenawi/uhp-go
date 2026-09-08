@@ -30,7 +30,8 @@ Every endpoint this server answers, which request fields it reads, and how a cli
 | `GET /v1/shares/{share_id}/turns` | The shared session's history. **Unauthenticated** |
 | `GET /v1/shares/{share_id}/files` | The shared session's artifacts. **Unauthenticated** |
 | `GET /v1/shares/{share_id}/files/{fid}/content` | One shared artifact's bytes. **Unauthenticated** |
-| `DELETE /v1/traces/{id}` | Dispose of a session: its turns, its working directory, and any run in flight. **Does** stop the work. Revokes its share |
+| `DELETE /v1/sessions/{id}` | Dispose of a session: its turns, its working directory, and any run in flight. **Does** stop the work. Revokes its share |
+| `DELETE /v1/traces/{id}` | The older path for the same operation (Sessions §6 keeps it as an alias); same handler |
 | `POST /v1/responses` | Create a task (`stream:true` for SSE, else blocks until terminal). Honours `Idempotency-Key` |
 | `GET /v1/responses/{id}` | Retrieve a task's current state and output |
 | `GET /v1/responses/{id}/input_items` | The input a task was created with, verbatim |

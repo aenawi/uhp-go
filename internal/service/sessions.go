@@ -166,7 +166,7 @@ func (s *TaskService) CancelSession(ctx context.Context, id string) error {
 // delete is not looking at yesterday's files.
 const sessionReapTimeout = 2 * time.Minute
 
-// DeleteSession answers DELETE /v1/traces/{id} (Sessions §6): it cancels
+// DeleteSession answers DELETE /v1/sessions/{id} (Sessions §6): it cancels
 // whatever is running in the session, then disposes of the session, its tasks
 // and its working directory.
 //

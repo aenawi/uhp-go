@@ -625,7 +625,7 @@ func (s *SQLiteStore) CreateShare(ctx context.Context, sh *domain.Share) (*domai
 
 	// The session, inside the transaction. The two tables have no foreign key —
 	// see DeleteSession — so this is what stops a share being inserted for a
-	// conversation a concurrent DELETE /v1/traces/{id} is removing.
+	// conversation a concurrent DELETE /v1/sessions/{id} is removing.
 	var present int
 	switch err := tx.QueryRowContext(ctx,
 		`SELECT 1 FROM sessions WHERE id = ?`, sh.SessionID).Scan(&present); {

@@ -72,7 +72,7 @@ refused before routing rather than redirected to a cleaned one.
 
 Artifacts are reachable only through their session's records, so an artifact of a session
 this server no longer has is a 404 — which is what the specification asks for when a
-session is deleted, and `DELETE /v1/traces/{id}` is the endpoint that does it. Access is scoped to the server's
+session is deleted, and `DELETE /v1/sessions/{id}` is the endpoint that does it. Access is scoped to the server's
 single principal: every configured `UHP_API_KEYS` value is equivalent and carries no
 identity, so a deployment serving several tenants runs one `uhpd` per tenant rather than
 one server that filters — see

@@ -379,18 +379,19 @@ func (c *Client) CancelSession(ctx context.Context, id string) error {
 		"/v1/sessions/"+url.PathEscape(id)+"/cancel", nil, nil)
 }
 
-// DeleteSession deletes DELETE /v1/traces/{id} (conformance class full): the
+// DeleteSession sends DELETE /v1/sessions/{id} (conformance class full): the
 // whole conversation, its turns and the files it produced.
 //
-// The path is the specification's, and it is the same id every other session
-// method here takes — `traces` and `sessions` name one resource in UHP, not two.
+// The path is the one Sessions §6 names and says clients SHOULD use. The older
+// /v1/traces/{id} is an alias a server MAY keep, so a client that sent it would
+// work against some servers and not others; this one sends the named path.
 //
 // Unlike [Client.Delete], this one *does* stop the work: Sessions §6 couples
 // cancellation to it, because deleting the trace disposes of the conversation
 // the run belongs to. Cancellation is asynchronous, so a server may answer this
 // before the harness has actually wound down.
 func (c *Client) DeleteSession(ctx context.Context, id string) error {
-	return c.send(ctx, http.MethodDelete, "/v1/traces/"+url.PathEscape(id), nil, nil)
+	return c.send(ctx, http.MethodDelete, "/v1/sessions/"+url.PathEscape(id), nil, nil)
 }
 
 // SessionFiles fetches GET /v1/sessions/{id}/files: every artifact of the

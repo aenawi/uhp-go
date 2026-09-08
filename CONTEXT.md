@@ -97,9 +97,9 @@ _Avoid_: Type, Kind, Engine
 
 **Session**:
 A continued conversation across several Tasks, preserving conversational context, the
-working directory, and the configured Harness. UHP spells one path over it `traces` —
-`DELETE /v1/traces/{session_id}` is how a Session is deleted, while every read of it is
-under `/v1/sessions/{id}` — and the id is the same id. That is a path segment, not a second
+working directory, and the configured Harness. It is read and deleted under one path,
+`/v1/sessions/{id}`. UHP once spelled the delete `DELETE /v1/traces/{session_id}` and keeps
+that as an alias a server MAY serve — this one does — but it is a path segment, not a second
 concept, so it stays in URLs and out of everything else, including test names.
 _Avoid_: Conversation, Thread, Trace
 

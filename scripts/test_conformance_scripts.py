@@ -53,7 +53,7 @@ def run(module, argv: list[str], **kwargs) -> tuple[int, str, str]:
 
 
 def report(**overrides) -> dict:
-    """A report shaped like the suite's own, green at 63 checks."""
+    """A report shaped like the suite's own, green at 64 checks."""
     base = {
         "protocol": "uhp",
         "protocol_version": "2026-08-11",
@@ -65,7 +65,7 @@ def report(**overrides) -> dict:
         "conformant_with_skips": True,
         "skipped_not_verified": [],
         "highest_class_passed": "full",
-        "summary": {"pass": 63, "fail": 0, "skip": 0, "error": 0, "total": 63},
+        "summary": {"pass": 64, "fail": 0, "skip": 0, "error": 0, "total": 64},
     }
     base.update(overrides)
     return base
@@ -86,7 +86,7 @@ class ReportTempDir(unittest.TestCase):
         return json.loads(Path(path).read_text())
 
 
-PIN = "08d61ea145d6b78c433f6910547c1e7ee293c948"
+PIN = "ae233fdc851abb9f6a65781108eea88362609d18"
 OTHER = "95b96d7ce473ab59d510e1690c73cc6660d0a73e"
 
 
@@ -97,21 +97,21 @@ OTHER = "95b96d7ce473ab59d510e1690c73cc6660d0a73e"
 class CheckConformance(ReportTempDir):
     def test_a_green_report_at_the_floor_passes(self):
         path = self.write_report(report())
-        code, out, _ = run(check_conformance, [path, "63"])
+        code, out, _ = run(check_conformance, [path, "64"])
         self.assertEqual(code, 0, out)
-        self.assertIn("63/63 passed", out)
+        self.assertIn("64/64 passed", out)
 
     def test_a_failure_is_refused(self):
         path = self.write_report(report(
-            summary={"pass": 62, "fail": 1, "skip": 0, "error": 0, "total": 63}))
-        code, out, _ = run(check_conformance, [path, "63"])
+            summary={"pass": 63, "fail": 1, "skip": 0, "error": 0, "total": 64}))
+        code, out, _ = run(check_conformance, [path, "64"])
         self.assertEqual(code, 1)
         self.assertIn("1 failed", out)
 
     def test_a_skip_is_never_a_pass(self):
         path = self.write_report(report(
             skipped_not_verified=["X-07"],
-            summary={"pass": 62, "fail": 0, "skip": 1, "error": 0, "total": 63}))
+            summary={"pass": 63, "fail": 0, "skip": 1, "error": 0, "total": 64}))
         code, out, _ = run(check_conformance, [path, "62"])
         self.assertEqual(code, 1)
         self.assertIn("X-07", out)
@@ -120,12 +120,12 @@ class CheckConformance(ReportTempDir):
         path = self.write_report(report(
             requested_class="core",
             summary={"pass": 40, "fail": 0, "skip": 0, "error": 0, "total": 40}))
-        code, out, _ = run(check_conformance, [path, "63"])
+        code, out, _ = run(check_conformance, [path, "64"])
         self.assertEqual(code, 1)
         self.assertIn("40 checks passed", out)
 
     def test_a_missing_report_is_a_failure_rather_than_an_absence(self):
-        code, _, err = run(check_conformance, [str(self.dir / "nope.json"), "63"])
+        code, _, err = run(check_conformance, [str(self.dir / "nope.json"), "64"])
         self.assertEqual(code, 1)
         self.assertIn("cannot read", err)
 
@@ -134,7 +134,7 @@ class CheckConformance(ReportTempDir):
     def test_the_measured_revision_is_recorded_in_the_report(self):
         path = self.write_report(report())
         code, out, _ = run(check_conformance,
-                           [path, "63", "--suite-revision", PIN,
+                           [path, "64", "--suite-revision", PIN,
                             "--expect-revision", PIN])
         self.assertEqual(code, 0, out)
         self.assertEqual(self.read_report(path)["suite_revision"], PIN)
@@ -143,7 +143,7 @@ class CheckConformance(ReportTempDir):
     def test_a_report_from_another_revision_is_refused(self):
         path = self.write_report(report())
         code, out, _ = run(check_conformance,
-                           [path, "63", "--suite-revision", OTHER,
+                           [path, "64", "--suite-revision", OTHER,
                             "--expect-revision", PIN])
         self.assertEqual(code, 1)
         self.assertIn(OTHER[:12], out)
@@ -153,9 +153,9 @@ class CheckConformance(ReportTempDir):
         """The report is evidence before it is a verdict; a refused run still
         has to say which suite refused it."""
         path = self.write_report(report(
-            summary={"pass": 62, "fail": 1, "skip": 0, "error": 0, "total": 63}))
+            summary={"pass": 63, "fail": 1, "skip": 0, "error": 0, "total": 64}))
         code, _, _ = run(check_conformance,
-                         [path, "63", "--suite-revision", OTHER,
+                         [path, "64", "--suite-revision", OTHER,
                           "--expect-revision", PIN])
         self.assertEqual(code, 1)
         self.assertEqual(self.read_report(path)["suite_revision"], OTHER)
@@ -165,7 +165,7 @@ class CheckConformance(ReportTempDir):
         and an empty string must not read as agreement."""
         path = self.write_report(report())
         code, out, _ = run(check_conformance,
-                           [path, "63", "--suite-revision", "",
+                           [path, "64", "--suite-revision", "",
                             "--expect-revision", PIN])
         self.assertEqual(code, 1)
         self.assertIn("could not be resolved", out)
@@ -174,7 +174,7 @@ class CheckConformance(ReportTempDir):
         """A report arriving from somebody else's machine — a pull request —
         is checkable without re-running anything."""
         path = self.write_report(report(suite_revision=OTHER))
-        code, out, _ = run(check_conformance, [path, "63", "--expect-revision", PIN])
+        code, out, _ = run(check_conformance, [path, "64", "--expect-revision", PIN])
         self.assertEqual(code, 1)
         self.assertIn(OTHER[:12], out)
 
@@ -182,7 +182,7 @@ class CheckConformance(ReportTempDir):
         """The two-argument call the gate used before this existed still works,
         so an ad-hoc run of the suite is still readable."""
         path = self.write_report(report())
-        code, out, _ = run(check_conformance, [path, "63"])
+        code, out, _ = run(check_conformance, [path, "64"])
         self.assertEqual(code, 0, out)
         self.assertNotIn("suite_revision", self.read_report(path))
 
