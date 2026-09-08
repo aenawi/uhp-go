@@ -512,6 +512,9 @@ func (s *SQLiteStore) ListSessions(ctx context.Context, f domain.SessionFilter) 
 
 	query := `SELECT data FROM sessions`
 	if len(where) > 0 {
+		// #nosec G202 -- the fragments joined here are backtick literals
+		// written above, and every value is a `?` bound through args. Nothing
+		// a caller sends reaches the statement text.
 		query += ` WHERE ` + strings.Join(where, ` AND `)
 	}
 	query += ` ORDER BY created_at DESC, id ASC LIMIT ?`
