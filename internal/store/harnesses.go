@@ -48,6 +48,8 @@ func NewFileHarnesses(path string) (*FileHarnesses, error) {
 	}
 	f := &FileHarnesses{path: path, byID: make(map[string]domain.HarnessConfig)}
 
+	// #nosec G304 -- the harness store path is operator configuration, fixed at
+	// startup, and validated non-empty above.
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return f, nil

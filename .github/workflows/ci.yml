@@ -31,7 +31,12 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          # 1.24, not the 1.22 in go.mod. go.mod states the floor this module
+          # supports; this states what CI builds with, and 1.22 stopped getting
+          # security patches — govulncheck reports 32 stdlib advisories against
+          # it. Raising the build toolchain fixes those without raising the
+          # floor for anyone consuming the module.
+          go-version: '1.24'
           check-latest: true
 
       - name: Build
@@ -53,6 +58,43 @@ jobs:
       # failure #109 exists to stop.
       - name: Test the conformance scripts
         run: make test-scripts
+
+  # Lint and security are their own job so a failing linter does not hide a
+  # failing test, and vice versa. Every tool version here is pinned in the
+  # Makefile and read from it, never repeated: a number written twice is a
+  # number that eventually disagrees with itself.
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans history, and a shallow clone has none.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+
+      - name: Install pinned Go tools
+        run: make tools
+
+      - name: Install gitleaks
+        run: |
+          v="$(make -s gitleaks-version)"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Lint
+        run: make lint
+
+      # gosec and gitleaks gate. govulncheck reports: a stdlib advisory is
+      # usually fixed by a toolchain bump rather than by anything in this
+      # repository, and a gate nobody in a pull request can pass is a gate that
+      # gets switched off. Set GOVULNCHECK_STRICT=1 to make it gate too.
+      - name: Security scan
+        run: make security-push
 
   image:
     runs-on: ubuntu-latest

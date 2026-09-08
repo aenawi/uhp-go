@@ -63,17 +63,20 @@ const (
 	CodeModelUnavailable           = "model_unavailable"
 	CodeUnsupportedBase            = "unsupported_base"
 	CodeMissingCredential          = "missing_credential"
-	CodeInvalidCredential          = "invalid_credential"
-	CodeInsufficientScope          = "insufficient_scope"
-	CodeRateLimited                = "rate_limited"
-	CodeQuotaExhausted             = "quota_exhausted"
-	CodeHarnessError               = "harness_error"
-	CodeHarnessUnavailable         = "harness_unavailable"
-	CodeProviderError              = "provider_error"
-	CodeTimeout                    = "timeout"
-	CodeCancelled                  = "cancelled"
-	CodePreviewUnavailable         = "preview_unavailable"
-	CodePreviewFailed              = "preview_failed"
+	// #nosec G101 -- an error code, not a credential. The vocabulary has to
+	// name the condition, and "invalid_credential" is the name Errors §3 gives
+	// it.
+	CodeInvalidCredential  = "invalid_credential"
+	CodeInsufficientScope  = "insufficient_scope"
+	CodeRateLimited        = "rate_limited"
+	CodeQuotaExhausted     = "quota_exhausted"
+	CodeHarnessError       = "harness_error"
+	CodeHarnessUnavailable = "harness_unavailable"
+	CodeProviderError      = "provider_error"
+	CodeTimeout            = "timeout"
+	CodeCancelled          = "cancelled"
+	CodePreviewUnavailable = "preview_unavailable"
+	CodePreviewFailed      = "preview_failed"
 )
 
 // Error is the protocol's one error object. It appears in two places and is the

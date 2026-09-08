@@ -233,6 +233,9 @@ func detectMimeType(root, rel string) string {
 	if t := mime.TypeByExtension(filepath.Ext(rel)); t != "" {
 		return t
 	}
+	// #nosec G304 -- rel is not request-derived. It comes from the capture
+	// walk of rs.workDir above, so it names a file the server just found on
+	// disk rather than one a client asked for.
 	f, err := os.Open(filepath.Join(root, filepath.FromSlash(rel)))
 	if err != nil {
 		return "application/octet-stream"
@@ -360,6 +363,9 @@ func (s *TaskService) OpenArtifact(ctx context.Context, containerID, fileID stri
 		s.log.Error("refusing to serve an artifact from outside its container", "container_id", containerID)
 		return domain.Artifact{}, nil, ErrArtifactNotFound
 	}
+	// #nosec G304 -- withinDir above is the guard: `full` is rejected unless it
+	// resolves inside the session directory, which is the traversal check gosec
+	// cannot see from here.
 	f, err := os.Open(full)
 	if err != nil {
 		return domain.Artifact{}, nil, ErrArtifactNotFound

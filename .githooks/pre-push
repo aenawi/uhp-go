@@ -23,4 +23,22 @@ make fmt-check
 go test ./... -race
 make test-scripts
 
+# Lint and the security scanners run only if they are installed, which keeps
+# `make hooks` a one-command setup rather than a shopping list. `make tools`
+# installs them; CI runs them unconditionally, so a push that skips them here
+# still gets the answer, just later.
+if command -v golangci-lint >/dev/null 2>&1; then
+	echo "pre-push: lint"
+	make lint
+else
+	echo "pre-push: skipping lint (make tools to install golangci-lint)"
+fi
+
+if command -v gosec >/dev/null 2>&1 && command -v gitleaks >/dev/null 2>&1; then
+	echo "pre-push: security"
+	make security-push
+else
+	echo "pre-push: skipping security (make tools, plus: brew install gitleaks)"
+fi
+
 echo "pre-push: ok"

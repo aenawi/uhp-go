@@ -606,6 +606,9 @@ func turnID(t uhp.TurnItem) string {
 	if t.ID != "" {
 		return t.ID
 	}
+	//nolint:staticcheck // Reading the deprecated field is the point: this is
+	// the fallback for a server still on the old key, and it stays until that
+	// key is removed.
 	return t.ResponseID
 }
 
@@ -614,6 +617,7 @@ func turnUser(t uhp.TurnItem) string {
 	if t.User != "" {
 		return t.User
 	}
+	//nolint:staticcheck // Same deprecation window as [turnID].
 	return t.Input
 }
 
@@ -773,6 +777,8 @@ func (c *cli) upload(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	// #nosec G304 -- the path is the argument the operator typed. Opening the
+	// file a user named is what `uhpc upload` is for.
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -870,6 +876,7 @@ func (c *cli) watchOnce(ctx context.Context, harnessID string, from int) (int, e
 // this is the form every conformant server accepts. Anything large belongs in
 // `uhpc upload` instead: a data URL is re-sent on every retry.
 func inputFileItem(path string) (map[string]any, error) {
+	// #nosec G304 -- same as upload: a CLI reading the file its caller named.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

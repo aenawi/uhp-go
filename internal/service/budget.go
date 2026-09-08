@@ -89,7 +89,7 @@ func resolveBudget(requested, configured *int, ceiling time.Duration) time.Durat
 // maxBudgetSeconds is the largest whole number of seconds time.Duration can
 // hold — about 292 years, and so far outside any budget an operator or a client
 // means that the only values above it are overflow attempts and mistakes.
-const maxBudgetSeconds = int64(math.MaxInt64 / int64(time.Second))
+const maxBudgetSeconds = math.MaxInt64 / int64(time.Second)
 
 // resolveStepBudget picks the step budget for one run: the shortest of the
 // three bounds that are set — the request's, the harness's, and the
