@@ -1,0 +1,61 @@
+# CodeQL, alongside gosec rather than instead of it.
+#
+# The two engines fail differently, which is the entire reason for running
+# both. gosec is largely pattern-based: it recognises a dangerous call at the
+# line it appears on, which is why it catches `exec.CommandContext` with a
+# variable and an `os.Open` on a path it cannot vouch for. CodeQL follows taint
+# across functions and packages, so it answers a question gosec never asks —
+# whether a value that arrived in a request reaches one of those calls several
+# hops later. In a server that hands request-derived arguments to a subprocess,
+# that is the question worth asking.
+#
+# Findings land in the Security tab rather than failing this build. That is
+# deliberate for a first run: a new engine on an existing codebase reports a
+# backlog, and a red build on day one is one that gets switched off before
+# anybody reads it. Gate it once the backlog is triaged.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays, 07:00 UTC — an hour after the Security workflow, so a weekly
+    # look at the repository is one sitting rather than two.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  analyze:
+    name: Analyze Go
+    runs-on: ubuntu-latest
+    permissions:
+      # Writing results to the Security tab is the whole point of the job.
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+
+      # Before init, so autobuild compiles with the toolchain this project
+      # actually targets rather than whatever the runner shipped with.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          check-latest: true
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: go
+          build-mode: autobuild
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:go
