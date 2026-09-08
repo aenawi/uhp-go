@@ -3,6 +3,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -112,14 +113,14 @@ func Load() Config {
 		MaxBodyBytes: getEnvInt("UHP_MAX_BODY_BYTES", 8<<20),
 		// Zero is passed straight through to the service, which substitutes its
 		// own default. Config does not carry a second copy of that number.
-		MaxConcurrentRuns: int(getEnvInt("UHP_MAX_CONCURRENT_RUNS", 0)),
+		MaxConcurrentRuns: getEnvIntCapped("UHP_MAX_CONCURRENT_RUNS", 0),
 		TaskTimeout:       envDuration(os.Getenv("UHP_TASK_TIMEOUT")),
 		// Zero when unset, and zero is "no ceiling" here rather than "use a
 		// default". getEnvInt already answers the fallback for a value that is
 		// not a positive number, which folds a typo and an unset variable into
 		// the same safe answer: no ceiling of this deployment's own, and every
 		// task still bounded by the wall clock.
-		TaskMaxStep:    int(getEnvInt("UHP_TASK_MAX_STEP", 0)),
+		TaskMaxStep:    getEnvIntCapped("UHP_TASK_MAX_STEP", 0),
 		TaskMaxStepRaw: strings.TrimSpace(os.Getenv("UHP_TASK_MAX_STEP")),
 		PublicBaseURL:  strings.TrimSuffix(os.Getenv("UHP_PUBLIC_URL"), "/"),
 		SessionSharing: envBool(os.Getenv("UHP_SESSION_SHARING")),
@@ -164,6 +165,39 @@ func getEnvInt(key string, fallback int64) int64 {
 		return fallback
 	}
 	return n
+}
+
+// maxIntSetting is the largest value the two int-typed settings will hold.
+//
+// It is the 32-bit maximum on every platform, deliberately. int is as wide as
+// the machine, so narrowing getEnvInt's int64 to one is the identity on the
+// 64-bit builds this project ships and a silent truncation on a 32-bit build —
+// which `go install` produces happily, and nothing here says not to run the
+// daemon on an armv7 box. There the high half is simply dropped:
+// UHP_TASK_MAX_STEP=4294967296 arrives as 0 and 2147483648 arrives negative,
+// and zero and negative are both how TaskMaxStep and MaxConcurrentRuns spell
+// "no limit of this deployment's own". An operator reaching for an enormous
+// ceiling would get none at all, which is the direction #72 says a bound must
+// never fail in.
+//
+// Saturating at a fixed number rather than at math.MaxInt is what makes the
+// answer identical on both word sizes, and that sameness is the property worth
+// having: a setting whose meaning depends on the architecture it was compiled
+// for is a worse thing to reason about than one that is merely bounded. The
+// bound costs a deployment nothing it could have wanted, because neither
+// setting means anything at two billion — that many concurrent harness
+// processes, or that many agent steps in one task, is unbounded under any
+// reading a person would give it.
+const maxIntSetting = math.MaxInt32
+
+// getEnvIntCapped is getEnvInt for the settings whose Config field is an int
+// rather than an int64. See maxIntSetting for why the ceiling is there.
+func getEnvIntCapped(key string, fallback int64) int {
+	n := getEnvInt(key, fallback)
+	if n > maxIntSetting {
+		return maxIntSetting
+	}
+	return int(n)
 }
 
 // maxDuration is the largest time.Duration, which is a little under 292 years.

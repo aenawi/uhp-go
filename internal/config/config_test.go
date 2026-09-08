@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -135,6 +136,50 @@ func TestAnUnreadableStepCeilingIsRecorded(t *testing.T) {
 			if flagged != tc.flagged {
 				t.Errorf("flagged = %v, want %v: TaskMaxStepRaw = %q",
 					flagged, tc.flagged, cfg.TaskMaxStepRaw)
+			}
+		})
+	}
+}
+
+// int is as wide as the machine it was compiled for, so the conversion these
+// two settings go through is the identity on the 64-bit builds this project
+// ships and a silent truncation on a 32-bit one, where `go install` also works
+// and nothing stops someone running the daemon on an armv7 box. There the high
+// half is dropped: 4294967296 arrives as 0 and 2147483648 arrives negative,
+// and both of those are how TaskMaxStep and MaxConcurrentRuns spell "no limit
+// of this deployment's own". An operator asking for an enormous ceiling would
+// get none at all, which is the direction #72 says a bound must never fail in.
+//
+// A 64-bit test cannot observe the truncation, so what it pins instead is the
+// cap that makes the answer the same on both word sizes.
+func TestAnEnormousSettingSaturatesRatherThanWrapping(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want int
+	}{
+		{"20", 20},                             // an ordinary value is not clamped
+		{"2147483647", math.MaxInt32},          // the cap itself, reached exactly
+		{"2147483648", math.MaxInt32},          // one past, which a 32-bit int reads as negative
+		{"4294967296", math.MaxInt32},          // 2^32, whose low half is zero
+		{"9223372036854775807", math.MaxInt32}, // the largest value ParseInt will hand back
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			t.Setenv("UHP_TASK_MAX_STEP", tc.raw)
+			t.Setenv("UHP_MAX_CONCURRENT_RUNS", tc.raw)
+			cfg := Load()
+
+			if cfg.TaskMaxStep != tc.want {
+				t.Errorf("TaskMaxStep = %d, want %d", cfg.TaskMaxStep, tc.want)
+			}
+			if cfg.MaxConcurrentRuns != tc.want {
+				t.Errorf("MaxConcurrentRuns = %d, want %d", cfg.MaxConcurrentRuns, tc.want)
+			}
+			// Stated separately from the value, because this is the part that
+			// matters: whatever the number turns out to be, a ceiling an
+			// operator set must still read as a ceiling. Zero and negative
+			// both mean "unbounded" to everything downstream.
+			if cfg.TaskMaxStep <= 0 {
+				t.Errorf("TaskMaxStep = %d, which reads as no ceiling at all", cfg.TaskMaxStep)
 			}
 		})
 	}

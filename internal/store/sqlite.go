@@ -480,6 +480,15 @@ func (s *SQLiteStore) DeleteSession(ctx context.Context, id string) (bool, error
 // for the reason MemoryStore gives: cursor paging over an unstable order
 // silently skips and repeats rows.
 func (s *SQLiteStore) ListSessions(ctx context.Context, f domain.SessionFilter) (domain.SessionPage, error) {
+	// The upper arm is load-bearing, not politeness about page sizes. f.Limit
+	// is `?limit=` off the query string, which the transport passes through
+	// without a range of its own, and it sizes the slice the page is read into
+	// as well as the SQL LIMIT. Without it one request asking for a billion
+	// would have this preallocate eight gigabytes of pointers before reading a
+	// row. Anything out of range takes the default rather than the nearest
+	// legal value, because a client that asked for 10000 has misread the
+	// endpoint and handing back a full 100 would hide that; MemoryStore reads
+	// it the same way, so paging does not depend on which store is behind it.
 	limit := f.Limit
 	if limit <= 0 || limit > 100 {
 		limit = 20
