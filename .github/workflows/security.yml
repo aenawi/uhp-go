@@ -34,7 +34,7 @@ jobs:
           # gitleaks scans history, and a shallow clone has none.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           # Not the 1.22 floor in go.mod: 1.22 stopped getting security
           # patches, and scanning with a toolchain that is itself unpatched
